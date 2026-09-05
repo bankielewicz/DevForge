@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/framework/DevForge/scripts/demo.py", line 86, in <module>
+    main()
+  File "/home/bryan/Projects/DevForge/framework/DevForge/scripts/demo.py", line 50, in main
+    call("check")
+  File "/home/bryan/Projects/DevForge/framework/DevForge/scripts/demo.py", line 44, in call
+    raise RuntimeError(f"Unexpected result: {argv}\n{p.stdout}\n{p.stderr}")
+RuntimeError: Unexpected result: ['/home/bryan/Projects/DevForge/framework/DevForge/target/debug/devforge', 'check', '--project', '/home/bryan/Projects/DevForge/framework/DevForgeAI/.poc/20260905T002641-206/notes-sqlite', '--policy', '/home/bryan/Projects/DevForge/framework/DevForge/policies/notes-sqlite.json', '--state', '/home/bryan/Projects/DevForge/framework/DevForge/.poc/20260905T002641-206/notes-sqlite']
+{"reason":"source outside approved layout: .claude/skills/devforge-brainstorm/scripts/check_artifact.py","status":"BLOCKED"}
+
+

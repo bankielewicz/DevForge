@@ -1,0 +1,36 @@
+test_installs_both_providers_and_repeats (test_installer.InstallerTest.test_installs_both_providers_and_repeats) ... ok
+test_local_edit_collision_is_preserved (test_installer.InstallerTest.test_local_edit_collision_is_preserved) ... ok
+test_managed_refresh_updates_unmodified_copy (test_installer.InstallerTest.test_managed_refresh_updates_unmodified_copy) ... ok
+test_symlink_destination_is_rejected (test_installer.InstallerTest.test_symlink_destination_is_rejected) ... ok
+test_accepted_archive_tampering_detected (test_poc.GatePOC.test_accepted_archive_tampering_detected) ... ok
+test_another_project_binding_is_not_reused (test_poc.GatePOC.test_another_project_binding_is_not_reused) ... ok
+test_changed_tests_invalidate_red (test_poc.GatePOC.test_changed_tests_invalidate_red) ... ok
+test_cli_accepts_relative_project_paths (test_poc.GatePOC.test_cli_accepts_relative_project_paths) ... ok
+test_complete_red_green_accept_verify (test_poc.GatePOC.test_complete_red_green_accept_verify) ... ok
+test_dependency_change_is_denied (test_poc.GatePOC.test_dependency_change_is_denied) ... ok
+test_external_lock_prevents_transition (test_poc.GatePOC.test_external_lock_prevents_transition) ... ok
+test_green_without_red_is_denied (test_poc.GatePOC.test_green_without_red_is_denied) ... ok
+test_isolation_allows_candidate_but_denies_authority (test_poc.GatePOC.test_isolation_allows_candidate_but_denies_authority) ... ok
+test_mode_change_after_green_blocks_accept (test_poc.GatePOC.test_mode_change_after_green_blocks_accept) ... ok
+test_mutation_after_green_blocks_accept (test_poc.GatePOC.test_mutation_after_green_blocks_accept) ... ok
+test_no_tests_is_not_valid_red (test_poc.GatePOC.test_no_tests_is_not_valid_red) ... ok
+test_path_traversal_policy_is_denied (test_poc.GatePOC.test_path_traversal_policy_is_denied) ... ok
+test_policy_change_stales_existing_run (test_poc.GatePOC.test_policy_change_stales_existing_run) ... ok
+test_policy_inside_project_is_denied (test_poc.GatePOC.test_policy_inside_project_is_denied) ... ok
+test_preexisting_failing_suite_blocks_init (test_poc.GatePOC.test_preexisting_failing_suite_blocks_init) ... ok
+test_prohibited_import_is_denied (test_poc.GatePOC.test_prohibited_import_is_denied) ... ok
+test_red_rejects_production_changes (test_poc.GatePOC.test_red_rejects_production_changes) ... ok
+test_refresh_preserves_old_binding (test_poc.GatePOC.test_refresh_preserves_old_binding) ... ok
+test_runner_error_is_not_valid_red (test_poc.GatePOC.test_runner_error_is_not_valid_red) ... ok
+test_skill_edit_stales_binding (test_poc.GatePOC.test_skill_edit_stales_binding) ... ok
+test_skipped_tests_are_not_valid_red (test_poc.GatePOC.test_skipped_tests_are_not_valid_red) ... ok
+test_source_outside_layout_is_denied (test_poc.GatePOC.test_source_outside_layout_is_denied) ... ok
+test_state_inside_project_is_denied (test_poc.GatePOC.test_state_inside_project_is_denied) ... ok
+test_symlink_is_denied (test_poc.GatePOC.test_symlink_is_denied) ... ok
+test_undeclared_policy_field_is_denied (test_poc.GatePOC.test_undeclared_policy_field_is_denied) ... ok
+test_upstream_change_stales_expert (test_poc.GatePOC.test_upstream_change_stales_expert) ... ok
+
+----------------------------------------------------------------------
+Ran 31 tests in 2.074s
+
+OK

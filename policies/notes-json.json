@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "project_id": "notes-json",
+  "goal": "Keep a small personal list of notes",
+  "story_id": "STORY-001",
+  "upstream": [
+    "docs/idea.md",
+    "docs/architecture.md",
+    "docs/epic.md",
+    "docs/story.md",
+    "docs/expert-spec.md"
+  ],
+  "dependencies": {
+    "persistence": "json-file"
+  },
+  "dependency_file": "dependencies.json",
+  "source_roots": [
+    "src"
+  ],
+  "test_root": "tests",
+  "expert_dirs": [
+    "experts/notes-json-persistence"
+  ],
+  "forbidden_tokens": [
+    "sqlite3",
+    "Microsoft.EntityFrameworkCore",
+    "sqlalchemy"
+  ],
+  "tooling_files": {
+    ".claude/skills/devforge-brainstorm/scripts/check_artifact.py": {
+      "sha256": "536f4b358ebffc2e60dd01672ab7563a10f55b91d3122ff8f28a1a2e2a9d0f3a",
+      "mode": 420
+    }
+  }
+}

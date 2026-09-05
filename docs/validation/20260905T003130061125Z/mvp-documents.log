@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "created_at_utc": "2026-09-05T00:31:33.286199+00:00",
+  "status": "PASS",
+  "errors": [],
+  "specifications": 12,
+  "skill_output_templates": 17,
+  "shared_templates": 2,
+  "authoring_templates": 4,
+  "scope": "Local links, JSON, index/source mappings, required sections, cached research digests, whitespace/fences",
+  "not_checked": [
+    "Full YAML/schema semantics",
+    "semantic provenance",
+    "Mermaid rendering",
+    "native skill behavior"
+  ],
+  "native_skill_behavior": "NOT_EVALUATED"
+}

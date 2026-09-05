@@ -1,0 +1,41 @@
+name: Validate exact DevForgeAI revision
+
+on:
+  workflow_dispatch:
+    inputs:
+      framework_sha:
+        description: Full 40-character DevForgeAI commit SHA to inspect
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  structure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require authority branch and exact candidate revision
+        env:
+          FRAMEWORK_SHA: ${{ inputs.framework_sha }}
+          AUTHORITY_REF: ${{ github.ref }}
+        run: |
+          test "$AUTHORITY_REF" = refs/heads/main
+          [[ "$FRAMEWORK_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          path: authority
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: bankielewicz/DevForgeAI
+          ref: ${{ inputs.framework_sha }}
+          persist-credentials: false
+          path: candidate
+      - name: Validate without executing candidate code
+        run: python3 authority/scripts/validate_framework.py --framework candidate
+      - name: Validate authoring document references
+        run: python3 authority/scripts/validate_mvp.py --mvp candidate/docs/mvp
+      - name: Record check scope
+        run: echo 'Structural validation only. No semantic acceptance, merge protection, or deployment is implied.' >> "$GITHUB_STEP_SUMMARY"

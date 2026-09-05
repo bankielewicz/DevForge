@@ -1,0 +1,33 @@
+name: DevForge CLI checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install isolated-runner prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          rustup toolchain install 1.94.0 --profile minimal --component rustfmt --component clippy
+      - name: Verify filesystem isolation is available
+        run: bwrap --ro-bind / / --unshare-pid --die-with-parent /usr/bin/true
+      - name: Rust checks
+        run: |
+          cargo +1.94.0 fmt --check
+          cargo +1.94.0 clippy --locked --all-targets -- -D warnings
+          cargo +1.94.0 build --locked
+      - name: Behavioral gate and installer tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v

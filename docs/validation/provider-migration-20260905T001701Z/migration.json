@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "created_at_utc": "20260905T001701Z",
+  "checkpoint_verified_files": 9,
+  "source_backup": "/home/bryan/Projects/DevForge/framework/DevForge/.poc/provider-migration-20260905T001701Z",
+  "original_shared_files_sha256": {
+    ".claude-plugin/plugin.json": "ea09cefd8cc409e2e3bc2fc63d1ebf300327bf2c7ee7a99e6bbc6d73f56b2f77",
+    ".codex-plugin/plugin.json": "d174a7f0483098c65ebefae8ac1e82005c9fc9746371d4d6f12a139de628e892",
+    "agents/project-expert-author.md": "79e21a981b818516233948243390d362fef7a991457556545ece2829e278b194",
+    "agents/project-reviewer.md": "db5449975305d2d13ad6ae37b61585e9a950ea1ad1391d4a8dfedb863a349d48",
+    "skills/devforge-brainstorm/SKILL.md": "31641ddbee8024ca2330c4f89622fe2c62bdda326df06c148340c16fc00d7a6e",
+    "skills/devforge-brainstorm/assets/handoff.md": "0b7056c684b619ac15fe02515d8e3c682a60ad1844393f6245fbc2dcb81a3d1f",
+    "skills/devforge-brainstorm/assets/idea-ledger.md": "46197247715cab9c289f1cf9e8dc25c00afdae51c5bc1f56fb0f95b9cca21417",
+    "skills/devforge-brainstorm/evals/evals.json": "d8470178cc647b8f8dad0aba8ea54f3fd094630ce79866372b65e03c959a24cf",
+    "skills/devforge-brainstorm/references/recording-rules.md": "75e6b045e7265120d2c2e088734517083e19f924dbc8c85bab3407ed48ccfade",
+    "skills/devforge-brainstorm/scripts/check_artifact.py": "536f4b358ebffc2e60dd01672ab7563a10f55b91d3122ff8f28a1a2e2a9d0f3a",
+    "skills/devforge-develop/SKILL.md": "127a7196bd5a23083d356a3ad1476d6d2e8f661db97d8c56b3f074c1152b2bad",
+    "skills/devforge-project-expert-creator/SKILL.md": "3dc906ddb1427bbc6cdb820490262e51cb95f9f7f51e494258b711d4fcfcbe10",
+    "skills/devforge-project-expert-creator/assets/evaluation-cases.md": "8cb830c91b643e4fe0ea0861aab549f60299ac440ec28149baeb98e3cde7c11b",
+    "skills/devforge-project-expert-creator/assets/expert-spec-template.md": "3c8e0b7fcc1f84f0c5c8461fc08ea27001074b459bd31f489c38bfb8d71736a8",
+    "skills/devforge-review/SKILL.md": "63c681580332b68b71b678a4f769c16e66820c45b8801e75dbb364279cfa2c06"
+  },
+  "claude_candidate_preserved": {
+    "SKILL.md": "31641ddbee8024ca2330c4f89622fe2c62bdda326df06c148340c16fc00d7a6e",
+    "assets/handoff.md": "0b7056c684b619ac15fe02515d8e3c682a60ad1844393f6245fbc2dcb81a3d1f",
+    "assets/idea-ledger.md": "46197247715cab9c289f1cf9e8dc25c00afdae51c5bc1f56fb0f95b9cca21417",
+    "references/recording-rules.md": "75e6b045e7265120d2c2e088734517083e19f924dbc8c85bab3407ed48ccfade",
+    "scripts/check_artifact.py": "536f4b358ebffc2e60dd01672ab7563a10f55b91d3122ff8f28a1a2e2a9d0f3a"
+  },
+  "codex_brainstorm_origin": "original POC skill-snapshot",
+  "fixture_resolution": "evals.json files resolve relative to its containing evals directory",
+  "behavior": "NOT_EVALUATED"
+}

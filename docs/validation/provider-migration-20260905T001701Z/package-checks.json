@@ -1,0 +1,73 @@
+{
+  "checks": [
+    {
+      "check": "native-skill-structure",
+      "path": "/home/bryan/Projects/DevForge/framework/DevForgeAI/providers/claude/plugins/devforgeai/skills/devforge-brainstorm",
+      "exit_code": 0,
+      "output": "Skill is valid!\n"
+    },
+    {
+      "check": "native-skill-structure",
+      "path": "/home/bryan/Projects/DevForge/framework/DevForgeAI/providers/claude/plugins/devforgeai/skills/devforge-develop",
+      "exit_code": 0,
+      "output": "Skill is valid!\n"
+    },
+    {
+      "check": "native-skill-structure",
+      "path": "/home/bryan/Projects/DevForge/framework/DevForgeAI/providers/claude/plugins/devforgeai/skills/devforge-project-expert-creator",
+      "exit_code": 0,
+      "output": "Skill is valid!\n"
+    },
+    {
+      "check": "native-skill-structure",
+      "path": "/home/bryan/Projects/DevForge/framework/DevForgeAI/providers/claude/plugins/devforgeai/skills/devforge-review",
+      "exit_code": 0,
+      "output": "Skill is valid!\n"
+    },
+    {
+      "check": "native-skill-structure",
+      "path": "/home/bryan/Projects/DevForge/framework/DevForgeAI/providers/codex/plugins/devforgeai/skills/devforge-brainstorm",
+      "exit_code": 0,
+      "output": "Skill is valid!\n"
+    },
+    {
+      "check": "native-skill-structure",
+      "path": "/home/bryan/Projects/DevForge/framework/DevForgeAI/providers/codex/plugins/devforgeai/skills/devforge-develop",
+      "exit_code": 0,
+      "output": "Skill is valid!\n"
+    },
+    {
+      "check": "native-skill-structure",
+      "path": "/home/bryan/Projects/DevForge/framework/DevForgeAI/providers/codex/plugins/devforgeai/skills/devforge-project-expert-creator",
+      "exit_code": 0,
+      "output": "Skill is valid!\n"
+    },
+    {
+      "check": "native-skill-structure",
+      "path": "/home/bryan/Projects/DevForge/framework/DevForgeAI/providers/codex/plugins/devforgeai/skills/devforge-review",
+      "exit_code": 0,
+      "output": "Skill is valid!\n"
+    },
+    {
+      "check": "installed-helper-clean",
+      "exit_code": 0,
+      "expected_exit_code": 0,
+      "output": "\n/tmp/devforge-install-probe-i_f5xn0j/docs/devforge/ideas/probe.md\n  sha256: c9bfce9b6914aebd48c95edf55df0e4dd496b085ff598c29b0dd969f844785a7\n  placeholders remaining: none\n"
+    },
+    {
+      "check": "installed-helper-placeholder",
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "output": "\n/tmp/devforge-install-probe-i_f5xn0j/docs/devforge/ideas/probe.md\n  sha256: 3b70cb405c57e6e3b32dfc08636887d3378ea9862f5099bc8bf9526d268475d1\n  placeholders remaining: 1\n    line 1: {{unfilled}}\n\nUnresolved placeholders or unreadable files: this artifact is a draft.\n"
+    }
+  ],
+  "runtime_resources": "byte matched",
+  "evals_excluded": true,
+  "scope": "Structure and direct helper execution; no native discovery, model behavior, or source-inaccessibility claim",
+  "model_behavior": "NOT_EVALUATED",
+  "plugin_validation": {
+    "codex": "PASS: plugin-creator validate_plugin.py",
+    "claude": "PASS: claude plugin validate with telemetry disabled",
+    "initial_claude_attempt": "COULD_NOT_RUN: telemetry destination blocked by sandbox network policy; retry disabled nonessential traffic"
+  }
+}

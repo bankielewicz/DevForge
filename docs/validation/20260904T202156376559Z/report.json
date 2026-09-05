@@ -1,0 +1,147 @@
+{
+  "schema": 1,
+  "created_at": "20260904T202156376559Z",
+  "checks": [
+    {
+      "check": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--check"
+      ],
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "check": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "check": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked"
+      ],
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "check": "tests",
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-p",
+        "test_*.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "check": "framework-structure",
+      "command": [
+        "python3",
+        "scripts/validate_framework.py",
+        "--framework",
+        "/home/bryan/Projects/DevForge/framework/DevForgeAI"
+      ],
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "check": "fixture-demo",
+      "command": [
+        "python3",
+        "scripts/demo.py",
+        "--framework",
+        "/home/bryan/Projects/DevForge/framework/DevForgeAI"
+      ],
+      "exit_code": 0,
+      "status": "PASS"
+    }
+  ],
+  "sources_sha256": {
+    "DevForge/.github/workflows/ci.yml": "9e133e3b962bd1f7b9cfa4d559c6634b496153f14c34b6ea08c1d5dbb4e494e7",
+    "DevForge/.github/workflows/validate-framework.yml": "eedf177836373e7f5b50c7f7299906172d1dbdd7ab63098783944ae0d058c01e",
+    "DevForge/.gitignore": "003d5ab7f46d969e5a694018251376dba51dfd3fb67c817d9ff34aa2c7300cf5",
+    "DevForge/AGENTS.md": "973626369394962f4dda075847f2276725e458f5889402bacd97c5778ee2ac37",
+    "DevForge/Cargo.lock": "2bd51e624b463256855b7ee2939fd8d83912697b978ffa62331f9e8635813360",
+    "DevForge/Cargo.toml": "80e88a3c5759bfd07279e348f886deb3482784b834c65c8e4f25baeba252b83c",
+    "DevForge/README.md": "66fa12cdd842db14c79f74aa93f95f7bb28612e4c287cf4ce24f55f7f27c0242",
+    "DevForge/docs/POC.md": "dfbafb82f40d53d5082cdf968d7013b1341580c92e5685ca0e7b5d28286c2047",
+    "DevForge/policies/notes-json.json": "30dbdc8a778a161ad676ce42b39cc9f28f63853b4a65c7240c9b1408bb25be9d",
+    "DevForge/policies/notes-sqlite.json": "f0f0e58625a6289bfdd94f6897d9825da630e011c3dc9fe128d122f835903cf3",
+    "DevForge/runners/unittest_runner.py": "8f7c036fcdd7a6d39841e301b2c19e061d31a160477131a0085274282ef5fe80",
+    "DevForge/scripts/demo.py": "067edd130467d141890f3b7688893c83a47cee10353d9c173515371974ca8999",
+    "DevForge/scripts/install_framework.py": "66b0e6c0cac92ae3b946d0eab1dea5803ade963ae70eb98a997ac4b42b88e547",
+    "DevForge/scripts/validate_framework.py": "3e1c998143d7c5634eb1814c6e30487f4e65db5589b3ca4e6b7a166e5a5688e2",
+    "DevForge/scripts/verify_poc.py": "7d8c92ce30a372498ca40bbc66cc22c16e95e3f51aae8e3efc5f5c198106188f",
+    "DevForge/src/main.rs": "3c71b79e7111f8acff3eecf8a83af711459005236921c101bdbae301baad1f71",
+    "DevForge/tests/test_installer.py": "6d9fa846d7a14ba08acf60c1be1500aff9eb2e520d4b82d2e5bf5b483fc4dc1b",
+    "DevForge/tests/test_poc.py": "ea2a978cdb031a89d9c30745973289c79dd5d8aeab63c8a793532906ace332d3",
+    "DevForge/tests/test_validation.py": "e326a936cebc5479a5f9017ae26b7e94c46ae8acf48510cbe0884c6d95377bd6",
+    "DevForgeAI/.gitignore": "dcb68075831ec914dfff664278dfe1cddfb7b54ac4d3ffc247d1ff3082bea23d",
+    "DevForgeAI/AGENTS.md": "c25d27ea2f9b229a15fed477178609f949c58caba14b4443fbbb0ee8d98c4c6d",
+    "DevForgeAI/CLAUDE.md": "a29d73a14d2925767afea3fd8149565c46ebe1820eebf384f31733a0ae50e756",
+    "DevForgeAI/README.md": "2de46105d8b99756ecde81b6db1b339a944f5227a9647e9495b131d737ef84bd",
+    "DevForgeAI/docs/POC.md": "9f101a26b907ff4e777b16589ad52e22e5043622fdee71f5fb860d201d1a8225",
+    "DevForgeAI/examples/notes-json/changes/src/store.py": "d3af4accc4b2e35925a3dee4436d77fb5bd4ae30918949d046dd0018fe44ad2a",
+    "DevForgeAI/examples/notes-json/changes/tests/test_store.py": "fe0c936463c16a485ccfcb994de236ebe1f88e8c208aef58e6c26a5fd94d8c60",
+    "DevForgeAI/examples/notes-json/seed/.gitignore": "72a76564df2a2370c7fc960536aacd6726982851b692dc029304feff4d466462",
+    "DevForgeAI/examples/notes-json/seed/dependencies.json": "0ece2de07209ce1e1912ecc172ed5cf8e8394611ba1dcb0c0f2a362066fe790c",
+    "DevForgeAI/examples/notes-json/seed/docs/architecture.md": "f3780c8c3ea8e8b640f83d74fa915d900ad05fcb4a9375211582036d164af042",
+    "DevForgeAI/examples/notes-json/seed/docs/epic.md": "dc6ed14391644b7f1e458ca8a1867c30d43d64c7aeb9fcf3d803fa35c79f0247",
+    "DevForgeAI/examples/notes-json/seed/docs/expert-spec.md": "7d3b70f2ea908a111fb1e8591d755e351be312529465a6e154c0d48c5b3d8598",
+    "DevForgeAI/examples/notes-json/seed/docs/idea.md": "b16cbda47ceb55648bcf06ddfd1585e1f21266bc84cb25fa1b711b7cbd93573d",
+    "DevForgeAI/examples/notes-json/seed/docs/story.md": "0639ceb375dd0cd1558932d2e8460af989021e6476a564450946905edbc5aa45",
+    "DevForgeAI/examples/notes-json/seed/experts/notes-json-persistence/SKILL.md": "8a0f94bdf1d6b6d5e4f15d3421a3116d4fed5074774a2eadca7d2ede68b74c1a",
+    "DevForgeAI/examples/notes-json/seed/experts/notes-json-persistence/references/stack.md": "a3a93da3cb2fc4cf9ecece1c5a0a7820227555f0bfa93376fe9b511499cc6fde",
+    "DevForgeAI/examples/notes-json/seed/src/__init__.py": "e16f1596201850fd4a63680b27f603cb64e67176159be3d8ed78a4403fdb1700",
+    "DevForgeAI/examples/notes-json/seed/src/store.py": "937b663eb4cf22be36dd94489068eeae61a2e1cc44458881b2fb373b39dcaf3f",
+    "DevForgeAI/examples/notes-json/seed/tests/__init__.py": "e16f1596201850fd4a63680b27f603cb64e67176159be3d8ed78a4403fdb1700",
+    "DevForgeAI/examples/notes-sqlite/changes/src/store.py": "604776c9eb68e8112b0db67755a7bab47c33deb4f67d045621891f92e1297b0c",
+    "DevForgeAI/examples/notes-sqlite/changes/tests/test_store.py": "fe0c936463c16a485ccfcb994de236ebe1f88e8c208aef58e6c26a5fd94d8c60",
+    "DevForgeAI/examples/notes-sqlite/seed/.gitignore": "72a76564df2a2370c7fc960536aacd6726982851b692dc029304feff4d466462",
+    "DevForgeAI/examples/notes-sqlite/seed/dependencies.json": "e8567ab1fda4d0b679f9a8fb9b7328955e3b71bbc4b2f080004fe95191075b05",
+    "DevForgeAI/examples/notes-sqlite/seed/docs/architecture.md": "f35dde83f953a6ab2f6a025deda16fbd442cc0fdcd86055b1ada2e1f05fee4bc",
+    "DevForgeAI/examples/notes-sqlite/seed/docs/epic.md": "dc6ed14391644b7f1e458ca8a1867c30d43d64c7aeb9fcf3d803fa35c79f0247",
+    "DevForgeAI/examples/notes-sqlite/seed/docs/expert-spec.md": "d85a1d9bcbf695f0bbca3877e939236847f5a505847b593a0fec25041c02087b",
+    "DevForgeAI/examples/notes-sqlite/seed/docs/idea.md": "4e898cada31e2f371c90a1ddc1cb827e642daf3eeac3b9af75b8d63eba90d80e",
+    "DevForgeAI/examples/notes-sqlite/seed/docs/story.md": "0639ceb375dd0cd1558932d2e8460af989021e6476a564450946905edbc5aa45",
+    "DevForgeAI/examples/notes-sqlite/seed/experts/notes-sqlite-persistence/SKILL.md": "f6e951baafe35e54dfd22c5af995c80d92a21658eeb64fea92a6a64eeb9c9090",
+    "DevForgeAI/examples/notes-sqlite/seed/experts/notes-sqlite-persistence/references/stack.md": "a82380220eb00a07d3361a362a6fe2743039de80ec718815a106b385b538bc54",
+    "DevForgeAI/examples/notes-sqlite/seed/src/__init__.py": "e16f1596201850fd4a63680b27f603cb64e67176159be3d8ed78a4403fdb1700",
+    "DevForgeAI/examples/notes-sqlite/seed/src/store.py": "937b663eb4cf22be36dd94489068eeae61a2e1cc44458881b2fb373b39dcaf3f",
+    "DevForgeAI/examples/notes-sqlite/seed/tests/__init__.py": "e16f1596201850fd4a63680b27f603cb64e67176159be3d8ed78a4403fdb1700",
+    "DevForgeAI/plugins/devforgeai/.claude-plugin/plugin.json": "ea09cefd8cc409e2e3bc2fc63d1ebf300327bf2c7ee7a99e6bbc6d73f56b2f77",
+    "DevForgeAI/plugins/devforgeai/.codex-plugin/plugin.json": "d174a7f0483098c65ebefae8ac1e82005c9fc9746371d4d6f12a139de628e892",
+    "DevForgeAI/plugins/devforgeai/agents/project-expert-author.md": "79e21a981b818516233948243390d362fef7a991457556545ece2829e278b194",
+    "DevForgeAI/plugins/devforgeai/agents/project-reviewer.md": "db5449975305d2d13ad6ae37b61585e9a950ea1ad1391d4a8dfedb863a349d48",
+    "DevForgeAI/plugins/devforgeai/skills/devforge-brainstorm/SKILL.md": "eeeca8d3720ba45d3614ebc22b19bf8f204050418c6f54489367d5701467eca0",
+    "DevForgeAI/plugins/devforgeai/skills/devforge-develop/SKILL.md": "127a7196bd5a23083d356a3ad1476d6d2e8f661db97d8c56b3f074c1152b2bad",
+    "DevForgeAI/plugins/devforgeai/skills/devforge-project-expert-creator/SKILL.md": "3dc906ddb1427bbc6cdb820490262e51cb95f9f7f51e494258b711d4fcfcbe10",
+    "DevForgeAI/plugins/devforgeai/skills/devforge-project-expert-creator/assets/evaluation-cases.md": "8cb830c91b643e4fe0ea0861aab549f60299ac440ec28149baeb98e3cde7c11b",
+    "DevForgeAI/plugins/devforgeai/skills/devforge-project-expert-creator/assets/expert-spec-template.md": "3c8e0b7fcc1f84f0c5c8461fc08ea27001074b459bd31f489c38bfb8d71736a8",
+    "DevForgeAI/plugins/devforgeai/skills/devforge-review/SKILL.md": "63c681580332b68b71b678a4f769c16e66820c45b8801e75dbb364279cfa2c06",
+    "DevForgeAI/providers/codex/agents/project-expert-author.toml": "9fc10f54e0405cf345d0b6bbe42d9da1ebe13543a5eac6c40aff967a6c4689f7",
+    "DevForgeAI/providers/codex/agents/project-reviewer.toml": "6c42b9bd0e79ff59570f57984c5d4c0a625b622514fb116daee3e4cf65926c8c"
+  },
+  "model_behavior": "NOT_EVALUATED",
+  "hosted_ci": "NOT_RUN",
+  "scope": "Local structural checks, isolated-runner gate tests, installer tests, and scripted project fixtures."
+}
