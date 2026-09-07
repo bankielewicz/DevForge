@@ -19,3 +19,16 @@ The supervisor protects runtime code/state, fixed sources and receipt paths from
 This is an incomplete integration revision. Native callback coverage, actual builder-to-validator invocation and delivery remain unobserved. Builder classifications must still be supplied by the assignment owner; this adapter does not adopt the synthetic fixtures' classifications for real work.
 
 Official source inspected on 2026-09-07: https://learn.chatgpt.com/docs/hooks. The selected synchronous callback interface uses SessionStart, UserPromptSubmit (prompt field), Stop and SessionEnd; matching sources accumulate, trust is definition-specific and tool hooks are not a complete sandbox. The runtime is the authority boundary; hooks transport observations and feedback. Codex CLI observed: 0.153.4. Live native support remains to be measured on a separately frozen allocation.
+
+
+## Client-independent scheduling checkpoint
+
+The Python module `runtime/delivery/native_schedule.py` supplies an in-memory scheduling and budget policy component for a previously validated frozen experiment. Its supplemental `required_predecessors` map is an explicit caller-owned input, not a new accepted field in `devforge.utility-native-plan/v1`. The protected caller must establish that this frozen map covers the actual case requirements; an empty list cannot self-exclude required coverage.
+
+The component preserves declared C/B/A order, independent attempt identities and explicit prerequisite relationships. It reserves each attempt once, keeps at most one reservation in flight, consumes an allocation even when launch fails, and bounds each attempt by its own limit and the experiment's original elapsed-time budget. Intact B quality FAIL observations may satisfy a declared observation dependency; required C dependencies need intact PASS. Missing or contaminated predecessor observations block dependent attempts while declared independent work may continue.
+
+Elapsed time is supplied from one authoritative experiment origin including waiting/resume. An expired reservation returns a stop-required decision and remains in flight until its protected caller stops/reaps the owned process and records a terminal observation. The component does not stop processes itself. It rejects late quality grades under its recording-time policy; selecting authenticated capture-time semantics belongs to result-import integration.
+
+This checkpoint has no persistent custody or authenticated result importer. A protected single writer must retain the current returned state before launch, prevent rollback or relaunch on resume, establish observation provenance, and enforce the returned timeout. Immutable Python values or a completed allocation do not establish a protected journal, native execution, or evaluation PASS.
+
+The component is not wired into native-admission, supervisor launch, the Rust embedded module list, or a production experiment scheduler. Existing C-only reservation and native PASS/FAIL refusal remain intact. Versioned plan/dependency integration, protected lifecycle integration, selected native launch/authentication and independent end-to-end observations remain required before enabling native execution.
