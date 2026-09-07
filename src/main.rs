@@ -13,6 +13,8 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+mod delivery;
+
 const RUNNER: &str = include_str!("../runners/unittest_runner.py");
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -35,6 +37,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Action {
+    /// Manage external mechanical delivery state and protected worker sessions.
+    Delivery {
+        #[command(subcommand)]
+        action: delivery::Action,
+    },
     /// Prepare expertise context, inspect freshness, or bind an AI-authored skill.
     Expert {
         #[command(subcommand)]
@@ -971,11 +978,15 @@ fn execute(cli: Cli) -> Result<Value> {
                 json!({"status":status,"candidate_sha256":tree_hash(&tree)?,"state":dir,"runner_isolation":"filesystem; network not isolated","scope":"local POC acceptance; semantic review still required"}),
             )
         }
-        Action::Isolate { .. } => unreachable!(),
+        Action::Isolate { .. } | Action::Delivery { .. } => unreachable!(),
     }
 }
 fn main() {
     let cli = Cli::parse();
+    if let Action::Delivery { action } = &cli.command {
+        delivery::main(action, cli.state.as_deref());
+        return;
+    }
     match execute(cli) {
         Ok(value) => println!(
             "{}",
