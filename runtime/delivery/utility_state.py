@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from . import delivery_core as core, phase_state as store, utility_evidence
+    from . import delivery_core as core, phase_state as store, utility_evidence, utility_schedule
 except ImportError:
     import delivery_core as core
     import phase_state as store
     import utility_evidence
+    import utility_schedule
 
 SESSION_SCHEMA = "devforge.utility-session/v1"
 DELIVERY_SCHEMA = "devforge.utility-delivery/v1"
@@ -353,6 +354,34 @@ def _gate(raw, spec, cfg):
     return evidence
 
 
+def _prior_native_gates(state):
+    for identity, phase in (("deterministic-inspection", "P2"), ("independent-review", "P3")):
+        prior = next((row for row in state.cfg["contract"]["gate_inputs"]
+                      if row["id"] == identity and row["phase"] == phase), None)
+        if prior is None or prior["path"] not in state.gates:
+            core._fail("native scheduling lacks prior independent gate input " + identity)
+        raw = store._external(Path(prior["path"]), LIMIT, "prior native gate")
+        if core._json(raw, "prior native gate").get("outcome") != "PASS":
+            core._fail("prior native gate remains failed or unavailable: " + identity)
+
+
+def _native_prerequisites(state):
+    if state.cfg["contract"]["workflow"] != "skill-validator" or state.phase != "P4" or state.status != "ACTIVE":
+        core._fail("native scheduling requires active validator P4 after independent inspection/review")
+    _prior_native_gates(state)
+    spec = next(row for row in state.cfg["contract"]["gate_inputs"] if row["id"] == "native-prerequisites")
+    raw = store._external(Path(spec["path"]), LIMIT, "native prerequisite gate")
+    value = core._json(raw, "native prerequisite gate")
+    if value.get("outcome") != "PASS":
+        core._fail("native prerequisites remain unresolved; reporting can continue separately")
+    fixed = _gate(raw, spec, state.cfg)
+    plans = [(path, data) for kind, path, data in fixed if kind == "gate_evidence"]
+    if len(plans) != 1:
+        core._fail("native plan binding is missing or ambiguous")
+    path, plan_raw = plans[0]
+    return spec, raw, fixed, {"path": path, "sha256": store._hash(plan_raw)}, core._json(plan_raw, "native plan")
+
+
 class State:
     def __init__(self, root, fd):
         self.root, self.fd = root, fd
@@ -383,6 +412,7 @@ class State:
         self.phase, self.status, self.challenge = self.phases[0], "ACTIVE", None
         self.accepted, self.gates, self.questions, self.nonces = {}, {}, {}, set()
         self.native_attempts = {}
+        self.schedule = None
         self.gate_outcomes = {}
         self.pending, self.intent, self.receipt = None, None, None
         self.corrections, self.issues, self.last_time = 0, [], store._stamp(self.manifest["started_at_utc"], "start time")
@@ -396,7 +426,7 @@ class State:
             if row["sequence"] != index or row["previous"] != (self.head["records"][index - 1] if index else None):
                 core._fail("utility journal chain mismatch")
             stamp = store._stamp(row["at_utc"], "utility record time")
-            if stamp < self.last_time or stamp >= self.cfg["deadline"]:
+            if stamp < self.last_time or stamp >= self.cfg["deadline"] and row["operation"] != "native_schedule_cancel":
                 core._fail("utility journal time violates original deadline")
             self.last_time = stamp
             for ref in row["snapshots"]:
@@ -478,6 +508,8 @@ class State:
             else:
                 if checkpoint["state"] != "ready":
                     core._fail("accepted phase lacks ready evidence")
+                if self.phase == "P4" and self.schedule is not None and self.schedule.inflight():
+                    core._fail("cannot leave native phase with an unsettled reservation")
                 self._check_snapshot_evidence(record["snapshots"], checkpoint)
                 i = self.phases.index(self.phase)
                 self.corrections, self.issues = 0, []
@@ -521,6 +553,8 @@ class State:
             core._exact(data, {"attempt_id", "next_challenge"}, "native admission")
             if self.cfg["contract"]["workflow"] != "skill-validator" or self.phase != "P4" or self.status != "ACTIVE":
                 core._fail("native admission requires active validator P4")
+            if self.schedule is not None:
+                core._fail("legacy native admission cannot bypass the bound schedule")
             if data["attempt_id"] in self.native_attempts:
                 core._fail("native attempt was already allocated; writable state cannot be reused")
             refs = [ref for ref in record["snapshots"] if ref["kind"] == "native_plan"]
@@ -550,6 +584,45 @@ class State:
             self.gates[gate_spec["path"]] = gate_refs[0]["sha256"]
             self.native_attempts[data["attempt_id"]] = {"plan_sha256": refs[0]["sha256"], **matches[0]}
             self._nonce(data["next_challenge"])
+        elif op == "native_schedule_bind":
+            core._exact(data, {"next_challenge"}, "native schedule binding")
+            if self.schedule is not None or self.native_attempts:
+                core._fail("native schedule binding is exclusive and cannot reset prior reservations")
+            spec, gate_raw, fixed, plan_ref, plan = _native_prerequisites(self)
+            refs = [r for r in record["snapshots"] if r["kind"] == "schedule_binding"]
+            if len(refs) != 1:
+                core._fail("native schedule lacks its one frozen dependency binding")
+            binding_path = store._absolute(refs[0]["source"], "native schedule binding path")
+            roots = [self.cfg["project"], self.root, self.cfg["receipt"], Path(__file__).resolve().parent]
+            roots.extend(store._absolute(a[key], "native attempt root") for a in plan["attempts"]
+                         for key in ("workspace", "client_state"))
+            if any(store._collide(binding_path, root) for root in roots):
+                core._fail("native schedule binding overlaps worker/state/code/receipt scope")
+            expected = {(kind, path): store._hash(raw) for kind, path, raw in fixed}
+            expected[("native_gate", spec["path"])] = store._hash(gate_raw)
+            expected[("schedule_binding", str(binding_path))] = refs[0]["sha256"]
+            actual = {(r["kind"], r["source"]): r["sha256"] for r in record["snapshots"]}
+            if actual != expected:
+                core._fail("native schedule snapshots differ from the selected prerequisite evidence")
+            kernel = utility_schedule.validate(self.blobs[refs[0]["sha256"]], plan, plan_ref,
+                                               self.cfg["session"]["task_id"])
+            self.schedule = utility_schedule.JournalSchedule(kernel, store._stamp(record["at_utc"], "schedule origin"),
+                                                             self.cfg["deadline"])
+            for (_, path), digest in expected.items():
+                self.gates[path] = digest
+            self._nonce(data["next_challenge"])
+        elif op == "native_schedule_reserve":
+            core._exact(data, {"next_challenge"}, "native schedule reservation")
+            if self.schedule is None or self.phase != "P4" or self.status != "ACTIVE":
+                core._fail("native schedule reservation requires a bound active P4 schedule")
+            self.schedule.reserve(store._stamp(record["at_utc"], "schedule reservation time"))
+            self._nonce(data["next_challenge"])
+        elif op == "native_schedule_cancel":
+            core._exact(data, {"attempt_id", "reason"}, "native unlaunched cancellation")
+            core._text(data["reason"], "cancellation reason")
+            if self.schedule is None or self.phase != "P4":
+                core._fail("cancellation requires a bound P4 schedule")
+            self.schedule.cancel_unlaunched(data["attempt_id"], store._stamp(record["at_utc"], "cancellation time"))
         elif op == "completion_intent":
             core._exact(data, {"receipt_sha256"}, "utility completion intent")
             if self.status != "READY" or self.intent is not None:
@@ -611,16 +684,21 @@ class State:
                 and value["prompt_sha256"] == store._hash(prompt.encode()) and value["resolved"] is True)
 
     def append(self, operation, data, sources=()):
-        store._before_deadline(store._now(), self.cfg["deadline"])
+        now = store._now()
+        if now < self.last_time:
+            core._fail("utility operation clock moved behind its journal high-water mark")
+        if operation != "native_schedule_cancel":
+            store._before_deadline(now, self.cfg["deadline"])
         if len(self.head["records"]) >= MAX_RECORDS:
             core._fail("utility journal budget exhausted")
         refs = [store._snapshot(self.fd, kind, source, raw) for kind, source, raw in sources]
         for ref, (_, _, raw) in zip(refs, sources):
             self.blobs[ref["sha256"]] = raw
         record = {"sequence": len(self.head["records"]), "previous": self.head["records"][-1],
-                  "at_utc": store._now().isoformat(), "operation": operation, "data": data, "snapshots": refs}
+                  "at_utc": now.isoformat(), "operation": operation, "data": data, "snapshots": refs}
         # Replay prospective operation before committing; no self-declared state.
         self._apply(record)
+        self.last_time = now
         raw = store._dump(record)
         digest = store._hash(raw)
         store._publish(self.fd, "records/" + digest + ".json", raw)
@@ -654,6 +732,8 @@ class State:
             result.update(challenge=self.challenge, inputs_sha256=store._hash(self.cfg["contract_raw"]))
         if self.pending:
             result.update(question=self.pending["question"], question_id=self.pending["id"], blocking_dependency=self.pending["blocking_dependency"])
+        if self.schedule is not None:
+            result["native_schedule"] = self.schedule.view(store._now())
         if self.status == "COMPLETED":
             result.update(receipt_path=str(self.cfg["receipt"]), receipt_sha256=self.receipt,
                           receipt_published=True, receipt_readback=True, receipt_verified=True)
@@ -843,6 +923,8 @@ def native_admission(state_root, attempt_id):
     core._text(attempt_id, "native attempt ID")
     with store._lock(root) as fd:
         state = State(root, fd)
+        if state.schedule is not None:
+            core._fail("legacy native admission cannot bypass the bound schedule")
         store._before_deadline(store._now(), state.cfg["deadline"])
         if state.cfg["contract"]["workflow"] != "skill-validator" or state.phase != "P4" or state.status != "ACTIVE":
             core._fail("native admission requires prior validator intake/static/review phases and active P4")
@@ -873,3 +955,41 @@ def native_admission(state_root, attempt_id):
                        attempt=state.native_attempts[attempt_id], phase=state.phase,
                        native_launch_admitted=False, execution="NOT_RUN",
                        deadline_utc=state.cfg["session"]["deadline_utc"])
+
+
+@_guard
+def native_schedule_bind(state_root, schedule_path):
+    """Bind a complete plan/dependency map once, without launching a client."""
+    root = store._absolute(state_root, "state")
+    path = store._absolute(schedule_path, "native schedule binding")
+    with store._lock(root) as fd:
+        state = State(root, fd)
+        if state.schedule is not None or state.native_attempts:
+            core._fail("native schedule binding is exclusive and cannot reset prior reservations")
+        spec, raw, fixed, _, _ = _native_prerequisites(state)
+        binding_raw = store._external(path, LIMIT, "native schedule binding")
+        state.append("native_schedule_bind", {"next_challenge": store._fresh(state)},
+                     [("schedule_binding", str(path), binding_raw), ("native_gate", spec["path"], raw), *fixed])
+        return State(root, fd).view("NATIVE_SCHEDULE_BOUND")
+
+
+@_guard
+def native_schedule_reserve(state_root):
+    """Journal one nonlaunching reservation/decision using the original clock."""
+    root = store._absolute(state_root, "state")
+    with store._lock(root) as fd:
+        state = State(root, fd)
+        state.append("native_schedule_reserve", {"next_challenge": store._fresh(state)})
+        return State(root, fd).view("NATIVE_SCHEDULE_RECORDED")
+
+
+@_guard
+def native_schedule_cancel(state_root, attempt_id, reason):
+    """Cancel only an unlaunched reservation; accepts no native grade/receipt."""
+    root = store._absolute(state_root, "state")
+    core._text(attempt_id, "native cancellation attempt ID")
+    core._text(reason, "native cancellation reason")
+    with store._lock(root) as fd:
+        state = State(root, fd)
+        state.append("native_schedule_cancel", {"attempt_id": attempt_id, "reason": reason})
+        return State(root, fd).view("NATIVE_UNLAUNCHED_CANCELLED")

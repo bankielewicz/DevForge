@@ -13,8 +13,8 @@ The caller must preserve that origin across restarts and enforce returned
 timeouts on the owned process. Expired in-flight work remains reserved until the
 caller stops/reaps it and records its terminal result.
 
-required_predecessors is a supplemental kernel input awaiting versioned runtime
-plan integration; it is NOT an additional accepted field in native-plan/v1.
+required_predecessors is a supplemental kernel input bound by the external
+utility-native-schedule/v1 wrapper; it is NOT a field in native-plan/v1.
 Every attempt needs an explicit entry (possibly empty for non-applicability).
 Applicability is exactly the caller's frozen mapping: upstream plan/contract
 integration must establish its completeness against the required observations.
