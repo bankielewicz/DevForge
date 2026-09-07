@@ -1,0 +1,44 @@
+{
+  "scope": "Incomplete integration checkpoint: protected utility reporting mechanics",
+  "validation": {
+    "unit_regression_suite": {
+      "tests": 415,
+      "outcome": "PASS"
+    },
+    "cargo_fmt": "PASS",
+    "cargo_clippy": "PASS",
+    "cargo_build": "PASS",
+    "gate_fixture_demo": "PASS",
+    "framework_structural_check": {
+      "outcome": "BLOCKED",
+      "cause": "Preserved historical SKILL.md folder-name mismatch at docs/skill-authoring/history/skill-builder-mvp-2026-09-07/SKILL.md; existing validator policy outside this implementation scope"
+    },
+    "independent_static_review": "No new actionable defect within remediation scope; RUNTIME-001/003 closed statically; RUNTIME-002 mitigated by fail-closed B/A denial"
+  },
+  "native": {
+    "execution": "NOT_RUN",
+    "C": "COULD_NOT_RUN",
+    "B": "COULD_NOT_RUN",
+    "A": "COULD_NOT_RUN",
+    "receiving_invocation": "NOT_OBSERVED"
+  },
+  "remaining": [
+    "Native launcher and authenticated result importer/scheduler not implemented",
+    "Native model/authentication/budget and real builder classification unresolved",
+    "Validator authoring held for other active session",
+    "Overall runtime branch is incomplete and must not be represented as merged completed integration"
+  ],
+  "evidence_sha256": {
+    "/home/bryan/Projects/DevForge/framework/DevForgeAI/docs/skill-authoring/skill-utilities-integration-20260907T145039Z/runtime-review-01/demo.log": "795be15d046f4041992ebd5fa7382959b5fdd0177dd589f386ba6517234c133b",
+    "/home/bryan/Projects/DevForge/framework/DevForgeAI/docs/skill-authoring/skill-utilities-integration-20260907T145039Z/runtime-review-01/framework-validation.log": "a8919f646fd7a0ebced1e7fa118f9c3125c7888965f2c126f2f057beede7d763",
+    "/home/bryan/Projects/DevForge/framework/DevForgeAI/docs/skill-authoring/skill-utilities-integration-20260907T145039Z/runtime-review-01/independent-review.md": "ec6482775567e0f2edb6a8d1aa15b9de0a4f684deab50a985c369e056b700cee",
+    "/home/bryan/Projects/DevForge/framework/DevForgeAI/docs/skill-authoring/skill-utilities-integration-20260907T145039Z/runtime-review-01/manifest.json": "80f40323103f394b2b7aafc17ebbac83413f0cd915c153791a25539a75ded876",
+    "/home/bryan/Projects/DevForge/framework/DevForgeAI/docs/skill-authoring/skill-utilities-integration-20260907T145039Z/runtime-review-01/rust-checks.log": "5dce19c785717994cbd3243f091936baa7d2b87cb404afe4b884366240c0fc98",
+    "/home/bryan/Projects/DevForge/framework/DevForgeAI/docs/skill-authoring/skill-utilities-integration-20260907T145039Z/runtime-review-01/unittest.log": "8316317266add85d365694db45075ac01b79ef2360fcce3bff45944506c65dab",
+    "/home/bryan/Projects/DevForge/framework/DevForgeAI/docs/skill-authoring/skill-utilities-integration-20260907T145039Z/runtime-review-02/demo.log": "7fcda4e63cd41fbd998d6f196c2a64a694ad331e8de638596a7a7f64a521a425",
+    "/home/bryan/Projects/DevForge/framework/DevForgeAI/docs/skill-authoring/skill-utilities-integration-20260907T145039Z/runtime-review-02/independent-review.md": "7de4e82ca53878410fa0c25239e6f0888e0c113e073e14ff666b9941a230f964",
+    "/home/bryan/Projects/DevForge/framework/DevForgeAI/docs/skill-authoring/skill-utilities-integration-20260907T145039Z/runtime-review-02/manifest.json": "9a7c8e1bbf5114cbe4e75b0d962fd57ed580416894ee667c75544f8e55aa9f2b",
+    "/home/bryan/Projects/DevForge/framework/DevForgeAI/docs/skill-authoring/skill-utilities-integration-20260907T145039Z/runtime-review-02/rust-checks.log": "a5755857ddf39dee059ed703b4dabe1e957f70b8c0848e020dd04e0a7dd2979a",
+    "/home/bryan/Projects/DevForge/framework/DevForgeAI/docs/skill-authoring/skill-utilities-integration-20260907T145039Z/runtime-review-02/unittest.log": "05992ea78657591234ea698d02982d36e4de18dfa770c68d9b3fc181aa61bfbe"
+  }
+}
