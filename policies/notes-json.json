@@ -30,6 +30,14 @@
     ".claude/skills/devforge-brainstorm/scripts/check_artifact.py": {
       "sha256": "536f4b358ebffc2e60dd01672ab7563a10f55b91d3122ff8f28a1a2e2a9d0f3a",
       "mode": 420
+    },
+    ".agents/skills/skill-validator/scripts/assess_evidence.py": {
+      "sha256": "d5b31a5448b84ecee81816a2997577366fe348dd281adb1d1fc6d487c47e7066",
+      "mode": 420
+    },
+    ".agents/skills/skill-validator/scripts/inspect_skill.py": {
+      "sha256": "6054d6a01776590c706612afd9b1d1688ac71923044660094c111a7708591e4d",
+      "mode": 420
     }
   }
 }
