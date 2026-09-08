@@ -1,0 +1,38 @@
+{
+  "review_type": "independent_read_only_consequential_maintenance",
+  "baseline": "framework-review-02/candidate",
+  "candidate_authorship": "existing successor maintenance bytes; reviewer authored no candidate source",
+  "manifest": {
+    "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/framework-review-03/manifest.json",
+    "sha256": "a9555816c70fc3dbc6f26f7e0668b300324385493caac8f9b994a1eb0520e3ca",
+    "verified_before_and_after_review": true
+  },
+  "input_exposure_disclosure": {
+    "read": ["frozen manifest", "six pinned baseline and candidate inputs", "workspace and target repository guidance"],
+    "executed": [],
+    "written": ["reports/independent-review.md", "reports/ai-review.json"],
+    "not_performed": ["candidate execution", "test execution", "native runtime or hook execution", "authentication", "source or expected-test edits"]
+  },
+  "file_pins": [
+    {"arm": "baseline", "path": "scripts/validate_framework.py", "sha256": "c50dd60c61384a165c794fd0fd140a761d4ac1b6d39d0aa3778b9273322f8636"},
+    {"arm": "baseline", "path": "tests/test_validation.py", "sha256": "2d69246a081e70d2491f8c23f3bf88e0360b85284e10a8c2435c9b7ff3c324ca"},
+    {"arm": "baseline", "path": "scripts/runtime_requirements.py", "sha256": "08d8f1761e9c89298010903979509cd45c301c089e55446030055e343e9b7ab2"},
+    {"arm": "candidate", "path": "scripts/validate_framework.py", "sha256": "cca69d937cb88f4c5a10055a4c95210a51b6c353908cb4c8322579f2f70778c6"},
+    {"arm": "candidate", "path": "tests/test_validation.py", "sha256": "17411b058636e49038248f833998c9c1c8976db8ac7b278e436ef14c150ba9a2"},
+    {"arm": "candidate", "path": "scripts/runtime_requirements.py", "sha256": "08d8f1761e9c89298010903979509cd45c301c089e55446030055e343e9b7ab2"}
+  ],
+  "finding_closure": {
+    "prior_id": "F-02",
+    "status": "CLOSED_BY_STATIC_REVIEW",
+    "implementation": "Case requirement IDs are required to be a subset of workspace_allocation_refinement.requirement_ids when that optional refinement exists.",
+    "coverage": "A new test covers both a declared accepted ID and an undeclared rejected ID."
+  },
+  "findings": [],
+  "static_conclusions": {
+    "archive_scope": "Unchanged from the previously reviewed dated, shape-specific exception.",
+    "root_runtime_and_symlinks": "Unchanged.",
+    "self_eval_schema": "The focused subset rule closes the prior traceability gap while preserving self-contained cases without a refinement.",
+    "legacy_and_runtime": "Unchanged."
+  },
+  "evidence_boundary": "Static inspection only. Validation execution, hook discovery and activation, runtime admission, and native behavior remain not performed and unproven."
+}

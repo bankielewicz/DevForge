@@ -1,0 +1,63 @@
+{
+  "review_type": "independent_read_only_consequential_maintenance",
+  "baseline": "framework-review-01/candidate",
+  "candidate_authorship": "existing successor maintenance bytes; reviewer authored no candidate source",
+  "source_reference": {
+    "repository": "framework/DevForgeAI",
+    "commit": "9970e92db7d824dea0c49e1a61a122480f2aa8b5",
+    "access": "read-only committed bytes"
+  },
+  "manifest": {
+    "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/framework-review-02/manifest.json",
+    "sha256": "3cfaf2dee9aa7bdba0557e1d12e6e2e477dbeea998307e5d6fae30cfc0fe9463",
+    "verified_before_and_after_review": true
+  },
+  "input_exposure_disclosure": {
+    "read": [
+      "frozen manifest",
+      "six pinned baseline and candidate inputs",
+      "workspace and target repository guidance",
+      "read-only committed archival and self-evaluation source paths"
+    ],
+    "executed": [],
+    "written": [
+      "reports/independent-review.md",
+      "reports/ai-review.json"
+    ],
+    "not_performed": [
+      "candidate execution",
+      "test execution",
+      "native runtime or hook execution",
+      "authentication",
+      "source or expected-test edits"
+    ]
+  },
+  "file_pins": [
+    {"arm": "baseline", "path": "scripts/validate_framework.py", "sha256": "b9fdcf2530cb87a3602b36b8c42fa52e42c5a816935c004511bd5177364a08a6"},
+    {"arm": "baseline", "path": "tests/test_validation.py", "sha256": "4ac36b653ed072acf3d342998c3a27c350dab61bcead0731be0748b95eb0f9c8"},
+    {"arm": "baseline", "path": "scripts/runtime_requirements.py", "sha256": "08d8f1761e9c89298010903979509cd45c301c089e55446030055e343e9b7ab2"},
+    {"arm": "candidate", "path": "scripts/validate_framework.py", "sha256": "c50dd60c61384a165c794fd0fd140a761d4ac1b6d39d0aa3778b9273322f8636"},
+    {"arm": "candidate", "path": "tests/test_validation.py", "sha256": "2d69246a081e70d2491f8c23f3bf88e0360b85284e10a8c2435c9b7ff3c324ca"},
+    {"arm": "candidate", "path": "scripts/runtime_requirements.py", "sha256": "08d8f1761e9c89298010903979509cd45c301c089e55446030055e343e9b7ab2"}
+  ],
+  "findings": [
+    {
+      "id": "F-02",
+      "severity": "P2",
+      "path": "candidate/scripts/validate_framework.py",
+      "line": 147,
+      "title": "Case requirement IDs have no referential-integrity check",
+      "trigger": "With a workspace_allocation_refinement declaring SV-WA-01 through SV-WA-06, set a case requirement_ids to [SV-WA-999].",
+      "impact": "The structural validator accepts an ungrounded requirement-to-case reference despite the declared refinement set.",
+      "recommendation": "When the refinement is present, reject case IDs outside its requirement_ids and add the mismatch as a negative test."
+    }
+  ],
+  "static_conclusions": {
+    "prior_archive_bypass": "Remediated by dated, shape-specific archival entrypoint recognition.",
+    "frozen_runtime_workflows": "Permitted only at the dated runtime-review frozen-source workflow custody shape; contents remain inspected as source files.",
+    "root_runtime": "Only the real root runtime directory is pruned before descent; symlink and nested authored-path rules remain active.",
+    "self_evals": "New optional fields are typed and duplicate IDs within each list are rejected, but cross-list membership is not validated.",
+    "legacy_and_runtime": "Legacy evaluation and runtime-requirement structural checks remain present."
+  },
+  "evidence_boundary": "Static inspection only. Validation execution, hook discovery and activation, runtime admission, and native behavior remain not performed and unproven."
+}

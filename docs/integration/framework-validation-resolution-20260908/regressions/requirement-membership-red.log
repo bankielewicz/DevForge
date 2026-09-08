@@ -1,0 +1,14 @@
+test_case_requirement_references_resolve_when_refinement_is_declared (test_validation.EvalDeclarationTest.test_case_requirement_references_resolve_when_refinement_is_declared) ... FAIL
+
+======================================================================
+FAIL: test_case_requirement_references_resolve_when_refinement_is_declared (test_validation.EvalDeclarationTest.test_case_requirement_references_resolve_when_refinement_is_declared)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 617, in test_case_requirement_references_resolve_when_refinement_is_declared
+    with self.assertRaisesRegex(ValueError, "unknown case requirement ID"):
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.016s
+
+FAILED (failures=1)

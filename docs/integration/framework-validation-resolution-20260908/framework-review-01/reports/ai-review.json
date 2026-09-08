@@ -1,0 +1,57 @@
+{
+  "review_type": "independent_read_only_consequential_maintenance",
+  "base_commit": "423c69aafe4bf98601e67a6c94e333b26857f310",
+  "source_head": "9970e92db7d824dea0c49e1a61a122480f2aa8b5",
+  "candidate_authorship": "existing concurrent maintenance bytes; reviewer authored no candidate source",
+  "manifest": {
+    "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/framework-review-01/manifest.json",
+    "sha256": "37cda241d792a72e1a010d51cd4274a0b72bc3002720bb7f0b5a9a352afffcfb",
+    "verified_before_and_after_review": true
+  },
+  "input_exposure_disclosure": {
+    "read": [
+      "frozen manifest",
+      "six pinned baseline and candidate inputs",
+      "workspace and target repository guidance"
+    ],
+    "executed": [],
+    "written": [
+      "reports/independent-review.md",
+      "reports/ai-review.json"
+    ],
+    "not_performed": [
+      "candidate execution",
+      "test execution",
+      "native runtime or hook execution",
+      "authentication",
+      "source or expected-test edits"
+    ]
+  },
+  "file_pins": [
+    {"arm": "baseline", "path": "scripts/validate_framework.py", "sha256": "5ef17e17d78535b520a0a1e6d8166b7fbb92bb44b7a8804dfb1131b8dce392a2"},
+    {"arm": "baseline", "path": "tests/test_validation.py", "sha256": "9f965dc1949f5a94e763f2deadd361743104651a92f5d46c6925bb085ec03f46"},
+    {"arm": "baseline", "path": "scripts/runtime_requirements.py", "sha256": "08d8f1761e9c89298010903979509cd45c301c089e55446030055e343e9b7ab2"},
+    {"arm": "candidate", "path": "scripts/validate_framework.py", "sha256": "b9fdcf2530cb87a3602b36b8c42fa52e42c5a816935c004511bd5177364a08a6"},
+    {"arm": "candidate", "path": "tests/test_validation.py", "sha256": "4ac36b653ed072acf3d342998c3a27c350dab61bcead0731be0748b95eb0f9c8"},
+    {"arm": "candidate", "path": "scripts/runtime_requirements.py", "sha256": "08d8f1761e9c89298010903979509cd45c301c089e55446030055e343e9b7ab2"}
+  ],
+  "findings": [
+    {
+      "id": "F-01",
+      "severity": "P1",
+      "path": "candidate/scripts/validate_framework.py",
+      "line": 200,
+      "title": "Archive exception accepts arbitrary direct history children",
+      "trigger": "Create docs/skill-authoring/history/unreviewed/SKILL.md with name: devforge-review and a nonempty description.",
+      "impact": "The validator accepts a parent-name mismatch and omits the file from the installed skill count outside the intended dated evidence scope.",
+      "recommendation": "Require the approved dated archive-container form or an explicit immutable allowlist, and add a negative test for arbitrary or undated direct children."
+    }
+  ],
+  "static_conclusions": {
+    "root_runtime_pruning": "Only a real root .devforge-runtime directory is pruned before descent; a root symlink is rejected and nested authored paths remain in scope.",
+    "self_evals": "The versioned schema is structurally checked; inline fixture bytes are not materialized by the validator.",
+    "legacy_evals": "Existing legacy file checks remain present.",
+    "runtime_requirements": "Optional requirement and hook source declarations are structurally checked when present."
+  },
+  "evidence_boundary": "Static inspection only. Validation execution, hook discovery and activation, runtime admission, and native behavior remain not performed and unproven."
+}

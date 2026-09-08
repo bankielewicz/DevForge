@@ -1,0 +1,13 @@
+{
+  "selected_validator_source": {
+    "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/before/DevForge/scripts/validate_framework.py",
+    "sha256": "b9fdcf2530cb87a3602b36b8c42fa52e42c5a816935c004511bd5177364a08a6"
+  },
+  "selected_tests": {
+    "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/before/DevForge/tests/test_validation.py",
+    "sha256": "4ac36b653ed072acf3d342998c3a27c350dab61bcead0731be0748b95eb0f9c8"
+  },
+  "selection": "Existing concurrent two-file maintenance bytes selected for independent review and validation under user request; shared bytes untouched. No new authorship claimed. Only these paths may become committed; unrelated concurrent edits stay uncommitted.",
+  "source_commit": "9970e92db7d824dea0c49e1a61a122480f2aa8b5",
+  "created_at": "2026-09-08T02:13:54.232906+00:00"
+}

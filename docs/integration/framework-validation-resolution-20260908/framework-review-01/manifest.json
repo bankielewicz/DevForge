@@ -1,0 +1,36 @@
+{
+  "base_commit": "423c69aafe4bf98601e67a6c94e333b26857f310",
+  "inputs": [
+    {
+      "arm": "baseline",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/framework-review-01/baseline/scripts/validate_framework.py",
+      "sha256": "5ef17e17d78535b520a0a1e6d8166b7fbb92bb44b7a8804dfb1131b8dce392a2"
+    },
+    {
+      "arm": "baseline",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/framework-review-01/baseline/tests/test_validation.py",
+      "sha256": "9f965dc1949f5a94e763f2deadd361743104651a92f5d46c6925bb085ec03f46"
+    },
+    {
+      "arm": "baseline",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/framework-review-01/baseline/scripts/runtime_requirements.py",
+      "sha256": "08d8f1761e9c89298010903979509cd45c301c089e55446030055e343e9b7ab2"
+    },
+    {
+      "arm": "candidate",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/framework-review-01/candidate/scripts/validate_framework.py",
+      "sha256": "b9fdcf2530cb87a3602b36b8c42fa52e42c5a816935c004511bd5177364a08a6"
+    },
+    {
+      "arm": "candidate",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/framework-review-01/candidate/tests/test_validation.py",
+      "sha256": "4ac36b653ed072acf3d342998c3a27c350dab61bcead0731be0748b95eb0f9c8"
+    },
+    {
+      "arm": "candidate",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/framework-review-01/candidate/scripts/runtime_requirements.py",
+      "sha256": "08d8f1761e9c89298010903979509cd45c301c089e55446030055e343e9b7ab2"
+    }
+  ],
+  "authority": "User asks resolve whole-framework blocker while preserving historical evidence and concurrent edits; assess selected existing maintenance bytes without edits; structure only, no native claims."
+}

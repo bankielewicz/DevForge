@@ -1,0 +1,28 @@
+test_optional_case_requirement_ids_are_nonempty_unique_text (test_validation.EvalDeclarationTest.test_optional_case_requirement_ids_are_nonempty_unique_text) ... ERROR
+
+======================================================================
+ERROR: test_optional_case_requirement_ids_are_nonempty_unique_text (test_validation.EvalDeclarationTest.test_optional_case_requirement_ids_are_nonempty_unique_text)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 601, in test_optional_case_requirement_ids_are_nonempty_unique_text
+    self.assertEqual(self.validate(document), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 550, in validate
+    return validator.validate(self.root)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 261, in validate
+    validate_evals(cases, provider)
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 155, in validate_evals
+    validate_self_evals(data, path.parents[1].name, provider, str(path))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 135, in validate_self_evals
+    eval_object(case, required, {"requires_real_control_bundle"}, f"{label}: case")
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 25, in eval_object
+    require(required <= set(value) <= required | optional, f"{label}: unsupported fields")
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: /tmp/tmpyijv9_xz/framework/providers/codex/plugins/devforgeai/skills/devforge-review/evals/evals.json: case: unsupported fields
+
+----------------------------------------------------------------------
+Ran 1 test in 0.014s
+
+FAILED (errors=1)

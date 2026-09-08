@@ -1,0 +1,224 @@
+test_case_fields_and_optional_boolean_are_checked (test_validation.EvalDeclarationTest.test_case_fields_and_optional_boolean_are_checked) ... ok
+test_case_fixture_and_base_references_must_resolve (test_validation.EvalDeclarationTest.test_case_fixture_and_base_references_must_resolve) ... ok
+test_cases_must_be_a_nonempty_array_and_ids_unique (test_validation.EvalDeclarationTest.test_cases_must_be_a_nonempty_array_and_ids_unique) ... ok
+test_duplicate_keys_and_nonfinite_json_are_rejected (test_validation.EvalDeclarationTest.test_duplicate_keys_and_nonfinite_json_are_rejected) ... ok
+test_envelope_and_metadata_shapes_are_required (test_validation.EvalDeclarationTest.test_envelope_and_metadata_shapes_are_required) ... ok
+test_every_inline_path_operation_rejects_escaping_or_nonportable_paths (test_validation.EvalDeclarationTest.test_every_inline_path_operation_rejects_escaping_or_nonportable_paths) ... ok
+test_explicit_schema_checks_all_tiers_without_executing_or_materializing_payloads (test_validation.EvalDeclarationTest.test_explicit_schema_checks_all_tiers_without_executing_or_materializing_payloads) ... ok
+test_fixture_objects_and_operations_have_declared_shapes (test_validation.EvalDeclarationTest.test_fixture_objects_and_operations_have_declared_shapes) ... ok
+test_identity_and_provider_must_match_with_other_fields_valid (test_validation.EvalDeclarationTest.test_identity_and_provider_must_match_with_other_fields_valid) ... ok
+test_inline_content_must_be_utf8_text_in_every_map (test_validation.EvalDeclarationTest.test_inline_content_must_be_utf8_text_in_every_map) ... ok
+test_legacy_eval_format_keeps_existing_file_checks (test_validation.EvalDeclarationTest.test_legacy_eval_format_keeps_existing_file_checks) ... ok
+test_legacy_nonfinite_values_require_strict_json_parsing (test_validation.EvalDeclarationTest.test_legacy_nonfinite_values_require_strict_json_parsing) ... ok
+test_patch_targets_resolve_and_declared_absence_stays_absent (test_validation.EvalDeclarationTest.test_patch_targets_resolve_and_declared_absence_stays_absent) ... ok
+test_self_and_multi_node_fixture_cycles_are_rejected (test_validation.EvalDeclarationTest.test_self_and_multi_node_fixture_cycles_are_rejected) ... ok
+test_unknown_schema_and_unversioned_self_evals_do_not_fall_back (test_validation.EvalDeclarationTest.test_unknown_schema_and_unversioned_self_evals_do_not_fall_back) ... ok
+test_archive_does_not_exempt_deeper_or_lookalike_skill_directories (test_validation.FrameworkTraversalTest.test_archive_does_not_exempt_deeper_or_lookalike_skill_directories) ... ok
+test_authored_json_is_checked_including_nested_runtime (test_validation.FrameworkTraversalTest.test_authored_json_is_checked_including_nested_runtime) ... ok
+test_authored_symlinks_are_rejected_including_nested_runtime (test_validation.FrameworkTraversalTest.test_authored_symlinks_are_rejected_including_nested_runtime) ... ok
+test_existing_excluded_symlink_entries_remain_excluded (test_validation.FrameworkTraversalTest.test_existing_excluded_symlink_entries_remain_excluded) ... ok
+test_existing_exclusions_retain_root_and_nested_scope (test_validation.FrameworkTraversalTest.test_existing_exclusions_retain_root_and_nested_scope) ... ok
+test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) ... 
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/source-before/SKILL.md') ... ERROR
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/source-after/SKILL.md') ... ERROR
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-before/SKILL.md') ... ERROR
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-after/SKILL.md') ... ERROR
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-builder-before/SKILL.md') ... ERROR
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-builder-before-02/SKILL.md') ... ERROR
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/source-before/SKILL.md') ... ERROR
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/source-after/SKILL.md') ... ERROR
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/installed-before/SKILL.md') ... ERROR
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/installed-after/SKILL.md') ... ERROR
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/installed-builder-before/SKILL.md') ... ERROR
+  test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/installed-builder-before-02/SKILL.md') ... ERROR
+test_required_structure_checks_remain_active (test_validation.FrameworkTraversalTest.test_required_structure_checks_remain_active) ... ok
+test_retained_entrypoint_keeps_original_name_in_evidence_container (test_validation.FrameworkTraversalTest.test_retained_entrypoint_keeps_original_name_in_evidence_container) ... ok
+test_retained_entrypoint_still_requires_valid_name_and_description (test_validation.FrameworkTraversalTest.test_retained_entrypoint_still_requires_valid_name_and_description) ... ok
+test_retained_entrypoint_symlink_is_rejected (test_validation.FrameworkTraversalTest.test_retained_entrypoint_symlink_is_rejected) ... ok
+test_retained_tree_json_and_python_are_still_inspected (test_validation.FrameworkTraversalTest.test_retained_tree_json_and_python_are_still_inspected) ... ok
+test_root_runtime_is_pruned_before_enumeration (test_validation.FrameworkTraversalTest.test_root_runtime_is_pruned_before_enumeration) ... ok
+test_root_runtime_symlinks_are_rejected (test_validation.FrameworkTraversalTest.test_root_runtime_symlinks_are_rejected) ... ok
+test_snapshot_name_exception_is_bounded_and_metadata_still_checked (test_validation.FrameworkTraversalTest.test_snapshot_name_exception_is_bounded_and_metadata_still_checked) ... 
+  test_snapshot_name_exception_is_bounded_and_metadata_still_checked (test_validation.FrameworkTraversalTest.test_snapshot_name_exception_is_bounded_and_metadata_still_checked) (relative='docs/skill-authoring/history/undated/SKILL.md', content='---\nname: skill-builder\ndescription: Preserved original.\n---\n') ... FAIL
+test_source_only_passes (test_validation.FrameworkTraversalTest.test_source_only_passes) ... ok
+test_duplicate_hook_event_keys_are_rejected (test_validation.RuntimeRequirementsTest.test_duplicate_hook_event_keys_are_rejected) ... ok
+test_hook_source_requires_each_event_once_and_no_extra_events (test_validation.RuntimeRequirementsTest.test_hook_source_requires_each_event_once_and_no_extra_events) ... ok
+test_hook_source_requires_one_correct_command_handler_per_event (test_validation.RuntimeRequirementsTest.test_hook_source_requires_one_correct_command_handler_per_event) ... ok
+test_invalid_json_and_duplicate_requirement_keys_are_rejected (test_validation.RuntimeRequirementsTest.test_invalid_json_and_duplicate_requirement_keys_are_rejected) ... ok
+test_legacy_result_omits_runtime_claims (test_validation.RuntimeRequirementsTest.test_legacy_result_omits_runtime_claims) ... ok
+test_required_events_are_exact_ordered_literals (test_validation.RuntimeRequirementsTest.test_required_events_are_exact_ordered_literals) ... ok
+test_requirement_literals_and_scalar_types_are_strict (test_validation.RuntimeRequirementsTest.test_requirement_literals_and_scalar_types_are_strict) ... ok
+test_requirement_must_be_an_object_with_exact_keys (test_validation.RuntimeRequirementsTest.test_requirement_must_be_an_object_with_exact_keys) ... ok
+test_requirement_provider_must_match_its_plugin (test_validation.RuntimeRequirementsTest.test_requirement_provider_must_match_its_plugin) ... ok
+test_runtime_requirement_needs_a_hook_source (test_validation.RuntimeRequirementsTest.test_runtime_requirement_needs_a_hook_source) ... ok
+test_valid_sidecars_report_only_declared_providers_without_executing_host (test_validation.RuntimeRequirementsTest.test_valid_sidecars_report_only_declared_providers_without_executing_host) ... ok
+test_optimized_python_cannot_disable_validation (test_validation.StructuralGateTest.test_optimized_python_cannot_disable_validation) ... ok
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/source-before/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/history/previous-revision-20260907T010203Z/source-before/SKILL.md
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/source-after/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/history/previous-revision-20260907T010203Z/source-after/SKILL.md
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-before/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-before/SKILL.md
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-after/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-after/SKILL.md
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-builder-before/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-builder-before/SKILL.md
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-builder-before-02/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/history/previous-revision-20260907T010203Z/installed-builder-before-02/SKILL.md
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/source-before/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/integration-20260907T145039Z/source-before/SKILL.md
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/source-after/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/integration-20260907T145039Z/source-after/SKILL.md
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/installed-before/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/integration-20260907T145039Z/installed-before/SKILL.md
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/installed-after/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/integration-20260907T145039Z/installed-after/SKILL.md
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/installed-builder-before/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/integration-20260907T145039Z/installed-builder-before/SKILL.md
+
+======================================================================
+ERROR: test_named_snapshot_entrypoints_preserve_original_metadata (test_validation.FrameworkTraversalTest.test_named_snapshot_entrypoints_preserve_original_metadata) (relative='docs/skill-authoring/integration-20260907T145039Z/installed-builder-before-02/SKILL.md')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 65, in test_named_snapshot_entrypoints_preserve_original_metadata
+    self.assertEqual(validator.validate(self.root), self.expected)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 202, in validate
+    require(name and (archived_entrypoint or name.group(1) == path.parent.name), str(rel))
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/scripts/validate_framework.py", line 20, in require
+    raise ValueError(message)
+ValueError: docs/skill-authoring/integration-20260907T145039Z/installed-builder-before-02/SKILL.md
+
+======================================================================
+FAIL: test_snapshot_name_exception_is_bounded_and_metadata_still_checked (test_validation.FrameworkTraversalTest.test_snapshot_name_exception_is_bounded_and_metadata_still_checked) (relative='docs/skill-authoring/history/undated/SKILL.md', content='---\nname: skill-builder\ndescription: Preserved original.\n---\n')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/framework-validation-20260908/tests/test_validation.py", line 91, in test_snapshot_name_exception_is_bounded_and_metadata_still_checked
+    with self.assertRaisesRegex(ValueError, "SKILL.md"):
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 42 tests in 1.338s
+
+FAILED (failures=1, errors=12)
