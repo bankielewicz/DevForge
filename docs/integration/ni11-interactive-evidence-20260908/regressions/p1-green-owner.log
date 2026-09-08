@@ -1,0 +1,6 @@
+test_managed_counted_continuation_correlates_waiting_phase_and_exact_prompts (test_native_process.ManagedBrokerTests.test_managed_counted_continuation_correlates_waiting_phase_and_exact_prompts) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.594s
+
+OK

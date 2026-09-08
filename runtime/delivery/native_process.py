@@ -184,9 +184,10 @@ def discovery_surfaces(workspace, profile):
 
 def runtime_inputs_digest(row):
     """Non-cyclic identity for the effective observer's exact selected surfaces."""
-    return digest(canonical_json({key: row[key] for key in (
-        "readonly_inputs", "system_mounts", "fixture_git_dirs", "immutable_discovery_dirs",
-        "managed_worker", "interaction")}))
+    selected = {key: row[key] for key in ("readonly_inputs", "system_mounts", "fixture_git_dirs", "immutable_discovery_dirs", "managed_worker", "interaction")}
+    if "answer_policy" in row:
+        selected["answer_policy"] = row["answer_policy"]
+    return digest(canonical_json(selected))
 
 
 def _toml(value):
@@ -264,9 +265,17 @@ def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_orig
         raise NativeProcessError("Runtime configuration must cover every allocated attempt exactly")
     row = next(row for row in rows if row["attempt_id"] == attempt["attempt_id"])
     _exact(row, {"attempt_id", "config", "prompt", "readonly_inputs", "system_mounts", "fixture_git_dirs",
-                 "effective_runtime", "managed_worker", "interaction", "immutable_discovery_dirs"}, "attempt runtime")
-    if row["interaction"] != "single-turn":
-        raise NativeProcessError("Interactive answer transport is not implemented; allocate a supported counted adapter")
+                 "effective_runtime", "managed_worker", "interaction", "immutable_discovery_dirs"} | ({"answer_policy"} if row.get("interaction") == "awaiting-user" else set()), "attempt runtime")
+    policy = None
+    if row["interaction"] == "awaiting-user":
+        policy = _json(_pin(row["answer_policy"]))
+        units = answer_policy(policy)
+        allocation = _json(_pin(runtime["allocation"]))
+        selected = [c for c in allocation["required_calls"] if c["attempt_id"] == attempt["attempt_id"]]
+        if len(selected) != 1 or selected[0].get("continuation_units") != units:
+            raise NativeProcessError("Every continuation requires exact frozen counted allocation")
+    elif row["interaction"] != "single-turn":
+        raise NativeProcessError("Interactive answer transport does not support this interaction")
     workspace = _path(attempt["workspace"], directory=True)
     profile = _path(attempt["client_state"], directory=True)
     if _overlap(workspace, profile):
@@ -376,6 +385,8 @@ def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_orig
         pins += [managed["session"], contract_ref, session["assignment"]]
     # All authority/gate/source documents stay outside the view; only selected
     # readonly installation/fixtures are exposed, not the original source tree.
+    if policy is not None:
+        pins.append(row["answer_policy"])
     for ref in pins:
         _pin(ref)
         if any(_overlap(_path(ref["path"]), root) for root in (workspace, profile)):
@@ -385,9 +396,12 @@ def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_orig
     command = [CLIENT["path"], "--strict-config", "--ask-for-approval", "never", "exec", "--json",
                "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
                "--model", MODEL, "--cd", str(workspace), "--color", "never"]
+    if policy is not None:
+        command = [CLIENT["path"], "--strict-config", "app-server", "--stdio"]
     for key, value in sorted(cfg.items()):
         command += ["-c", key + "=" + _toml(value)]
-    command.append("-")
+    if policy is None:
+        command.append("-")
     binding = dict(binding)
     required = {"task_id", "schedule_binding", "challenge", "reservation_sha256", "attempt_id", "plan_sha256"}
     if set(binding) != required or binding["task_id"] != plan["task_id"] or binding["attempt_id"] != attempt["attempt_id"]:
@@ -402,7 +416,8 @@ def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_orig
             "prompt": row["prompt"], "pins": pins + readonly, "readonly_inputs": readonly,
             "system_mounts": mounts, "fixture_git_dirs": fixture_dirs, "reserved_at": reserved_at,
             "deadline": deadline, "campaign_origin_utc": campaign_origin_utc, "output_limit": OUTPUT_LIMIT,
-            "managed_worker": managed, "immutable_discovery_dirs": immutable}
+            "managed_worker": managed, "immutable_discovery_dirs": immutable,
+            **({"answer_policy": policy, "answer_policy_pin": row["answer_policy"]} if policy is not None else {})}
 
 
 def sandbox_command(request, broker=None):
@@ -507,7 +522,153 @@ def _group_exists(pid):
         return False
 
 
-def _collect(command, prompt, deadline, elapsed_seconds, output_limit, stdout_file, stderr_file):
+def answer_policy(value):
+    _exact(value, {"schema_version", "steps"}, "answer policy")
+    if value["schema_version"] != "devforge.native-answer-policy/v1" or not isinstance(value["steps"], list) or len(value["steps"]) > 23:
+        raise NativeProcessError("Invalid bounded answer policy")
+    units = []
+    for step in value["steps"]:
+        action = step.get("action")
+        _exact(step, {"unit_id", "action", "questions", "answers"} if action == "answer" else {"unit_id", "action", "text"}, "answer step")
+        unit = step["unit_id"]
+        if not isinstance(unit, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,80}", unit) is None or unit == "initial" or unit in units:
+            raise NativeProcessError("Invalid or duplicate continuation unit")
+        units.append(unit)
+        if action == "answer":
+            questions, answers = step["questions"], step["answers"]
+            if not isinstance(questions, list) or not questions or not isinstance(answers, dict) or {q.get("id") for q in questions} != set(answers) or len(questions) != len(answers):
+                raise NativeProcessError("Answer policy must cover exact question IDs")
+            for answer in answers.values():
+                _exact(answer, {"answers"}, "operator answer")
+                if not isinstance(answer["answers"], list) or not answer["answers"] or any(not isinstance(a, str) for a in answer["answers"]):
+                    raise NativeProcessError("Operator answer is empty or invalid")
+        elif action != "turn" or not isinstance(step["text"], str) or not step["text"]:
+            raise NativeProcessError("Unsupported continuation action")
+    return units
+
+
+class Interactive:
+    """Frozen app-server protocol. Reservation callback must fsync before returning."""
+    def __init__(self, policy, prompt, workspace, reserve, transcript):
+        answer_policy(policy)
+        self.steps = list(policy["steps"])
+        self.prompt, self.workspace = prompt.decode("utf-8"), workspace
+        self.reserve, self.transcript = reserve, transcript
+        self.state, self.thread, self.turn = "new", None, None
+        self.done, self.index, self.sequence = False, 0, 0
+        self.requests = set()
+        self.buffer = b""
+        self.sent_prompts = []
+
+    def record(self, direction, message):
+        self.transcript.write(canonical_json({"direction": direction, "message": message}) + b"\n")
+        self.transcript.flush()
+        try:
+            os.fsync(self.transcript.fileno())
+        except (AttributeError, OSError):
+            # BytesIO is used only by unsigned deterministic fixtures.
+            import io
+            if not isinstance(self.transcript, io.BytesIO):
+                raise
+
+    def sent(self, raw):
+        for line in raw.splitlines():
+            message = _json(line)
+            if message.get("method") == "turn/start":
+                self.sent_prompts.append(message["params"]["input"][0]["text"])
+
+    def start(self):
+        self.state = "init"
+        return {"id": "init", "method": "initialize", "params": {"clientInfo": {"name": "devforge", "version": "1"}, "capabilities": {"experimentalApi": True}}}
+
+    def begin_turn(self, text, unit):
+        message = {"id": "turn-" + str(self.sequence), "method": "turn/start", "params": {"threadId": self.thread, "input": [{"type": "text", "text": text, "text_elements": []}]}}
+        self.reserve(unit, message)
+        self.state = "turn-response"
+        return [message]
+
+    def receive(self, message):
+        if self.done or not isinstance(message, dict) or "error" in message:
+            raise NativeProcessError("Unexpected or failed app-server message")
+        method = message.get("method")
+        if method is None:
+            identity, result = message.get("id"), message.get("result")
+            if not isinstance(result, dict):
+                raise NativeProcessError("Invalid app-server response")
+            if self.state == "init" and identity == "init":
+                self.state = "thread-response"
+                return [{"method": "initialized"}, {"id": "thread", "method": "thread/start", "params": {"cwd": self.workspace, "model": MODEL, "ephemeral": True}}]
+            if self.state == "thread-response" and identity == "thread":
+                self.thread = result.get("thread", {}).get("id")
+                if not isinstance(self.thread, str) or not self.thread:
+                    raise NativeProcessError("Missing thread correlation")
+                return self.begin_turn(self.prompt, "initial")
+            if self.state == "turn-response" and identity == "turn-" + str(self.sequence):
+                self.turn = result.get("turn", {}).get("id")
+                if not isinstance(self.turn, str) or not self.turn:
+                    raise NativeProcessError("Missing turn correlation")
+                self.state = "turn-start"
+                return []
+            raise NativeProcessError("Uncorrelated app-server response")
+        params = message.get("params", {})
+        if method == "thread/started":
+            if params.get("thread", {}).get("id") != self.thread:
+                raise NativeProcessError("Thread notification mismatch")
+            return []
+        if params.get("threadId") != self.thread:
+            raise NativeProcessError("Thread correlation mismatch")
+        if method in {"turn/started", "turn/completed"}:
+            turn = params.get("turn", {})
+            if turn.get("id") != self.turn:
+                raise NativeProcessError("Turn correlation mismatch")
+            if method == "turn/started" and self.state == "turn-start":
+                self.state = "running"
+                return []
+            if method == "turn/completed" and self.state == "running" and turn.get("status") == "completed":
+                if self.index == len(self.steps):
+                    self.done = True
+                    return []
+                step = self.steps[self.index]
+                if step["action"] != "turn":
+                    raise NativeProcessError("Required operator question was not observed")
+                self.index += 1
+                self.sequence += 1
+                return self.begin_turn(step["text"], step["unit_id"])
+            raise NativeProcessError("Out-of-order or failed turn lifecycle")
+        if method == "item/tool/requestUserInput":
+            identity = message.get("id")
+            if self.state != "running" or params.get("turnId") != self.turn or params.get("isBlocking") is not True or params.get("autoResolutionMs") is not None or not params.get("itemId") or type(identity) not in (str, int) or identity in self.requests or self.index >= len(self.steps):
+                raise NativeProcessError("Unanswered or uncorrelated operator request")
+            step = self.steps[self.index]
+            if step["action"] != "answer" or params.get("questions") != step["questions"]:
+                raise NativeProcessError("Question differs from frozen operator policy")
+            answer = {"id": identity, "result": {"answers": step["answers"]}}
+            self.reserve(step["unit_id"], answer)
+            self.requests.add(identity)
+            self.index += 1
+            return [answer]
+        if "id" in message:
+            raise NativeProcessError("Unapproved server request")
+        if self.state == "running" and method in {"item/started", "item/completed", "item/agentMessage/delta", "item/reasoning/textDelta", "item/reasoning/summaryTextDelta", "item/reasoning/summaryPartAdded", "thread/tokenUsage/updated", "item/commandExecution/outputDelta"} and params.get("turnId", self.turn) == self.turn:
+            return []
+        raise NativeProcessError("Unsupported app-server notification")
+
+    def feed(self, raw):
+        self.buffer += raw
+        outgoing = []
+        while b"\n" in self.buffer:
+            line, self.buffer = self.buffer.split(b"\n", 1)
+            if len(line) > LIMIT:
+                raise NativeProcessError("App-server line exceeds bound")
+            message = _json(line)
+            self.record("server", message)
+            outgoing.extend(self.receive(message))
+        if len(self.buffer) > LIMIT:
+            raise NativeProcessError("App-server line exceeds bound")
+        return outgoing
+
+
+def _collect(command, prompt, deadline, elapsed_seconds, output_limit, stdout_file, stderr_file, interactive=None):
     """Owned one-shot collection. Native callers additionally require PID isolation."""
     _number(deadline, "deadline")
     if type(output_limit) is not int or not 1 <= output_limit <= OUTPUT_LIMIT:
@@ -522,6 +683,10 @@ def _collect(command, prompt, deadline, elapsed_seconds, output_limit, stdout_fi
         result.update(status="TIMED_OUT", leader_reaped=True, group_absent=True)
         result["issues"].append("Original reservation deadline reached before spawn")
         return result
+    if interactive is not None:
+        first = interactive.start()
+        interactive.record("client", first)
+        prompt = canonical_json(first) + b"\n"
     process, last_elapsed = None, started
     cancellation, handlers = [], {}
     def cancelled(signum, frame):
@@ -577,13 +742,19 @@ def _collect(command, prompt, deadline, elapsed_seconds, output_limit, stdout_fi
                             written = os.write(key.fd, prompt[offset:offset + 65536])
                             offset += written
                         except BrokenPipeError:
+                            if interactive is not None:
+                                raise NativeProcessError("Client closed stdin before complete interactive delivery")
                             offset = len(prompt)
                             result["issues"].append("Client closed stdin before complete prompt delivery")
                         except BlockingIOError:
                             continue
                         if offset == len(prompt):
+                            if interactive is not None:
+                                interactive.sent(prompt)
                             selector.unregister(key.fileobj)
-                            key.fileobj.close()
+                            if interactive is None:
+                                key.fileobj.close()
+                            prompt, offset = b"", 0
                         continue
                     try:
                         data = os.read(key.fd, 65536)
@@ -596,6 +767,18 @@ def _collect(command, prompt, deadline, elapsed_seconds, output_limit, stdout_fi
                     room = output_limit - counts[key.data]
                     buffers[key.data].write(data[:room])
                     counts[key.data] += min(room, len(data))
+                    if interactive is not None and key.data == "stdout" and len(data) <= room:
+                        for message in interactive.feed(data):
+                            interactive.record("client", message)
+                            prompt += canonical_json(message) + b"\n"
+                        if prompt and process.stdin not in selector.get_map():
+                            try:
+                                selector.get_key(process.stdin)
+                            except KeyError:
+                                selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+                        if interactive.done:
+                            stop_reason = "INTERACTIVE_COMPLETED"
+                            break
                     if len(data) > room:
                         result["output_limit_exceeded"] = True
                         overflowed.add(key.data)
@@ -670,6 +853,9 @@ def _collect(command, prompt, deadline, elapsed_seconds, output_limit, stdout_fi
         if result["status"] == "EXITED" and not all(result[key] for key in
                 ("leader_reaped", "group_absent", "stdout_complete", "stderr_complete")):
             result["status"] = "COULD_NOT_RUN"
+        if interactive is not None and result["status"] == "INTERACTIVE_COMPLETED":
+            result["protocol_completed_before_owned_shutdown"] = True
+            result["status"] = "EXITED" if all(result[k] for k in ("leader_reaped", "group_absent", "stdout_complete", "stderr_complete")) and not result["issues"] else "COULD_NOT_RUN"
         if cancellation:
             result["status"] = "CANCELLED"
             result["issues"].append("Collector cancellation: " + signal.Signals(cancellation[0]).name)
@@ -718,7 +904,7 @@ def _authority(root, *, create=False):
 
 def _fresh(request):
     identities = []
-    for ref in request["pins"]:
+    for ref in request["pins"] + ([request["answer_policy_pin"]] if "answer_policy_pin" in request else []):
         _pin(ref, read=False)
         identities.append({"path": ref["path"], "identity": list(_identity(Path(ref["path"]).lstat()))})
     for ref in request["fixture_git_dirs"]:
@@ -804,17 +990,41 @@ def _managed_finish(broker, evidence_dir):
         # Bound exact broker-created observations, including callback chronology
         # and socket-write records, while preserving their weaker provenance.
         try:
-            names = []
+            names, observations = [], []
             for path in sorted(evidence_dir.iterdir()):
                 raw = _read(path)
                 result["evidence"].append({"path": str(path), "sha256": digest(raw)})
                 if re.fullmatch(r"event-\d{6}\.json", path.name):
-                    names.append(_json(raw)["event"])
+                    observation = _json(raw)
+                    observations.append(observation)
+                    names.append(observation["event"])
+            expected_prompts = getattr(broker, "native_sent_prompts", None)
+            expected_count = 1 if expected_prompts is None else len(expected_prompts)
             if result["status"] == "COMPLETED" and (
-                    any(names.count(name) != 1 for name in ("SessionStart", "UserPromptSubmit", "SessionEnd"))
+                    expected_count < 1 or names.count("UserPromptSubmit") != expected_count
+                    or any(names.count(name) != 1 for name in ("SessionStart", "SessionEnd"))
                     or not names or names[0] != "SessionStart" or names[-1] != "SessionEnd" or "Stop" not in names
                     or names.index("UserPromptSubmit") > names.index("Stop")):
                 result["status"] = "COULD_NOT_RUN"
+            if result["status"] == "COMPLETED" and expected_prompts is not None:
+                prompt_indices = [i for i, name in enumerate(names) if name == "UserPromptSubmit"]
+                for ordinal, (index, prompt) in enumerate(zip(prompt_indices, expected_prompts)):
+                    event = observations[index]
+                    stop = next((j for j in range(index + 1, len(names)) if names[j] in {"Stop", "UserPromptSubmit", "SessionEnd"}), None)
+                    if (event.get("prompt_sha256") != digest(prompt.encode("utf-8"))
+                            or stop is None or names[stop] != "Stop"):
+                        result["status"] = "COULD_NOT_RUN"
+                        break
+                    if ordinal == 0:
+                        valid = index == 1 and event.get("before_status") == "ACTIVE" and event["status"] == "ACTIVE"
+                    else:
+                        previous = observations[index - 1]
+                        valid = (previous["event"] == "Stop" and previous["status"] == "WAITING_USER"
+                                 and event.get("before_status") == "WAITING_USER" and event["status"] == "ACTIVE"
+                                 and previous["phase"] == event.get("before_phase") == event["phase"])
+                    if not valid:
+                        result["status"] = "COULD_NOT_RUN"
+                        break
         except (OSError, ValueError):
             result["status"] = "COULD_NOT_RUN"
     return result
@@ -844,6 +1054,8 @@ def launch(authority_root, request, *, check_reservation, elapsed_seconds):
     attempt_dir.mkdir(mode=0o700)  # Exclusive reservation; no retries after partial writes.
     _new(attempt_dir / "request.json", canonical_json(request))
     broker = None
+    interactive = None
+    transcript = None
     command_digest = None
     managed_evidence = attempt_dir / "managed"
     stdout_path, stderr_path = attempt_dir / "stdout.bin", attempt_dir / "stderr.bin"
@@ -855,8 +1067,23 @@ def launch(authority_root, request, *, check_reservation, elapsed_seconds):
             command = sandbox_command(request, broker)
             command_digest = digest(canonical_json(command))
             check_reservation(request)  # Current protected claim immediately before spawn.
+            if "answer_policy" in request:
+                transcript = (attempt_dir / "transcript.jsonl").open("xb")
+                os.chmod(attempt_dir / "transcript.jsonl", 0o600)
+                def reserve_unit(unit, message):
+                    check_reservation(request)
+                    now = _number(elapsed_seconds(), "continuation elapsed")
+                    if now >= request["deadline"]:
+                        raise NativeProcessError("Original continuation deadline expired")
+                    allowed = ["initial"] + answer_policy(request["answer_policy"])
+                    if unit not in allowed:
+                        raise NativeProcessError("Unallocated continuation")
+                    _new(attempt_dir / ("unit-" + unit + ".json"), canonical_json({"unit_id": unit, "binding": request["binding"], "elapsed_seconds": now, "message": message}))
+                interactive = Interactive(request["answer_policy"], _pin(request["prompt"]), request["workspace"], reserve_unit, transcript)
+                if broker is not None:
+                    broker.native_sent_prompts = interactive.sent_prompts
             process = _collect(command, _pin(request["prompt"]), request["deadline"], elapsed_seconds,
-                               request["output_limit"], out, err)
+                               request["output_limit"], out, err, interactive=interactive)
         except Exception as error:
             now = _number(elapsed_seconds(), "elapsed_seconds")
             process = {"status": "LAUNCH_FAILED", "exit_code": None, "leader_reaped": True,
@@ -866,6 +1093,8 @@ def launch(authority_root, request, *, check_reservation, elapsed_seconds):
                        "finished_elapsed_seconds": now, "deadline_elapsed_seconds": request["deadline"],
                        "issues": ["Managed/sandbox/prelaunch setup failed: " + str(error)]}
         finally:
+            if transcript is not None:
+                transcript.close()
             managed = _managed_finish(broker, managed_evidence)
             if request["managed_worker"] is not None and broker is None:
                 managed.update(required=True, status="COULD_NOT_RUN")
@@ -894,6 +1123,14 @@ def launch(authority_root, request, *, check_reservation, elapsed_seconds):
             "launch_command_sha256": command_digest, "collector_sha256": _file_digest(Path(__file__).resolve()),
             "managed_worker": managed,
             "semantic_grade": "NOT_EVALUATED", "native_callback_authentication": "NOT_EVALUATED"}
+    if "answer_policy" in request:
+        path = attempt_dir / "transcript.jsonl"
+        if not path.exists():
+            _new(path, b"")
+        raw = _read(path, OUTPUT_LIMIT)
+        body["interactive"] = {"transcript": {"path": str(path), "sha256": digest(raw)},
+            "units": [{"path": str(path), "sha256": digest(_read(path))} for path in sorted(attempt_dir.glob("unit-*.json"))]}
+        body["events"] = observe_interactive(request, raw, raw_out, body["interactive"]["units"], process)
     receipt = {"body": body, "hmac_sha256": hmac.new(key, canonical_json(body), hashlib.sha256).hexdigest()}
     path = attempt_dir / "receipt.json"
     _new(path, canonical_json(receipt))
@@ -932,11 +1169,26 @@ def verify_receipt(authority_root, receipt_path, expected):
         raw = _read(ref["path"], OUTPUT_LIMIT)
         if len(raw) != ref["bytes"] or digest(raw) != ref["sha256"]:
             raise NativeProcessError("Stream evidence changed")
-        if name == "stdout":
+        if name == "stdout" and "answer_policy" not in request:
             events = observe_jsonl(raw, complete=body["process"]["stdout_complete"]
                                   and not body["process"]["output_limit_exceeded"])
             if body["events"] != events:
                 raise NativeProcessError("Event observation differs from raw stream")
+    if "answer_policy" in request:
+        evidence = body.get("interactive", {})
+        ref = evidence.get("transcript", {})
+        if ref.get("path") != str(expected_parent / "transcript.jsonl"):
+            raise NativeProcessError("Interactive transcript authority mismatch")
+        transcript_raw = _read(ref["path"], OUTPUT_LIMIT)
+        if digest(transcript_raw) != ref.get("sha256"):
+            raise NativeProcessError("Interactive transcript digest mismatch")
+        for unit in evidence.get("units", []):
+            if Path(unit["path"]).parent != expected_parent:
+                raise NativeProcessError("Continuation authority mismatch")
+            _pin(unit)
+        events = observe_interactive(request, transcript_raw, _read(body["stdout"]["path"], OUTPUT_LIMIT), evidence["units"], body["process"])
+        if events != body["events"]:
+            raise NativeProcessError("Interactive replay differs")
     for ref in body["managed_worker"]["evidence"]:
         if Path(ref["path"]).parent != expected_parent / "managed":
             raise NativeProcessError("Managed observation lies outside collector authority")
@@ -961,3 +1213,45 @@ def run_fixture(command, *, prompt=b"", timeout=1.0, output_limit=LIMIT):
             "stdout": out.getvalue(), "stderr": err.getvalue(),
             "events": observe_jsonl(out.getvalue(), complete=process["stdout_complete"]
                                     and not process["output_limit_exceeded"])}
+
+
+def observe_interactive(request, transcript_raw, stdout_raw, units, process):
+    """Replay exact client/server bytes and durable generation claims."""
+    import io
+    result = {"status": "UNOBTAINABLE", "thread_started": False, "turn_started": False, "turn_completed": False, "turn_failed": False, "errors": 0, "issues": []}
+    claims = {}
+    try:
+        for pin in units:
+            claim = _json(_pin(pin))
+            unit = claim["unit_id"]
+            if unit in claims or claim["binding"] != request["binding"] or not request["reserved_at"] <= claim["elapsed_seconds"] < request["deadline"]:
+                raise NativeProcessError("Invalid continuation claim")
+            claims[unit] = claim
+        def reserved(unit, message):
+            claim = claims.pop(unit, None)
+            if claim is None or claim["message"] != message:
+                raise NativeProcessError("Missing authentic pre-send claim")
+        adapter = Interactive(request["answer_policy"], _pin(request["prompt"]), request["workspace"], reserved, io.BytesIO())
+        pending = [adapter.start()]
+        server = []
+        if not transcript_raw.endswith(b"\n"):
+            raise NativeProcessError("Incomplete interactive transcript")
+        for line in transcript_raw.splitlines():
+            row = _json(line)
+            _exact(row, {"direction", "message"}, "transcript row")
+            if row["direction"] == "client":
+                if not pending or pending.pop(0) != row["message"]:
+                    raise NativeProcessError("Interactive client sequence differs")
+            elif row["direction"] == "server" and not pending:
+                server.append(row["message"])
+                pending.extend(adapter.receive(row["message"]))
+            else:
+                raise NativeProcessError("Interactive direction/order differs")
+        if server != [_json(line) for line in stdout_raw.splitlines()] or not stdout_raw.endswith(b"\n"):
+            raise NativeProcessError("Transcript differs from authentic stdout")
+        if pending or claims or not adapter.done or not process["stdout_complete"] or process["output_limit_exceeded"]:
+            raise NativeProcessError("Interactive completion unavailable")
+        result.update(status="OBSERVED", thread_started=True, turn_started=True, turn_completed=True)
+    except (ValueError, OSError, KeyError, TypeError) as error:
+        result["issues"].append(str(error))
+    return result

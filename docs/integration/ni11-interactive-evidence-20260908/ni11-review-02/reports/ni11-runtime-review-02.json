@@ -1,0 +1,13 @@
+{
+  "schema_version": "devforge.ni11-readonly-review/v1",
+  "review_id": "ni11-review-02",
+  "status": "BLOCKED_INPUT_HASH_MISMATCH",
+  "expected_manifest_sha256": "2de108deba34ac9be0d28f2a594017781e8cbd33704f2c86859d7aa099e1dc9264",
+  "observed_manifest_sha256": "2de108deba34ac9be0d28f2a594017781e8cbd33704f2c86859d7aa099e1dc92",
+  "manifest_entries": 64,
+  "internal_entry_hash_verification": "PASS",
+  "substantive_findings": [],
+  "validation_status": "NOT_PERFORMED",
+  "native_status": "NOT_OBSERVED",
+  "required_next_step": "Provide corrected freeze authority or a newly allocated manifest before substantive review."
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": "devforge.ni11-readonly-review/v1",
+  "review_id": "ni11-review-03",
+  "status": "STATIC_REVIEW_COMPLETE",
+  "manifest_sha256": "2de108deba34ac9be0d28f2a594017781e8cbd33704f2c86859d7aa099e1dc92",
+  "input_verification": {
+    "listed_inputs": 64,
+    "baseline_inputs": 32,
+    "candidate_inputs": 32,
+    "result": "PASS"
+  },
+  "changed_paths": [
+    "docs/integration/native-process-contract.md",
+    "runtime/delivery/native_process.py",
+    "runtime/delivery/supervisor.py",
+    "tests/test_native_interactive.py",
+    "tests/test_native_process.py",
+    "tests/test_utility_native_lifecycle.py"
+  ],
+  "prior_findings": [
+    {
+      "id": "F-01",
+      "status": "CLOSED_STATICALLY",
+      "evidence": [
+        {"path": "runtime/delivery/native_process.py", "line": 1001},
+        {"path": "runtime/delivery/native_process.py", "line": 1021},
+        {"path": "runtime/delivery/supervisor.py", "line": 275},
+        {"path": "tests/test_native_process.py", "line": 501}
+      ]
+    },
+    {
+      "id": "F-02",
+      "status": "CLOSED_STATICALLY",
+      "evidence": [
+        {"path": "tests/test_utility_native_lifecycle.py", "line": 218},
+        {"path": "tests/test_native_process.py", "line": 372},
+        {"path": "tests/test_native_interactive.py", "line": 62},
+        {"path": "tests/test_native_interactive.py", "line": 71},
+        {"path": "tests/test_native_interactive.py", "line": 118}
+      ]
+    }
+  ],
+  "new_actionable_findings": [],
+  "validation_status": "NOT_PERFORMED",
+  "native_status": "NOT_OBSERVED",
+  "unobserved": [
+    "real Codex 0.153.4 app-server behavior",
+    "gpt-6-astra interactive availability",
+    "authentication and effective isolation",
+    "live callback chronology and origin",
+    "real-client cleanup",
+    "semantic grading and runtime admission"
+  ]
+}

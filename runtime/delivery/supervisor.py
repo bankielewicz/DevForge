@@ -276,8 +276,11 @@ class Broker:
                        "at_utc": datetime.now(timezone.utc).isoformat(), "event": name,
                        "session_id_sha256": hashlib.sha256(self.session_id.encode()).hexdigest(),
                        "phase": result.get("phase"), "status": result["status"],
+                       "before_phase": before.get("phase"), "before_status": before["status"],
                        "authority": "CALLBACK_NOT_HUMAN_AUTHORITY",
                        "response_sha256": response_sha256}
+        if name == "UserPromptSubmit" and isinstance(event.get("prompt"), str):
+            observation["prompt_sha256"] = hashlib.sha256(event["prompt"].encode("utf-8")).hexdigest()
         if self.completion_mode == "managed-session":
             observation["completion_mode"] = self.completion_mode
             if attempt_sha256 is not None:

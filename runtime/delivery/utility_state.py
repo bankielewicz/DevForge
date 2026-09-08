@@ -1193,7 +1193,9 @@ def _native_grade_eligible(body, managed_worker_required=False):
                                     or not isinstance(worker.get("task_result"), dict)
                                     or worker["task_result"].get("receipt_verified") is not True):
         return False
-    return (process.get("status") == "EXITED" and process.get("exit_code") == 0
+    return (process.get("status") == "EXITED" and (process.get("exit_code") == 0
+            or "interactive" in body and process.get("protocol_completed_before_owned_shutdown") is True
+            and process.get("exit_code") in {-15, -9})
             and process.get("leader_reaped") is True and process.get("group_absent") is True
             and process.get("stdout_complete") is True and process.get("stderr_complete") is True
             and process.get("output_limit_exceeded") is False and body["events"].get("status") == "OBSERVED"

@@ -369,6 +369,32 @@ class RequestPreparationTests(unittest.TestCase):
         return native.prepare_request(self.plan, self.plan["attempts"][0], self.binding, 100, 700,
                                       "2026-09-07T00:00:00+00:00", self.installed)
 
+    def test_interactive_policy_units_must_match_exact_allocation_before_prepare(self):
+        policy = {"schema_version": "devforge.native-answer-policy/v1", "steps": [
+            {"unit_id": "next", "action": "turn", "text": "Continue"}]}
+        path = self.root / "answer-policy.json"
+        path.write_bytes(native.canonical_json(policy))
+        self.runtime["attempts"][0].update(interaction="awaiting-user", answer_policy=pin(path))
+        for units in (["wrong"], [], ["next", "extra"], ["next", "next"], ["next"]):
+            allocation_path = Path(self.runtime["allocation"]["path"])
+            allocation_path.write_bytes(native.canonical_json({"required_calls": [{"attempt_id": "C-01", "continuation_units": units}]}))
+            self.runtime["allocation"] = pin(allocation_path)
+            self.save()
+            with self.subTest(units=units), mock.patch.object(native.subprocess, "Popen") as spawn:
+                if units == ["next"]:
+                    request = self.prepare()
+                    self.assertEqual(request["answer_policy"], policy)
+                else:
+                    with self.assertRaisesRegex(native.NativeProcessError, "exact frozen counted allocation"):
+                        self.prepare()
+                spawn.assert_not_called()
+        policy["steps"].append(policy["steps"][0])
+        path.write_bytes(native.canonical_json(policy))
+        self.runtime["attempts"][0]["answer_policy"] = pin(path)
+        self.save()
+        with self.assertRaisesRegex(native.NativeProcessError, "duplicate continuation"):
+            self.prepare()
+
     def test_preparation_binds_command_all_inputs_and_original_deadline_without_spawning(self):
         with mock.patch.object(native.subprocess, "Popen") as spawn:
             request = self.prepare()
@@ -442,8 +468,9 @@ class ManagedBrokerTests(unittest.TestCase):
         self.broker = native._managed_start(self.request, self.evidence)
         self.addCleanup(lambda: self.broker.close() if self.broker.socket_root.exists() else None)
 
-    def callback(self, name):
+    def callback(self, name, **fields):
         event = {"hook_event_name": name, "session_id": "fixture-session", "cwd": str(self.fixture.project)}
+        event.update(fields)
         if name == "Stop":
             event["stop_hook_active"] = False
         request = {"provider": "codex", "contract_sha256": self.broker.contract_digest, "event": event}
@@ -470,6 +497,53 @@ class ManagedBrokerTests(unittest.TestCase):
         self.assertEqual(result["callback_origin"], "NOT_AUTHENTICATED")
         self.assertGreater(len(result["evidence"]), 3)
         self.assertNotIn("hmac_sha256", result)
+
+    def test_managed_counted_continuation_correlates_waiting_phase_and_exact_prompts(self):
+        from test_utility_state import Fixture
+        self.broker.close()
+        root = self.root / "multi"
+        root.mkdir()
+        self.fixture = Fixture(root)
+        self.fixture.session["deadline_utc"] = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        self.fixture.delivery["questions"] = [{"id": "Q-001", "phase": "Intake", "question": "Choose repository",
+            "blocking_dependency": "Need repository", "choices": ["Use repository A", "Use repository B"], "decision_path": None}]
+        self.fixture.write_contracts()
+        request = {"workspace": str(self.fixture.project), "managed_worker": {
+            "session": pin(self.fixture.session_path), "state": str(self.fixture.state),
+            "gate_executable": {"path": "/not/executed", "sha256": "a" * 64}}}
+        self.evidence = root / "events"
+        self.broker = native._managed_start(request, self.evidence)
+        self.broker.native_sent_prompts = ["initial", "Use repository A"]
+        self.callback("SessionStart")
+        self.callback("UserPromptSubmit", prompt="initial")
+        value = self.fixture.checkpoint()
+        value.update(state="awaiting_user", evidence=[], question_id="Q-001")
+        self.fixture.checkpoint_path.write_bytes(native.canonical_json(value))
+        self.callback("Stop")
+        self.assertEqual(self.broker.engine.context(self.broker.state)["status"], "WAITING_USER")
+        self.callback("UserPromptSubmit", prompt="Use repository A")
+        for _ in self.fixture.delivery["phases"]:
+            self.fixture.checkpoint()
+            self.callback("Stop")
+        self.callback("SessionEnd")
+        result = native._managed_finish(self.broker, self.evidence)
+        self.assertEqual(result["status"], "COMPLETED", result)
+        self.assertTrue(result["task_result"]["receipt_verified"])
+        self.broker.native_sent_prompts = ["initial", "Use repository B"]
+        self.assertEqual(native._managed_finish(self.broker, self.evidence)["status"], "COULD_NOT_RUN")
+
+    def test_extra_prompt_without_waiting_transition_cannot_complete_managed_evidence(self):
+        self.broker.native_sent_prompts = ["initial", "extra"]
+        self.callback("SessionStart")
+        self.callback("UserPromptSubmit", prompt="initial")
+        self.callback("UserPromptSubmit", prompt="extra")
+        for _ in self.fixture.delivery["phases"]:
+            self.fixture.checkpoint()
+            self.callback("Stop")
+        self.callback("SessionEnd")
+        result = native._managed_finish(self.broker, self.evidence)
+        self.assertEqual(result["status"], "COULD_NOT_RUN", result)
+        self.assertTrue(self.fixture.receipt.exists())
 
     def test_missing_callbacks_do_not_create_a_mechanical_receipt(self):
         result = native._managed_finish(self.broker, self.evidence)

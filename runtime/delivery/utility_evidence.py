@@ -196,7 +196,11 @@ def launch_allocation(plan, *, frozen=None):
     fields = {"attempt_id", "case_id", "tier", "arm", "repetition", "purpose", "review_path", "reviewer",
               "interaction", "managed_worker_required"}
     for call in calls:
-        core._exact(call, fields, "native allocated call")
+        core._exact(call, fields | ({"continuation_units"} if call.get("interaction") == "awaiting-user" else set()), "native allocated call")
+        if call.get("interaction") == "awaiting-user":
+            units = call["continuation_units"]
+            if not isinstance(units, list) or len(units) > 23 or any(not isinstance(u, str) or not u or u == "initial" for u in units) or len(set(units)) != len(units):
+                core._fail("invalid frozen counted continuation units")
         if call["purpose"] not in {"case", "control", "probe", "grader", "receiving"}:
             core._fail("every native invocation must have an explicit supported accounting purpose")
         core._text(call["reviewer"], "independent/operator reviewer")
@@ -218,8 +222,9 @@ def launch_allocation(plan, *, frozen=None):
         if (len(rows) != 1 or rows[0].get("interaction") != call["interaction"]
                 or call["managed_worker_required"] and rows[0].get("managed_worker") is None):
             core._fail("native runtime omits a required interaction/managed worker lifecycle")
-    if (len(calls) + allocation["preparation_attempts"] > allocation["max_total_attempts"]
-            or plan["max_attempts"] + allocation["preparation_attempts"] > allocation["max_total_attempts"]
+    continuation_count = sum(len(call.get("continuation_units", [])) for call in calls)
+    if (len(calls) + continuation_count + allocation["preparation_attempts"] > allocation["max_total_attempts"]
+            or plan["max_attempts"] + continuation_count + allocation["preparation_attempts"] > allocation["max_total_attempts"]
             or plan["max_seconds"] != allocation["max_seconds"]
             or any(a["max_seconds"] > allocation["per_attempt_max_seconds"] for a in plan["attempts"])):
         core._fail("native complete allocation exceeds total calls or the original campaign/per-call limits")

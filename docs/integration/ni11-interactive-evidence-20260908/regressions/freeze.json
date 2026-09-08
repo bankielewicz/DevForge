@@ -1,0 +1,16 @@
+{
+  "frozen_at": "2026-09-08T02:37:50.850316+00:00",
+  "head": "423c69aafe4bf98601e67a6c94e333b26857f310",
+  "files": {
+    "runtime/delivery/native_process.py": "7ea0efae40dd3fc04dcbaf82ff06f5e232b755f4261d07bdc2cb9e8b89349d2f",
+    "runtime/delivery/utility_evidence.py": "8c5fb20fe5ac21eaa5a388ed3c5c89e043c01b94c3a831f159a6578d6ed9ca23",
+    "runtime/delivery/utility_state.py": "b2efef0f44540284359d67c495f0a88e57a483922c62afe089f303aa57778092",
+    "runtime/delivery/supervisor.py": "0a51fabbc137f7ac7e9a18897798f1ca77b810bf85441d33f62e40354bf4467b",
+    "tests/test_native_interactive.py": "b398259c653ec1272f42629ffb30b6cbf8846a73427d950f266b5225c230498d",
+    "tests/test_native_process.py": "34531d2fbbb1f3bf9345dcf49974e56830db35728f001275d596d2005dec3d26",
+    "tests/test_utility_native_lifecycle.py": "23fc9f3f2cf0421483dff92c20a036cca36aaab6146db0919c7c9693e16c4a9c",
+    "docs/integration/native-process-contract.md": "caba242b1a834f5ac0278fc412be4914c46008b3efd7f03f61e9355abc3229a7",
+    "docs/integration/native-lifecycle-contract.md": "687f648cbd03da0602896b63f93434fd66079ee007806b89c67c9930b27a8f03"
+  },
+  "diff_sha256": "bf84c35cdfd6cf56e0e3fe34fc5b26481d2caccec96f55729833dc952bcf9318"
+}

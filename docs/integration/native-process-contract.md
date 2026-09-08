@@ -1,7 +1,7 @@
-The native process adapter is a single-turn collector behind the protected utility
+The native process adapter is a bounded collector behind the protected utility
 journal. It implements owned launch, bounded byte collection, scoped cancellation,
-an optional managed callback broker, and authenticated receipt custody. It does
-not provide an interactive answer adapter, establish effective native isolation,
+an optional managed callback broker, and authenticated receipt custody. It includes a frozen app-server answer adapter. It does
+not establish effective native isolation,
 authenticate callback authors, grade behavior, or permit an incomplete campaign.
 The required case allocation currently exceeds the approved 24 attempts. No
 native evaluation, model probe, sign-in, credential inspection, or receiving
@@ -24,7 +24,8 @@ The pinned `runtime_configuration` has schema
 | Field | Required value |
 | --- | --- |
 | `attempt_id` | Exactly one declared plan attempt |
-| `interaction` | `single-turn`; other interactions fail preparation |
+| `interaction` | `single-turn` or `awaiting-user` |
+| `answer_policy` | Required only for `awaiting-user`: immutable policy file pin |
 | `config` | Pin of the selected credential-free TOML configuration |
 | `prompt` | Pin of the complete bounded UTF-8/raw prompt input |
 | `readonly_inputs` | Exact single-link regular-file pins for installed resources, client package files, and immutable discovery files |
@@ -99,7 +100,11 @@ receipt remain outside the view. Runtime Python files and the gate executable
 must be exact readonly inputs. The broker is closed before final readback.
 Reported managed completion requires its previously committed task receipt to
 reverify and actual ordered SessionStart, UserPromptSubmit, Stop and SessionEnd
-observations, with no duplicate singleton events. Callback records retain
+observations, with no duplicate singleton events. Interactive managed completion
+requires exactly the prompts from fully written counted `turn/start` messages.
+Broker evidence binds prompt digests and before/after phase state. Each extra
+prompt must follow an observed Stop in WAITING_USER and resume that same phase
+to ACTIVE; queued or merely reserved turns do not authorize extra callbacks. Callback records retain
 `NOT_AUTHENTICATED` origin. A generic completed turn cannot replace managed
 completion. Failure to initialize leaves its consumed attempt and any created
 managed state available for custody inspection; it does not retry.
@@ -146,11 +151,35 @@ immutable discovery additions, and actual local broker callbacks. Empty-root
 mount and immutable-directory checks use ordinary Python fixtures and do not
 establish native client behavior.
 
-Interactive NI-11 coverage is still unsupported. The exact CLI exposes an
-app-server stdio protocol; [official app-server documentation](https://learn.chatgpt.com/docs/app-server)
-describes thread initialization, turn start/steering, and user-input requests.
-Supporting the required Q&A would need a separately reviewed protocol adapter,
-bounded answer policy, durable per-turn allocation, correlated notifications,
-and effective authentication/isolation observations. Existing `NativeTerminal`
-provides PTY transport, not that protocol/accounting contract. Neither is silently
-used as a replacement for the implemented single-turn collector.
+Interactive NI-11 implementation uses the pinned client's app-server stdio
+JSONL protocol. The policy schema is `devforge.native-answer-policy/v1` with
+exactly `schema_version` and `steps`. Each ordered step contains `unit_id` and
+`action`. An `answer` step additionally contains exact `questions` and `answers`
+(the request-user-input response map); a `turn` step contains nonempty `text`.
+The corresponding allocated call's `continuation_units` must equal the ordered
+policy unit IDs. Each initial generation and every answer or additional turn
+requires an exclusive fsynced collector unit claim before send. The protected
+journal's initial launch claim binds the full immutable request and policy.
+All allocated continuation slots are charged against the cap up front, including
+unused slots and failed transport; slots are never refunded or reused.
+
+The adapter correlates response IDs, thread IDs, turn IDs and blocking user-input
+requests, rejects automatic answer resolution, and sends only frozen answers.
+Unexpected or unanswered requests stop collection. All pauses and continuations
+retain the original attempt and campaign deadline and the same case workspace.
+Terminal completion triggers owned shutdown; its signal exit is distinct from
+unexpected process death. Existing cleanup handles timeout, errors, cancellation,
+held child pipes and overflow. The app-server adapter never enables model routes.
+
+The receipt authenticates raw stdout, stderr, the bidirectional JSONL transcript
+and per-unit durable claims. Import replays protocol messages against the policy
+and authentic stdout. A completed protocol followed by verified owned shutdown
+may qualify as process evidence even when shutdown used SIGTERM/SIGKILL; it is
+not a semantic grade. Unknown protocol notifications fail closed.
+
+Validation remains synthetic. The notification allowlist/order, actual native
+Q&A availability, effective runtime controls, native cleanup and managed callback
+chronology have not been observed against an authenticated client. The generated
+local 0.153.4 schema and credential-free help inspection are protocol references,
+not those observations. This candidate needs independent review and complete
+required checks before any native readiness decision.

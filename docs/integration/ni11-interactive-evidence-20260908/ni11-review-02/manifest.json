@@ -1,0 +1,389 @@
+{
+  "baseline": "ni11-review-01/candidate",
+  "inputs": [
+    {
+      "arm": "baseline",
+      "relative": "Cargo.lock",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/Cargo.lock",
+      "sha256": "4e73e7552a1fb56b45209bb339038d02526105f7f1ba5bafc576a6ee1ecb4fbf"
+    },
+    {
+      "arm": "candidate",
+      "relative": "Cargo.lock",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/Cargo.lock",
+      "sha256": "4e73e7552a1fb56b45209bb339038d02526105f7f1ba5bafc576a6ee1ecb4fbf"
+    },
+    {
+      "arm": "baseline",
+      "relative": "Cargo.toml",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/Cargo.toml",
+      "sha256": "3246d9b8d0fe6130f539ba9d907bb315af8c1fd05fe723b26de4505e3df8de33"
+    },
+    {
+      "arm": "candidate",
+      "relative": "Cargo.toml",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/Cargo.toml",
+      "sha256": "3246d9b8d0fe6130f539ba9d907bb315af8c1fd05fe723b26de4505e3df8de33"
+    },
+    {
+      "arm": "baseline",
+      "relative": "docs/integration/native-integration-requirements-20260908.md",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/docs/integration/native-integration-requirements-20260908.md",
+      "sha256": "1b7865088d8a6a8728347b363a686c7d54e644121862cff4957f1a0d3e2dc5d4"
+    },
+    {
+      "arm": "candidate",
+      "relative": "docs/integration/native-integration-requirements-20260908.md",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/docs/integration/native-integration-requirements-20260908.md",
+      "sha256": "1b7865088d8a6a8728347b363a686c7d54e644121862cff4957f1a0d3e2dc5d4"
+    },
+    {
+      "arm": "baseline",
+      "relative": "docs/integration/native-lifecycle-contract.md",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/docs/integration/native-lifecycle-contract.md",
+      "sha256": "687f648cbd03da0602896b63f93434fd66079ee007806b89c67c9930b27a8f03"
+    },
+    {
+      "arm": "candidate",
+      "relative": "docs/integration/native-lifecycle-contract.md",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/docs/integration/native-lifecycle-contract.md",
+      "sha256": "687f648cbd03da0602896b63f93434fd66079ee007806b89c67c9930b27a8f03"
+    },
+    {
+      "arm": "baseline",
+      "relative": "docs/integration/native-process-contract.md",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/docs/integration/native-process-contract.md",
+      "sha256": "af4a95df8fb710d31a2a1ced1c6d0243f9135e773f98573105d32c71b1f5fb52"
+    },
+    {
+      "arm": "candidate",
+      "relative": "docs/integration/native-process-contract.md",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/docs/integration/native-process-contract.md",
+      "sha256": "caba242b1a834f5ac0278fc412be4914c46008b3efd7f03f61e9355abc3229a7"
+    },
+    {
+      "arm": "baseline",
+      "relative": "docs/integration/utility-runtime-contract.md",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/docs/integration/utility-runtime-contract.md",
+      "sha256": "3ab7f3b437cd0087a2a1e1bd0bb8800b6536d3c0a7b9e71e4872c1cd06e9a67a"
+    },
+    {
+      "arm": "candidate",
+      "relative": "docs/integration/utility-runtime-contract.md",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/docs/integration/utility-runtime-contract.md",
+      "sha256": "3ab7f3b437cd0087a2a1e1bd0bb8800b6536d3c0a7b9e71e4872c1cd06e9a67a"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/README.md",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/README.md",
+      "sha256": "5f936fa672cbee4dedbcdc2242f44d7cce5dae327b40a2545ccd9365244dc5b5"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/README.md",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/README.md",
+      "sha256": "5f936fa672cbee4dedbcdc2242f44d7cce5dae327b40a2545ccd9365244dc5b5"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/__init__.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/__init__.py",
+      "sha256": "b440755188658464c99222f0d58d00e63bec4873c03dca997e11178477703520"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/__init__.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/__init__.py",
+      "sha256": "b440755188658464c99222f0d58d00e63bec4873c03dca997e11178477703520"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/controller.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/controller.py",
+      "sha256": "32430e6bf7cd5f99e418142756dd959422eab0ee4cff96ffd7e8a46438d329a2"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/controller.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/controller.py",
+      "sha256": "32430e6bf7cd5f99e418142756dd959422eab0ee4cff96ffd7e8a46438d329a2"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/delivery_core.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/delivery_core.py",
+      "sha256": "762303f96e432b7405c8426d32e0898112e481214e72174eb2a93a2f197c03f1"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/delivery_core.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/delivery_core.py",
+      "sha256": "762303f96e432b7405c8426d32e0898112e481214e72174eb2a93a2f197c03f1"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/hook_protocol.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/hook_protocol.py",
+      "sha256": "e713114dcfd932fe5f24e8f3d638eb00aad34873b043836f2a60973ec67d1101"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/hook_protocol.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/hook_protocol.py",
+      "sha256": "e713114dcfd932fe5f24e8f3d638eb00aad34873b043836f2a60973ec67d1101"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/native_process.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/native_process.py",
+      "sha256": "0f0494c22566a981302144526135c0981a38a26c6791667f7a265ddfed470eb3"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/native_process.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/native_process.py",
+      "sha256": "7ea0efae40dd3fc04dcbaf82ff06f5e232b755f4261d07bdc2cb9e8b89349d2f"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/native_schedule.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/native_schedule.py",
+      "sha256": "bc707e5ca91923a54dae48bfa9776cf519b5fa6e43f75511536848049c124940"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/native_schedule.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/native_schedule.py",
+      "sha256": "bc707e5ca91923a54dae48bfa9776cf519b5fa6e43f75511536848049c124940"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/native_terminal.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/native_terminal.py",
+      "sha256": "d80bb8af9a80a58e2c050be14fc9258eff06dee98bfff3668b8a84783fd36afc"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/native_terminal.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/native_terminal.py",
+      "sha256": "d80bb8af9a80a58e2c050be14fc9258eff06dee98bfff3668b8a84783fd36afc"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/phase_state.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/phase_state.py",
+      "sha256": "e7fc6f22bdef0401f43d0df8a409b6a2c990ddda5232271e597caae7a4776dec"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/phase_state.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/phase_state.py",
+      "sha256": "e7fc6f22bdef0401f43d0df8a409b6a2c990ddda5232271e597caae7a4776dec"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/requirements.txt",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/requirements.txt",
+      "sha256": "b4603b9468ade4d639d2c6f73b89d50e1fa5d227c73ab15be0382cca478513e6"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/requirements.txt",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/requirements.txt",
+      "sha256": "b4603b9468ade4d639d2c6f73b89d50e1fa5d227c73ab15be0382cca478513e6"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/supervisor.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/supervisor.py",
+      "sha256": "08e15b7bd1968a3be506cae7fa289129988d1a145369775775fac84fc8131fd6"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/supervisor.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/supervisor.py",
+      "sha256": "0a51fabbc137f7ac7e9a18897798f1ca77b810bf85441d33f62e40354bf4467b"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/utility_evidence.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/utility_evidence.py",
+      "sha256": "8c5fb20fe5ac21eaa5a388ed3c5c89e043c01b94c3a831f159a6578d6ed9ca23"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/utility_evidence.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/utility_evidence.py",
+      "sha256": "8c5fb20fe5ac21eaa5a388ed3c5c89e043c01b94c3a831f159a6578d6ed9ca23"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/utility_schedule.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/utility_schedule.py",
+      "sha256": "26585b5f8e04adad60125d858c182b9b9a03d4e0d03411ba19e97dca1c10ed52"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/utility_schedule.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/utility_schedule.py",
+      "sha256": "26585b5f8e04adad60125d858c182b9b9a03d4e0d03411ba19e97dca1c10ed52"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/utility_state.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/utility_state.py",
+      "sha256": "b2efef0f44540284359d67c495f0a88e57a483922c62afe089f303aa57778092"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/utility_state.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/utility_state.py",
+      "sha256": "b2efef0f44540284359d67c495f0a88e57a483922c62afe089f303aa57778092"
+    },
+    {
+      "arm": "baseline",
+      "relative": "runtime/delivery/workflow_runtime.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/runtime/delivery/workflow_runtime.py",
+      "sha256": "3d775ac0dac2d582c3ec488ce3b411b9623a91ad7b3f85f2e44a9c292893efab"
+    },
+    {
+      "arm": "candidate",
+      "relative": "runtime/delivery/workflow_runtime.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/runtime/delivery/workflow_runtime.py",
+      "sha256": "3d775ac0dac2d582c3ec488ce3b411b9623a91ad7b3f85f2e44a9c292893efab"
+    },
+    {
+      "arm": "baseline",
+      "relative": "src/delivery.rs",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/src/delivery.rs",
+      "sha256": "7e109d008e0c9e28ef8b418dd952dc757f00998b7855582783c8f32882c1ae18"
+    },
+    {
+      "arm": "candidate",
+      "relative": "src/delivery.rs",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/src/delivery.rs",
+      "sha256": "7e109d008e0c9e28ef8b418dd952dc757f00998b7855582783c8f32882c1ae18"
+    },
+    {
+      "arm": "baseline",
+      "relative": "src/main.rs",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/src/main.rs",
+      "sha256": "54765ef3899ee5be11f76980db45a4837ed4797878d02521ab5eecd9879e043f"
+    },
+    {
+      "arm": "candidate",
+      "relative": "src/main.rs",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/src/main.rs",
+      "sha256": "54765ef3899ee5be11f76980db45a4837ed4797878d02521ab5eecd9879e043f"
+    },
+    {
+      "arm": "baseline",
+      "relative": "tests/test_native_interactive.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/tests/test_native_interactive.py",
+      "sha256": "a8b48d78af1dc693c08b795c8261e9c89b10835206979cba1cab502b42bc2432"
+    },
+    {
+      "arm": "candidate",
+      "relative": "tests/test_native_interactive.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/tests/test_native_interactive.py",
+      "sha256": "b398259c653ec1272f42629ffb30b6cbf8846a73427d950f266b5225c230498d"
+    },
+    {
+      "arm": "baseline",
+      "relative": "tests/test_native_process.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/tests/test_native_process.py",
+      "sha256": "33fac365100edb34ab51332b49eccf509a00bd8e28245dae1714e203a7b36b72"
+    },
+    {
+      "arm": "candidate",
+      "relative": "tests/test_native_process.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/tests/test_native_process.py",
+      "sha256": "34531d2fbbb1f3bf9345dcf49974e56830db35728f001275d596d2005dec3d26"
+    },
+    {
+      "arm": "baseline",
+      "relative": "tests/test_native_schedule.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/tests/test_native_schedule.py",
+      "sha256": "a2b27c571daa147127534461a2b9c18ca89be8dd1409201de43c5e560ca3cfb9"
+    },
+    {
+      "arm": "candidate",
+      "relative": "tests/test_native_schedule.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/tests/test_native_schedule.py",
+      "sha256": "a2b27c571daa147127534461a2b9c18ca89be8dd1409201de43c5e560ca3cfb9"
+    },
+    {
+      "arm": "baseline",
+      "relative": "tests/test_native_terminal.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/tests/test_native_terminal.py",
+      "sha256": "f6a9ee456f6f06739e374a244adc6887d53959e3068d1cfcbbef9ea955587a17"
+    },
+    {
+      "arm": "candidate",
+      "relative": "tests/test_native_terminal.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/tests/test_native_terminal.py",
+      "sha256": "f6a9ee456f6f06739e374a244adc6887d53959e3068d1cfcbbef9ea955587a17"
+    },
+    {
+      "arm": "baseline",
+      "relative": "tests/test_utility_native_admission.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/tests/test_utility_native_admission.py",
+      "sha256": "5008ba6e9af6c903858da562a240eb89cf951425a9b3fa705cfef8e47c67ff3c"
+    },
+    {
+      "arm": "candidate",
+      "relative": "tests/test_utility_native_admission.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/tests/test_utility_native_admission.py",
+      "sha256": "5008ba6e9af6c903858da562a240eb89cf951425a9b3fa705cfef8e47c67ff3c"
+    },
+    {
+      "arm": "baseline",
+      "relative": "tests/test_utility_native_lifecycle.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/tests/test_utility_native_lifecycle.py",
+      "sha256": "51f9e806dee74cf3a32505364961cd46bee73c8d0e79a2b101555a984b4f5db3"
+    },
+    {
+      "arm": "candidate",
+      "relative": "tests/test_utility_native_lifecycle.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/tests/test_utility_native_lifecycle.py",
+      "sha256": "23fc9f3f2cf0421483dff92c20a036cca36aaab6146db0919c7c9693e16c4a9c"
+    },
+    {
+      "arm": "baseline",
+      "relative": "tests/test_utility_runtime.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/tests/test_utility_runtime.py",
+      "sha256": "701ca4a8a04fbe3ca637c62e98380d6929c4d2ff85474b19f5aa2459e51c4012"
+    },
+    {
+      "arm": "candidate",
+      "relative": "tests/test_utility_runtime.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/tests/test_utility_runtime.py",
+      "sha256": "701ca4a8a04fbe3ca637c62e98380d6929c4d2ff85474b19f5aa2459e51c4012"
+    },
+    {
+      "arm": "baseline",
+      "relative": "tests/test_utility_schedule.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/tests/test_utility_schedule.py",
+      "sha256": "0e3a80cef85d72648755d440951ace3ae5dc6bf7c2ac9d02af8077f6385875ae"
+    },
+    {
+      "arm": "candidate",
+      "relative": "tests/test_utility_schedule.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/tests/test_utility_schedule.py",
+      "sha256": "0e3a80cef85d72648755d440951ace3ae5dc6bf7c2ac9d02af8077f6385875ae"
+    },
+    {
+      "arm": "baseline",
+      "relative": "tests/test_utility_state.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/baseline/tests/test_utility_state.py",
+      "sha256": "4c78913ca856f3a08966199d542aaefc98a5ffb254c1ddaa8d6a4abd8569782b"
+    },
+    {
+      "arm": "candidate",
+      "relative": "tests/test_utility_state.py",
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-ni11-continuation-20260908T020630686864Z/ni11-review-02/candidate/tests/test_utility_state.py",
+      "sha256": "4c78913ca856f3a08966199d542aaefc98a5ffb254c1ddaa8d6a4abd8569782b"
+    }
+  ]
+}

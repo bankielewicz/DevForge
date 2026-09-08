@@ -1,0 +1,23 @@
+test_frozen_answer_is_reserved_before_send_and_correlated (test_native_interactive.InteractiveTests.test_frozen_answer_is_reserved_before_send_and_correlated) ... FAIL
+test_mismatch_sends_no_answer (test_native_interactive.InteractiveTests.test_mismatch_sends_no_answer) ... FAIL
+
+======================================================================
+FAIL: test_frozen_answer_is_reserved_before_send_and_correlated (test_native_interactive.InteractiveTests.test_frozen_answer_is_reserved_before_send_and_correlated)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/ni11-interactive-20260908/tests/test_native_interactive.py", line 11, in test_frozen_answer_is_reserved_before_send_and_correlated
+    self.assertTrue(hasattr(n, 'Interactive'), 'interactive transport must be integrated')
+AssertionError: False is not true : interactive transport must be integrated
+
+======================================================================
+FAIL: test_mismatch_sends_no_answer (test_native_interactive.InteractiveTests.test_mismatch_sends_no_answer)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/ni11-interactive-20260908/tests/test_native_interactive.py", line 31, in test_mismatch_sends_no_answer
+    self.assertTrue(hasattr(n, 'Interactive'), 'interactive transport must reject mismatches')
+AssertionError: False is not true : interactive transport must reject mismatches
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.000s
+
+FAILED (failures=2)

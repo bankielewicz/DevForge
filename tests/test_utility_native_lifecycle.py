@@ -215,6 +215,33 @@ class NativeLifecycleTests(unittest.TestCase):
                 self.assertNotIn("native_schedule", utility.context(self.state))
                 self.assertFalse((self.state / "native-collector").exists())
 
+    def test_continuation_slots_count_before_bind_and_state_effects(self):
+        for extra in (15, 16):
+            with self.subTest(continuations=extra), tempfile.TemporaryDirectory() as scratch:
+                self.f = ScheduleFixture(Path(scratch))
+                self.state = self.f.validator.state
+                self.freeze_allocation()
+                self.allocation["max_total_attempts"] = 24
+                call = self.allocation["required_calls"][0]
+                call.update(interaction="awaiting-user", continuation_units=["unit-" + str(i) for i in range(extra)])
+                self.runtime["attempts"][0]["interaction"] = "awaiting-user"
+                self.cases_path.write_bytes(encoded({"schema_version": "devforge.utility-native-cases/v1",
+                    "task_id": self.f.native.plan["task_id"], "required_calls": self.allocation["required_calls"]}))
+                self.f.native.plan["cases"] = Fixture.pin(self.cases_path)
+                self.allocation["cases_sha256"] = Fixture.pin(self.cases_path)["sha256"]
+                self.refresh_allocation()
+                self.f.p4()
+                before = self.f.head()
+                snapshots = sorted(p.name for p in (self.state / "snapshots").iterdir())
+                result = self.f.bind()
+                if extra == 15:
+                    self.assertEqual(result["status"], "NATIVE_SCHEDULE_BOUND", result)
+                else:
+                    self.assertEqual(result["status"], "FAIL", result)
+                    self.assertEqual(self.f.head(), before)
+                    self.assertEqual(sorted(p.name for p in (self.state / "snapshots").iterdir()), snapshots)
+                    self.assertNotIn("native_schedule", utility.context(self.state))
+
     def test_complete_binding_snapshots_and_drift_block_reserve_without_resetting_cleanup_clock(self):
         self.freeze_allocation()
         self.f.p4()

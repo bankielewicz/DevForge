@@ -72,8 +72,12 @@ call list, whose identity/order must equal all plan attempts. Every call has:
 All required probes, failed launches, graders and receiving invocations consume
 the same allocation. The independently frozen inventory is the coverage oracle;
 the implementation cannot infer missing requirements from an opaque document.
-Declaring an interaction does not implement it: the collector currently refuses
-unsupported interaction modes during preflight. Managed case execution requires
+Awaiting-user calls also require ordered `continuation_units` matching the
+frozen answer policy. Initial calls plus every allocated continuation unit plus
+preparation calls must fit the total cap. All units are charged upfront; unused
+units cannot be recycled. The collector refuses unsupported interactions during
+preflight. Durable per-unit collector claims precede generation-resuming sends,
+under the original journal launch claim and original clocks. Managed case execution requires
 the separately selected worker session/state and broker configuration described
 by the collector, distinct from the outer validator's evaluation state.
 

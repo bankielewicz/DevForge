@@ -1,0 +1,56 @@
+{
+  "schema_version": "devforge.ni11-readonly-review/v1",
+  "review_id": "ni11-review-01",
+  "base_commit": "423c69aafe4bf98601e67a6c94e333b26857f310",
+  "manifest_sha256": "0d64ade248d26c9bcfc238179e21f03df9a15011c9a64e05f716dfa3cdf52e82",
+  "input_verification": {
+    "listed_inputs": 63,
+    "verified": 63,
+    "result": "PASS"
+  },
+  "changed_paths": [
+    "docs/integration/native-lifecycle-contract.md",
+    "docs/integration/native-process-contract.md",
+    "runtime/delivery/native_process.py",
+    "runtime/delivery/utility_evidence.py",
+    "runtime/delivery/utility_state.py",
+    "tests/test_native_interactive.py"
+  ],
+  "validation_status": "NOT_PERFORMED",
+  "native_status": "NOT_OBSERVED",
+  "findings": [
+    {
+      "id": "F-01",
+      "severity": "P1",
+      "title": "managed interactive turn continuations are rejected after they run",
+      "evidence": [
+        {"path": "runtime/delivery/native_process.py", "line": 620},
+        {"path": "runtime/delivery/native_process.py", "line": 988},
+        {"path": "runtime/delivery/supervisor.py", "line": 243}
+      ],
+      "exposure": "An awaiting-user managed call with a turn continuation ends COULD_NOT_RUN when two UserPromptSubmit callbacks are recorded.",
+      "reproduction": "Use a frozen policy containing a turn step and replay the initial and continuation UserPromptSubmit callbacks before managed finish."
+    },
+    {
+      "id": "F-02",
+      "severity": "P2",
+      "title": "changed cap, replay, and managed-continuation paths lack discriminating coverage",
+      "evidence": [
+        {"path": "tests/test_native_interactive.py", "line": 10},
+        {"path": "runtime/delivery/utility_evidence.py", "line": 225},
+        {"path": "runtime/delivery/native_process.py", "line": 1181},
+        {"path": "runtime/delivery/utility_state.py", "line": 1196}
+      ],
+      "exposure": "The newly enabled interactive path can regress in allocation, replay, managed chronology, or signal-exit admission without a focused synthetic test catching it.",
+      "reproduction": "Inspect candidate tests: only the new fixture module references interactive support, and it covers one answer and a zero-step fake server."
+    }
+  ],
+  "unobserved": [
+    "Codex 0.153.4 app-server behavior",
+    "gpt-6-astra authenticated interactive availability",
+    "effective isolation and authentication controls",
+    "managed callback chronology and callback origin",
+    "real-client cleanup",
+    "semantic grading and native admission"
+  ]
+}
