@@ -106,10 +106,11 @@ The G2 native-plan bridge accepts the explicit v2 validation_plan binding and
 native projection. V2 complete-allocation validation delegates to
 `utility_schedule.validate_allocation_v2(plan, frozen=None)`, which must return
 `(allocation, snapshot_sources)` using the existing `(kind, absolute_path, raw)`
-source tuple format. Until the separately owned G3 scheduler supplies that
-consumer, v2 campaign binding fails closed. G3 owns conditional C/B/A graph
-projection, externally funded graph accounting, original clocks and collector
-propagation. G6 owns installed/exported capability and helper-policy pins.
+source tuple format. G3 supplies conditional selection validation, but its
+allocation entrypoint explicitly refuses v2 funding authority admission pending
+the external grant/terminal-ledger and charged non-native completion contract
+below. No v2 campaign can bind, reserve or launch. G6 owns installed/exported
+capability and helper-policy pins.
 Neither this bridge nor synthetic development tests establish native activation,
 qualification, receiving execution, installation readiness or human acceptance.
 
@@ -123,3 +124,47 @@ It requires an honest unattempted v2 input to emit a v2 decision with NOT_RUN,
 INSUFFICIENT_EVIDENCE, COMPLETE reporting, no adoption/acceptance and native groups
 NOT_RUN. Run it only as the allocated external runtime/operator role. An unchanged
 v1 helper is expected to fail that assertion until the G4 canonical update.
+
+
+## VPR-2 conditional selection and consumer boundary
+
+`utility_schedule.validate` accepts an explicit v2 schedule only with the
+already externally authorized `Policy`, actual admitted T04 review pin and
+selected delivery pin. It checks the exact v2 native-plan/runtime/allocation
+pin chain, the complete reviewed call graph's native projection, original
+assertion/observation membership and prerequisite graph edges. A reviewed
+Routine T07 NOT_SELECTED disposition permits C then A; every selected matching C
+must have intact PASS. Selected B predecessors still require intact PASS/FAIL.
+Cross-arm/repetition substitutions, missing C, stale review/plan, omitted native
+obligations and post-hoc exclusions reject selection. Kernel reservation
+accounting still charges failed launches and rejects replayed/late grades.
+This selection-only API does not authenticate a grant or issue launch authority.
+
+The real utility router recognizes v2 delivery. Managed-worker profile, result
+and state collision checks include nested policy pins and selected graph review
+destinations. The synthetic supervisor preserves the utility boundary that keeps
+external gate and policy evidence out of worker mounts. The native prerequisite
+consumer identifies the one explicitly selected native plan and separately
+retains the full policy/review snapshot inventory. No-native Routine reporting
+continues without a native plan or campaign.
+
+Capabilities now use explicit `devforge.delivery-capabilities/v2`, retaining the
+existing capability values and adding `supported_utility_native_schedule_schemas`
+(v1 and v2), `validation_policy` (VPR-2), and `native_funding_v2`
+(BLOCKED_EXTERNAL_GRANT_LEDGER_CONTRACT). `native_execution_enabled` remains
+false. G6 must reconcile the strict installer capability consumer with this
+explicit version; this source change does not authorize installation.
+
+The remaining funding gap is an implementation contract selection, not a
+relaxation of G1. G1 execution-contract lines 211-219 require actual distinct
+owner authority, earlier terminal-ledger references, evidence for charged setup
+and non-native graph completions, exclusive grant use, and both original clocks.
+It freezes allocation/funding/Call envelope keys, but does not select the
+machine-verifiable payload and producer-binding contract for those evidence
+records, their completion locators, or an externally protected shared grant
+claim/replay authority across sessions. A local scheduler counter cannot prove
+that a grant is unused elsewhere or that a static reviewer completed. G3 leaves
+that admission path blocked instead of creating fields or treating graph rows
+as completed calls. After those external contracts are selected, the same
+validated grant and graph must reach reservation/replay, collector, managed
+consumers and both clocks. The v1 24/600/14400 ceilings remain unchanged.

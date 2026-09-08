@@ -142,7 +142,7 @@ class Schedule:
     def __init__(self, plan: Mapping, required_predecessors: Mapping):
         if not isinstance(plan, Mapping):
             raise ScheduleError("expected an already validated native plan")
-        if plan.get("schema_version") != "devforge.utility-native-plan/v1":
+        if plan.get("schema_version") not in {"devforge.utility-native-plan/v1", "devforge.utility-native-plan/v2"}:
             raise ScheduleError("native plan schema mismatch")
         _text(plan.get("task_id"), "task ID")
         max_attempts = _positive(plan.get("max_attempts"), 256, "max_attempts")

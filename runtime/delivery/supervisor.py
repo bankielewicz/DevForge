@@ -427,7 +427,7 @@ def sandbox_command(project, profile, client_root, command, session_path, sessio
     protected += [project / row["archive"] for row in session["output_baselines"] if row["archive"]]
     # Utility gate/answer evidence is consumed outside the worker sandbox. Do
     # not expose an entire parent directory merely because a future file is absent.
-    if contract.get("schema_version") != "devforge.utility-delivery/v1":
+    if contract.get("schema_version") not in {"devforge.utility-delivery/v1", "devforge.utility-delivery/v2"}:
         protected += workflow_runtime.protected_paths(contract)
     git_entry = project / ".git"
     if git_entry.exists() or git_entry.is_symlink():

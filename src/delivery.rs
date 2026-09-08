@@ -967,7 +967,7 @@ pub fn main(action: &Action, state: Option<&Path>) {
         println!(
             "{}",
             json!({
-                "schema_version": "devforge.delivery-capabilities/v1",
+                "schema_version": "devforge.delivery-capabilities/v2",
                 "protocol": "devforge.delivery-runtime/v1",
                 "supported_providers": ["codex", "claude"],
                 "completion_modes": ["process", "managed-session"],
@@ -977,6 +977,9 @@ pub fn main(action: &Action, state: Option<&Path>) {
                 "utility_workflows": ["skill-builder", "skill-validator"],
                 "utility_session_schema": "devforge.utility-session/v1",
                 "utility_native_schedule_schema": "devforge.utility-native-schedule/v1",
+                "supported_utility_native_schedule_schemas": ["devforge.utility-native-schedule/v1", "devforge.utility-native-schedule/v2"],
+                "validation_policy": "VPR-2",
+                "native_funding_v2": "BLOCKED_EXTERNAL_GRANT_LEDGER_CONTRACT",
                 "native_execution_enabled": false,
                 "native_process_interface": "EXPLICIT_FROZEN_CONFIGURATION_REQUIRED",
                 "native_process_receipt_schema": "devforge.native-process-receipt/v1",

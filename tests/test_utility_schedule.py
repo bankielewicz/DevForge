@@ -315,3 +315,207 @@ class UtilityScheduleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class V2ScheduleFixture:
+    """Frozen G1 selection and original catalog; mechanical fixtures only."""
+    def __init__(self, root):
+        from test_validation_policy import PolicyFixture
+        self.f = PolicyFixture(root)
+        f = self.f
+        f.plan['runtime'] = {'selection': 'synthetic only'}
+        f.plan['budget'] = {'max_attempts': 2, 'max_seconds': 18000, 'repeats_per_case': 1}
+        for i in (5, 6, 8):
+            f.vp['assertions'][i-1]['selection'] = 'REQUIRED'
+            f.vp['task_selection'][i-1]['selection'] = 'REQUIRED'
+        f.vp['assertions'][7]['dependency_ids'] = ['A06']
+        proof = f.put('conditions.txt', 'Synthetic frozen visibility/freshness/prompt')
+        calls = f.vp['call_graph']
+        attempts = []
+        for tier, aid, task in [('C', 'A06', 'T06'), ('A', 'A08', 'T08')]:
+            oid, cid = 'obs-' + tier, 'call-' + tier
+            f.vp['assertions'][int(aid[1:])-1]['observation_ids'] = [oid]
+            f.vp['observations'].append({'observation_id': oid, 'evidence_kind': 'N', 'assertion_ids': [aid],
+                'conditions': {'identity': f.identity, 'input_refs': [f.catalog_ref], 'prompt_ref': proof,
+                'arm': 'candidate', 'variant': 'normal', 'repetition': 1, 'invocation': 'explicit',
+                'visibility_ref': proof, 'freshness_ref': proof, 'before_task': task},
+                'prerequisite_observation_ids': ['obs-C'] if tier == 'A' else [], 'reuse_ref': None})
+            calls.append({'call_id': cid, 'kind': 'native_worker', 'parent_call_id': None,
+                'attempt_id': tier + '-candidate', 'assertion_ids': [aid], 'observation_ids': [oid],
+                'depends_on': ['T04-review', 'call-C'] if tier == 'A' else ['T04-review'],
+                'producer': 'worker-' + tier, 'reviewer': 'grader-' + tier,
+                'review_path': str(f.owner / ('grade-' + tier + '.json')), 'interaction': 'single-turn',
+                'managed_worker_required': False, 'max_seconds': 900})
+            attempts.append({'attempt_id': tier + '-candidate', 'case_id': 'CASE-' + str(int(aid[1:])),
+                'tier': tier, 'arm': 'candidate', 'repetition': 1, 'workspace': str(root / ('workspace-' + tier)),
+                'client_state': str(root / ('client-' + tier)), 'max_seconds': 900})
+        f.freeze()
+        self.plan = {'schema_version': 'devforge.utility-native-plan/v2', 'task_id': 'UTILITY-001',
+            'validation_plan': f.pin(f.plan_path), 'attempts': attempts, 'max_attempts': 2,
+            'max_seconds': 18000, 'repetitions': 1}
+        self.allocation_ref = f.put('allocation.json', {'synthetic': 'Never native funding'})
+        runtime = f.put('native-runtime.json', {'schema_version': 'devforge.native-runtime-configuration/v2',
+            'allocation': self.allocation_ref, 'attempts': []})
+        self.plan['runtime_configuration'] = runtime
+        self.plan_ref = f.put('native-plan.json', self.plan)
+        self.binding = {'schema_version': 'devforge.utility-native-schedule/v2', 'task_id': 'UTILITY-001',
+            'plan': self.plan_ref, 'validation_plan': f.pin(f.plan_path), 'review': f.pin(f.review_path),
+            'allocation': self.allocation_ref, 'required_predecessors': {'C-candidate': [], 'A-candidate': ['C-candidate']}}
+
+    def policy(self):
+        import validation_policy
+        return validation_policy.load(self.f.delivery['validation_policy'],
+            (self.f.owner / 'assignment.md').read_bytes(), self.f.project)
+
+    def kernel(self):
+        # Exercise the real schedule consumer; runtime authority is independently supplied.
+        import delivery_core
+        try:
+            return utility_schedule.validate(encoded(self.binding), self.plan, self.plan_ref, 'UTILITY-001',
+                policy=self.policy(), review_ref=self.f.pin(self.f.review_path),
+                delivery_ref=self.f.pin(self.f.delivery_path))
+        except TypeError as error:
+            # A missing keyword is not our RED discriminator. Use the existing consumer.
+            if 'unexpected keyword argument' not in str(error):
+                raise
+            return utility_schedule.validate(encoded(self.binding), self.plan, self.plan_ref, 'UTILITY-001')
+
+
+class V2ScheduleTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.f = V2ScheduleFixture(Path(self.tmp.name))
+
+    def accepted(self):
+        import delivery_core
+        try:
+            result = self.f.kernel()
+        except delivery_core._Problem as error:
+            self.fail('Reviewed v2 C/A schedule must be supported by actual consumer: ' + str(error))
+        return result
+
+    def test_reviewed_C_pass_unselected_B_permits_A(self):
+        import native_schedule
+        kernel = self.accepted()
+        first = kernel.reserve(kernel.initial_state(), 10)
+        self.assertEqual(first.attempt.attempt_id, 'C-candidate')
+        settled = kernel.record(first.state, 'C-candidate', native_schedule.Observation('PASS', 'INTACT'), 20)
+        self.assertEqual(kernel.reserve(settled, 21).attempt.attempt_id, 'A-candidate')
+
+    def test_selected_C_fail_missing_and_stale_block_A(self):
+        import native_schedule
+        kernel = self.accepted()
+        first = kernel.reserve(kernel.initial_state(), 10)
+        self.assertEqual(kernel.reserve(first.state, 11).status, 'WAITING')
+        settled = kernel.record(first.state, 'C-candidate', native_schedule.Observation('FAIL', 'INTACT'), 20)
+        self.assertEqual(kernel.reserve(settled, 21).status, 'BLOCKED')
+        with self.assertRaises(native_schedule.ScheduleError):
+            kernel.record(first.state, 'C-candidate', native_schedule.Observation('PASS', 'INTACT'), first.state.reservations[0].deadline)
+
+    def test_failed_launch_stays_charged_and_replay_does_not_reset(self):
+        import native_schedule
+        kernel = self.accepted()
+        first = kernel.reserve(kernel.initial_state(), 10)
+        closed = kernel.record(first.state, 'C-candidate', native_schedule.Observation('LAUNCH_FAILED', 'UNOBTAINABLE'), 20)
+        self.assertEqual(len(closed.reservations), 1)
+        self.assertEqual(kernel.reserve(closed, 21).status, 'BLOCKED')
+        with self.assertRaises(native_schedule.ScheduleError):
+            kernel.reserve(closed, 0)
+        with self.assertRaises(native_schedule.ScheduleError):
+            kernel.record(closed, 'C-candidate', native_schedule.Observation('PASS', 'INTACT'), 21)
+
+    def test_posthoc_exclusion_missing_C_and_wrong_projection_rejected(self):
+        import delivery_core
+        for mutation in ('exclude', 'missing', 'projection', 'review'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                f = V2ScheduleFixture(Path(tmp))
+                if mutation == 'exclude':
+                    f.f.vp['task_selection'][6]['selection'] = 'REQUIRED'
+                    f.f.freeze()  # old reviewed schedule is deliberately stale
+                elif mutation == 'missing':
+                    f.binding['required_predecessors']['A-candidate'] = []
+                elif mutation == 'projection':
+                    f.plan['attempts'].pop(0)
+                else:
+                    f.f.review_path.write_text('{}')
+                with self.assertRaises(delivery_core._Problem):
+                    f.kernel()
+
+    def test_router_selects_v2_and_protects_policy_inputs(self):
+        import workflow_runtime
+        try:
+            contract, _, _ = workflow_runtime.load_delivery(self.f.f.delivery_path)
+        except Exception as error:
+            self.fail('Actual router must select valid v2 utility delivery: ' + str(error))
+        protected = workflow_runtime.protected_paths(contract)
+        for key in ('policy_ref', 'acceptance_ref', 'plan'):
+            self.assertIn(Path(contract['validation_policy'][key]['path']), protected)
+
+    def test_router_protects_nested_policy_pins_and_review_destinations(self):
+        import workflow_runtime
+        protected = workflow_runtime.protected_paths(self.f.f.delivery)
+        for path in self.f.policy().sources:
+            self.assertIn(Path(path), protected, 'Managed profile/result must not overlap nested policy inputs')
+        for call in self.f.f.vp['call_graph']:
+            if call['review_path'] is not None:
+                self.assertIn(Path(call['review_path']), protected)
+
+    def test_cli_v2_capability_is_explicit(self):
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run([str(root / 'target/debug/devforge'), 'delivery', 'capabilities'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        value = json.loads(result.stdout)
+        self.assertEqual(value['schema_version'], 'devforge.delivery-capabilities/v2')
+        self.assertIn('devforge.utility-native-schedule/v2', value.get('supported_utility_native_schedule_schemas', []))
+        self.assertFalse(value['native_execution_enabled'])
+
+
+class V2PrerequisiteTests(unittest.TestCase):
+    def test_actual_selected_native_prerequisite_consumes_one_plan_and_retains_review_pins(self):
+        import delivery_core
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frozen = V2ScheduleFixture(root)
+            f = frozen.f
+            native_root = root / 'prepared-native'
+            native_root.mkdir()
+            n = admitted.NativePlanFixture(native_root)
+            for a in frozen.plan['attempts']:
+                Path(a['workspace']).mkdir()
+                Path(a['client_state']).mkdir()
+            n.plan.update(frozen.plan)
+            boundary = json.loads(n.boundary_path.read_bytes())
+            raw = boundary['attempts'][0]['observations']
+            boundary['attempts'] = [{'attempt_id': a['attempt_id'], 'workspace': a['workspace'],
+                'client_state': a['client_state'], 'observations': raw} for a in n.plan['attempts']]
+            n.boundary_path.write_bytes(encoded(boundary))
+            n.plan['boundary_evidence'] = f.pin(n.boundary_path)
+            n.save()
+            spec = next(g for g in f.delivery['gate_inputs'] if g['id'] == 'native-prerequisites')
+            value = json.loads(Path(spec['path']).read_bytes())
+            value.update(outcome='PASS', selection='REQUIRED', disposition='SATISFIED', evidence=[f.pin(n.plan_path)])
+            Path(spec['path']).write_bytes(encoded(value))
+            with mock.patch.object(store, 'utc_now', return_value=NOW):
+                self.assertEqual(f.start()['status'], 'ACTIVE')
+                for phase in ('P1', 'P2', 'P3'):
+                    f.checkpoint()
+                    self.assertEqual(utility.advance(f.state)['status'], 'PROGRESS', phase)
+                with store._lock(f.state) as fd:
+                    state = utility.State(f.state, fd)
+                    try:
+                        _, _, sources, ref, plan = utility._native_prerequisites(state)
+                    except delivery_core._Problem as error:
+                        self.fail('Selected v2 readiness must identify its one native plan: ' + str(error))
+                    self.assertEqual(ref, f.pin(n.plan_path))
+                    self.assertEqual(plan, n.plan)
+                    self.assertTrue(any(path == str(f.review_path) for _, path, _ in sources))
+
+                    frozen.binding['plan'] = f.pin(n.plan_path)
+                    schedule_path = f.owner / 'selected-schedule.json'
+                    schedule_path.write_bytes(encoded(frozen.binding))
+                before = (f.state / 'HEAD.json').read_bytes()
+                result = utility.native_schedule_bind(f.state, schedule_path)
+                self.assertEqual(result['status'], 'FAIL', result)
+                self.assertIn('funding authority', str(result))
+                self.assertEqual((f.state / 'HEAD.json').read_bytes(), before)

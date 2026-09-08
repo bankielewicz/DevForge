@@ -239,6 +239,11 @@ def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_orig
     gate evidence, never obtained from worker output by this module. Configuration
     and installed-input pins contain no credentials; auth bytes are never read.
     """
+    version = plan.get("schema_version", "devforge.utility-native-plan/v1")
+    if version == "devforge.utility-native-plan/v2":
+        raise NativeProcessError("v2 funding authority admission unavailable; no legacy collector fallback")
+    if version != "devforge.utility-native-plan/v1":
+        raise NativeProcessError("Unsupported native plan version")
     if plan.get("client") != CLIENT or plan.get("model") != MODEL:
         raise NativeProcessError("Client/model differs from the approved native selection")
     _number(reserved_at, "reserved_at")

@@ -369,6 +369,13 @@ class RequestPreparationTests(unittest.TestCase):
         return native.prepare_request(self.plan, self.plan["attempts"][0], self.binding, 100, 700,
                                       "2026-09-07T00:00:00+00:00", self.installed)
 
+    def test_v2_or_unknown_plan_cannot_enter_legacy_collector(self):
+        for version in ('devforge.utility-native-plan/v2', 'devforge.utility-native-plan/v999'):
+            with self.subTest(version=version):
+                self.plan['schema_version'] = version
+                with self.assertRaises(native.NativeProcessError):
+                    self.prepare()
+
     def test_interactive_policy_units_must_match_exact_allocation_before_prepare(self):
         policy = {"schema_version": "devforge.native-answer-policy/v1", "steps": [
             {"unit_id": "next", "action": "turn", "text": "Continue"}]}

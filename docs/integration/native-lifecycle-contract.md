@@ -125,3 +125,20 @@ signed under an explicitly named, disposable host-owned test key. Those fixture
 states are test machinery; they establish no actual native/model behavior.
 It does not run an authenticated native campaign, obtain subscription login,
 validate a real effective hook arrangement, or prove native semantic behavior.
+
+
+## Opt-in v2 funding remains unavailable
+
+G3 implements the reviewed v2 conditional selection scheduler, independently
+of native funding. The v2 complete-allocation entrypoint fails before campaign
+binding or reservation because the selected external grant/terminal-ledger,
+already charged non-native completion and cross-session one-use authority
+contracts are unresolved. The collector explicitly refuses v2 and unknown
+native-plan versions; neither can enter its legacy v1 configuration path.
+All legacy collector limits, continuation accounting, callback-origin checks,
+one-use claims and settlement rules retain their existing meaning.
+
+See the [utility consumer boundary](utility-runtime-contract.md#vpr-2-conditional-selection-and-consumer-boundary)
+for the exact G1 contract gap and capability version. Neither synthetic
+selection tests nor retained funding envelope keys establish a new grant,
+clock start, non-native dispatch, native reservation or native observation.

@@ -199,9 +199,30 @@ def _load_contract(path, frozen=None):
     return contract, raw, project
 
 
-def protected_paths(contract):
-    return [Path(row["path"]) for row in contract["gate_inputs"]] + [
+def protected_paths(contract, *, frozen=None):
+    paths = [Path(row["path"]) for row in contract["gate_inputs"]] + [
         Path(row["decision_path"]) for row in contract["questions"] if row["decision_path"] is not None]
+    if contract.get("schema_version") == validation_policy.DELIVERY_SCHEMA:
+        selection = contract["validation_policy"]
+        paths += [store._absolute(selection[key]["path"], "policy protected input")
+                  for key in ("policy_ref", "acceptance_ref", "plan")]
+        _, raw = _pin(selection["plan"], "protected frozen validation plan", frozen)
+        plan = core._json(raw, "protected frozen validation plan")
+        # Enumerate references, not directories to expose in the worker. Profile,
+        # result and state collision checks cover every selected external source.
+        def visit(value):
+            if isinstance(value, dict):
+                if {"path", "sha256"} <= set(value):
+                    paths.append(store._absolute(value["path"], "policy protected reference"))
+                if value.get("review_path") is not None:
+                    paths.append(store._absolute(value["review_path"], "selected graph review destination"))
+                for item in value.values():
+                    visit(item)
+            elif isinstance(value, list):
+                for item in value:
+                    visit(item)
+        visit(plan)
+    return list(dict.fromkeys(paths))
 
 
 def _configuration(session_path, root, *, initial=False, frozen=None):
@@ -254,7 +275,7 @@ def _configuration(session_path, root, *, initial=False, frozen=None):
     mutable = [project / p for p in outputs] + [project / checkpoint] + [
         project / row["archive"] for row in baselines.values() if row["archive"] is not None]
     immutable = [session_path, contract_path, assignment, *installed_paths,
-                 *[project / row["path"] for row in contract["inputs"]], *protected_paths(contract)]
+                 *[project / row["path"] for row in contract["inputs"]], *protected_paths(contract, frozen=frozen)]
     _nonoverlap([*mutable, *immutable], "utility mutable/fixed selection")
     if any(store._collide(root, p) for p in [project, *immutable, Path(__file__).resolve().parent]):
         core._fail("utility state overlaps worker/code/input scope")
@@ -385,8 +406,10 @@ def _gate(raw, spec, cfg, state=None):
             core._fail("gate input cannot cite itself as underlying evidence")
         evidence.append(("gate_evidence", str(path), evidence_raw))
     if spec["id"] == "native-prerequisites" and value["outcome"] == "PASS":
-        plans = [(path, data) for _, path, data in evidence]
-        if len(plans) != 1:
+        selected_plan_paths = {ref["path"] for ref in value["evidence"]}
+        plans = [(path, data) for kind, path, data in evidence
+                 if kind == "gate_evidence" and path in selected_plan_paths]
+        if len(value["evidence"]) != 1 or len(plans) != 1:
             core._fail("native prerequisite PASS requires exactly one complete frozen native plan")
         native, fixed = utility_evidence.native_plan(plans[0][1], cfg["session"]["task_id"], frozen=state.frozen if state else None)
         if is_v2:
@@ -418,10 +441,14 @@ def _native_prerequisites(state):
     if value.get("outcome") != "PASS":
         core._fail("native prerequisites remain unresolved; reporting can continue separately")
     fixed = _gate(raw, spec, state.cfg, state)
-    plans = [(path, data) for kind, path, data in fixed if kind == "gate_evidence"]
-    if len(plans) != 1:
+    selected_plan_paths = {ref["path"] for ref in value["evidence"]}
+    plans = [(path, data) for kind, path, data in fixed
+             if kind == "gate_evidence" and path in selected_plan_paths]
+    if len(value["evidence"]) != 1 or len(plans) != 1:
         core._fail("native plan binding is missing or ambiguous")
     path, plan_raw = plans[0]
+    if state.cfg["contract"]["schema_version"] == validation_policy.DELIVERY_SCHEMA:
+        fixed.extend(state.cfg["validation_policy"].fixed())
     return spec, raw, fixed, {"path": path, "sha256": store._hash(plan_raw)}, core._json(plan_raw, "native plan")
 
 
@@ -429,6 +456,8 @@ def _native_complete_allocation(state, plan):
     """Validate the independent coverage oracle before any campaign binding."""
     allocation, sources = utility_evidence.launch_allocation(plan, frozen=state.frozen)
     for call in allocation["required_calls"]:
+        if call["review_path"] is None:
+            continue
         _native_protected(state, call["review_path"], "native selected review path", plan=plan)
     for _, path, _ in sources:
         _native_protected(state, path, "native complete allocation input", plan=plan)
@@ -681,8 +710,15 @@ class State:
             actual = {(r["kind"], r["source"]): r["sha256"] for r in record["snapshots"]}
             if actual != expected:
                 core._fail("native schedule snapshots differ from the selected prerequisite evidence")
+            options = {}
+            if self.cfg["contract"]["schema_version"] == validation_policy.DELIVERY_SCHEMA:
+                review_gate = next(g for g in self.cfg["contract"]["gate_inputs"] if g["id"] == "independent-review")
+                review_ref = core._json(self.source(review_gate["path"], "admitted T04 gate"), "T04 gate")["evidence"][0]
+                options = {"policy": self.cfg["validation_policy"], "review_ref": review_ref,
+                           "delivery_ref": {"path": self.cfg["session"]["delivery_contract"],
+                                            "sha256": store._hash(self.cfg["contract_raw"])}}
             kernel = utility_schedule.validate(self.blobs[refs[0]["sha256"]], plan, plan_ref,
-                                               self.cfg["session"]["task_id"])
+                                               self.cfg["session"]["task_id"], **options)
             self.schedule = utility_schedule.JournalSchedule(kernel, store._stamp(record["at_utc"], "schedule origin"),
                                                              self.cfg["deadline"])
             self.schedule_plan, self.schedule_plan_ref = plan, plan_ref
