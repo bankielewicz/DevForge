@@ -251,6 +251,8 @@ def install(framework, project, provider, include_experts=False, runtime=None, m
         for path, rel in regular_files(agents):
             planned[f"{dest}/{rel.as_posix()}"] = path.read_bytes()
     adoption = manual_adoption.validate(manual_evidence, planned, project, framework)
+    if adoption is not None and adoption.get("qualification_status") == "UNQUALIFIED" and not manual_experts_only:
+        raise ValueError("local baseline adoption requires --manual-experts-only")
     runtime_evidence = runtime_requirements.probe_runtime(runtime, requirements) if requirements else None
     record_path = safe_destination(project, ".devforge-install.json")
     previous = read_json(record_path) if record_path.exists() else {"schema": 1, "files": {}}
@@ -346,6 +348,8 @@ def install(framework, project, provider, include_experts=False, runtime=None, m
     if requirements:
         result.update(runtime_requirements=requirements,
                       runtime_compatibility="VERIFIED", native_activation="NOT_VERIFIED")
+    if adoption is not None and adoption.get("qualification_status") == "UNQUALIFIED":
+        result.update(qualification_status="UNQUALIFIED", acceptance_status="LOCAL_ACCEPTANCE_SET_PASS")
     return result
 
 

@@ -6,6 +6,7 @@ No candidate code is executed. Runtime-only exports remain unaccepted staging.
 """
 import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
 import re
 
@@ -16,6 +17,11 @@ TASKS = {"P1": ("T01", "T02"), "P2": ("T03",), "P3": ("T04",),
          "P4": ("T05", "T06", "T07", "T08"), "P5": ("T09",),
          "P6": ("T10", "T11", "T12")}
 MAX_BYTES = 32 * 1024 * 1024
+LOCAL_CHECKS = {
+    "package_integrity": "D", "installed_resources": "D", "independent_semantics": "S",
+    "grounded_creation": "N", "reuse": "N", "bounded_enhancement": "N",
+    "missing_evidence_refusal": "N", "creator_to_evaluator": "N", "evaluator_to_creator": "N",
+}
 
 
 def require(condition, reason):
@@ -70,6 +76,7 @@ class Evidence:
     def __init__(self, project, framework):
         self.project, self.framework = project, framework
         self.pins = {}
+        self.source_trees = {}
 
     def pin(self, ref, *, authority=False):
         exact(ref, ("path", "sha256"), "evidence pin")
@@ -108,6 +115,8 @@ class Evidence:
             self.pin(ref)
 
     def recheck(self):
+        for path, files in self.source_trees.items():
+            require(_source_files(Path(path)) == files, "source identity changed before install")
         for path, sha in list(self.pins.items()):
             self.pin({"path": path, "sha256": sha})
 
@@ -170,6 +179,152 @@ def validate(evidence_path, planned, project, framework):
         raise ValueError("manual expert evidence: malformed nested record") from error
 
 
+def _time(value):
+    try:
+        result = datetime.fromisoformat(text(value, "timestamp").replace("Z", "+00:00"))
+        require(result.utcoffset() is not None, "timestamp needs timezone")
+        return result
+    except ValueError as error:
+        raise ValueError("manual expert evidence: invalid timestamp") from error
+
+
+def _source_files(root):
+    files = {}
+    for path in root.rglob("*"):
+        require(not path.is_symlink(), "source identity contains symlink")
+        relative = path.relative_to(root)
+        if path.is_file() and "__pycache__" not in relative.parts and path.suffix != ".pyc":
+            files[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return files
+
+
+def _local_baseline(record, root_pin, packages, evidence):
+    """A separately authorized local claim; never a Routine or Full decision."""
+    fields = ("schema_version", "project_root", "owner", "authorization", "packages",
+              "acceptance_set", "results", "review", "acceptance", "historical_evidence")
+    exact(record, fields, "local baseline record")
+    project, framework = evidence.project, evidence.framework
+    require(record["project_root"] == str(project), "wrong local installation destination")
+    owner = text(record["owner"], "local owner")
+    evidence.pin(record["authorization"], authority=True)
+    evidence.refs(record["historical_evidence"])
+    require(isinstance(record["packages"], list) and len(record["packages"]) == len(NAMES)
+            and {p.get("name") for p in record["packages"]} == set(packages) == NAMES,
+            "local baseline requires both exact manual packages")
+    authors, catalogs = set(), {}
+    for package in record["packages"]:
+        exact(package, ("name", "manifest", "source_manifest", "specification", "cases", "author"), "local package")
+        name = package["name"]
+        authors.add(text(package["author"], "package author"))
+        runtime = evidence.document(package["manifest"])
+        require(runtime == {"schema_version": "devforge.expert-runtime-manifest/v1", "name": name,
+                            "files_sha256": packages[name]}, "local runtime manifest differs from planned bytes")
+        source = evidence.document(package["source_manifest"])
+        root = framework / "providers/codex/plugins/devforgeai/skills" / name
+        exact(source, ("source_root", "files_sha256"), "source manifest")
+        actual = _source_files(root)
+        require(source == {"source_root": str(root), "files_sha256": actual}, "source identity changed")
+        evidence.source_trees[str(root)] = actual
+        for relative, digest in actual.items():
+            evidence.pin({"path": str(root / relative), "sha256": digest})
+        require(package["cases"]["path"] == str(root / "evals/evals.json"), "wrong source case catalog")
+        catalog = evidence.document(package["cases"])
+        cases = catalog.get("cases", catalog.get("evals"))
+        require(isinstance(cases, list) and cases, "missing qualification cases")
+        ids = [text(case.get("id"), "case ID") for case in cases]
+        require(len(ids) == len(set(ids)), "duplicate qualification cases")
+        catalogs[name] = dict.fromkeys(ids, "NOT_RUN")
+        evidence.pin(package["specification"])
+    plan = evidence.document(record["acceptance_set"], authority=True)
+    exact(plan, ("schema_version", "project_root", "owner", "authorization", "packages", "checks",
+                 "frozen_at_utc", "max_seconds", "max_native_turns", "historical_evidence"), "local acceptance set")
+    require(plan["schema_version"] == "devforge.manual-local-acceptance-set/v1", "unsupported local set")
+    require(all(plan[key] == record[key] for key in ("owner", "project_root", "authorization", "packages", "historical_evidence")),
+            "local set authority/identity differs")
+    require(isinstance(plan["checks"], dict) and set(plan["checks"]) == set(LOCAL_CHECKS), "local acceptance check coverage differs")
+    for key, kind in LOCAL_CHECKS.items():
+        check = exact(plan["checks"][key], ("kind", "expectations"), "predefined check")
+        require(check["kind"] == kind and isinstance(check["expectations"], list) and check["expectations"], "acceptance check weakened")
+        for expectation in check["expectations"]:
+            text(expectation, "predefined expectation")
+    require(all(type(plan[key]) is int and plan[key] > 0 for key in ("max_seconds", "max_native_turns")), "unbounded local set")
+    results = evidence.document(record["results"])
+    exact(results, ("schema_version", "acceptance_set", "qualification_status", "checks", "qualification_cases",
+                    "started_at_utc", "finished_at_utc", "native_turns"), "local results")
+    require(results["schema_version"] == "devforge.manual-local-acceptance-results/v1"
+            and results["acceptance_set"] == record["acceptance_set"]
+            and results["qualification_status"] == "UNQUALIFIED", "local result/claim mismatch")
+    require(results["qualification_cases"] == catalogs, "qualification cases must remain complete and NOT_RUN")
+    start, end = _time(results["started_at_utc"]), _time(results["finished_at_utc"])
+    require(_time(plan["frozen_at_utc"]) < start <= end, "acceptance set must be predefined")
+    require((end - start).total_seconds() <= plan["max_seconds"], "local time allowance exceeded")
+    require(type(results["native_turns"]) is int and 0 < results["native_turns"] <= plan["max_native_turns"], "native turn allowance exceeded")
+    require(isinstance(results["checks"], dict) and set(results["checks"]) == set(LOCAL_CHECKS), "local acceptance check coverage differs")
+    observations = set()
+    actors = set()
+    identities = {p["name"]: p["manifest"] for p in record["packages"]}
+    for key, kind in LOCAL_CHECKS.items():
+        result = exact(results["checks"][key], ("outcome", "evidence", "native_observation"), "acceptance check")
+        require(result["outcome"] == "PASS", "required acceptance check did not pass")
+        evidence.refs(result["evidence"])
+        if kind != "N":
+            require(result["native_observation"] is None, "deterministic/semantic check is not native")
+            continue
+        require(result["native_observation"] in result["evidence"], "native observation not bound to check")
+        observation = evidence.document(result["native_observation"])
+        exact(observation, ("schema_version", "acceptance_set", "outcome", "packages", "actor", "native_client", "model",
+                            "reasoning_effort", "state_isolation", "transcript", "artifacts", "started_at_utc",
+                            "finished_at_utc", "manual_transfer"), "native local observation")
+        require(observation["schema_version"] == "devforge.manual-local-observation/v1"
+                and observation["acceptance_set"] == record["acceptance_set"]
+                and observation["packages"] == identities and observation["outcome"] == "PASS"
+                and observation["native_client"] == "codex", "native observation identity/result differs")
+        text(observation["model"], "observed native model")
+        actors.add(text(observation["actor"], "observed native actor"))
+        text(observation["reasoning_effort"], "observed reasoning effort")
+        require(start <= _time(observation["started_at_utc"]) <= _time(observation["finished_at_utc"]) <= end,
+                "observation outside predefined set interval")
+        evidence.pin(observation["state_isolation"])
+        evidence.pin(observation["transcript"])
+        evidence.refs(observation["artifacts"])
+        if key in ("creator_to_evaluator", "evaluator_to_creator"):
+            transfer = exact(observation["manual_transfer"], ("direction", "user", "user_request", "producer_output",
+                             "receiver_observation", "completed_action"), "manual transfer")
+            require(transfer["direction"] == key, "wrong manual transfer direction")
+            text(transfer["user"], "actual receiving user")
+            for field in ("user_request", "producer_output", "receiver_observation", "completed_action"):
+                evidence.pin(transfer[field])
+        evidence.walk(observation)
+        observations.add(result["native_observation"]["path"])
+    require(len(observations) <= results["native_turns"], "native turn count omits observations")
+    review = evidence.document(record["review"], authority=True)
+    exact(review, ("schema_version", "reviewer", "independence_evidence", "overall", "criteria", "acceptance_set",
+                   "packages", "check_judgments"), "local independent review")
+    require(review["schema_version"] == "devforge.manual-local-review/v1"
+            and review["acceptance_set"] == record["acceptance_set"] and review["packages"] == record["packages"]
+            and text(review["reviewer"], "reviewer") not in authors | actors | {owner}, "local independent reviewer mismatch")
+    evidence.pin(review["independence_evidence"])
+    require(review["overall"] == "PASS" and isinstance(review["criteria"], dict)
+            and set(review["criteria"]) == {f"R{i:02}" for i in range(1, 11)}
+            and isinstance(review["check_judgments"], dict) and set(review["check_judgments"]) == set(LOCAL_CHECKS),
+            "local semantic review coverage incomplete")
+    for judgment in [*review["criteria"].values(), *review["check_judgments"].values()]:
+        exact(judgment, ("outcome", "reason", "evidence"), "independent judgment")
+        require(judgment["outcome"] == "PASS", "local independent judgment did not pass")
+        text(judgment["reason"], "judgment reason")
+        evidence.refs(judgment["evidence"])
+    for key, judgment in review["check_judgments"].items():
+        require(all(ref in judgment["evidence"] for ref in results["checks"][key]["evidence"]), "review omits actual acceptance evidence")
+    acceptance = evidence.document(record["acceptance"], authority=True)
+    require(acceptance == {"schema_version": "devforge.manual-local-owner-acceptance/v1", "owner": owner,
+                          "action": "install_unqualified_local_baseline", "qualification_status": "UNQUALIFIED",
+                          "inputs": {key: value for key, value in record.items() if key != "acceptance"},
+                          "observation_basis": "operator-reviewed actual evidence"}, "missing exact local owner acceptance")
+    evidence.recheck()
+    return {"record": root_pin, "owner": owner, "packages": sorted(packages), "predicate": "manual-local-baseline/v1",
+            "qualification_status": "UNQUALIFIED", "acceptance_status": "LOCAL_ACCEPTANCE_SET_PASS", "_evidence": evidence}
+
+
 def _validate(evidence_path, planned, project, framework):
     packages = selected_packages(planned)
     if not packages:
@@ -181,6 +336,8 @@ def _validate(evidence_path, planned, project, framework):
     raw = evidence_path.read_bytes()
     root_pin = {"path": str(evidence_path), "sha256": hashlib.sha256(raw).hexdigest()}
     record = evidence.document(root_pin, authority=True)
+    if record.get("schema_version") == "devforge.manual-expert-local-baseline/v1":
+        return _local_baseline(record, root_pin, packages, evidence)
     exact(record, ("schema_version", "project_root", "owner", "authorization", "packages"), "adoption record")
     require(record["schema_version"] == "devforge.manual-expert-adoption/v1", "unsupported adoption version")
     require(record["project_root"] == str(project), "wrong installation destination")
