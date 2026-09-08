@@ -1,0 +1,15 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "scripts/demo.py",
+    "--framework",
+    "/home/bryan/Projects/DevForge/worktrees/skill-builder-runtime-alignment-20260907"
+  ],
+  "framework_commit": "9970e92db7d824dea0c49e1a61a122480f2aa8b5",
+  "exit_code": 0,
+  "elapsed_seconds": 3.9113748390082037,
+  "log": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/checks-native-02/demo-aligned-framework.log",
+  "sha256": "280df6c6c8cb38520f000b7cdcd46e2bcc617083955c9f9d686db920401d0d32",
+  "scope": "Deterministic fixture demo using committed aligned framework source; no native calls"
+}

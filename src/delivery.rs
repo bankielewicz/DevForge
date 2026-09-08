@@ -183,6 +183,10 @@ const SOURCES: &[(&str, &str)] = &[
         include_str!("../runtime/delivery/native_schedule.py"),
     ),
     (
+        "native_process.py",
+        include_str!("../runtime/delivery/native_process.py"),
+    ),
+    (
         "utility_schedule.py",
         include_str!("../runtime/delivery/utility_schedule.py"),
     ),
@@ -232,6 +236,32 @@ pub enum Action {
     NativeScheduleReserve,
     /// Cancel an unlaunched reservation; never import a native execution grade.
     NativeScheduleCancel {
+        #[arg(long)]
+        attempt: String,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Launch one already reserved attempt using only its frozen runtime configuration.
+    NativeProcessLaunch {
+        #[arg(long)]
+        attempt: String,
+    },
+    /// Import a host-authenticated process receipt; this does not supply a quality grade.
+    NativeProcessImport {
+        #[arg(long)]
+        attempt: String,
+        #[arg(long)]
+        receipt: PathBuf,
+    },
+    /// Import the separately selected independent/operator semantic review.
+    NativeResultReview {
+        #[arg(long)]
+        attempt: String,
+        #[arg(long)]
+        review: PathBuf,
+    },
+    /// Settle an authenticated completed attempt without an available quality grade.
+    NativeResultClose {
         #[arg(long)]
         attempt: String,
         #[arg(long)]
@@ -475,7 +505,11 @@ fn project_for(action: &Action, state: Option<&Path>) -> Result<PathBuf> {
         | Action::NativeAdmission { .. }
         | Action::NativeScheduleBind { .. }
         | Action::NativeScheduleReserve
-        | Action::NativeScheduleCancel { .. } => {
+        | Action::NativeScheduleCancel { .. }
+        | Action::NativeProcessLaunch { .. }
+        | Action::NativeProcessImport { .. }
+        | Action::NativeResultReview { .. }
+        | Action::NativeResultClose { .. } => {
             let root = state.context("FAIL: --state is required")?;
             let manifest = read_json(&root.join("MANIFEST.json"))?;
             let project = field_path(&manifest, "project_root")?;
@@ -790,6 +824,10 @@ fn operate(action: &Action, state: Option<&Path>) -> Result<Outcome> {
         Action::NativeScheduleBind { .. } => "native-schedule-bind",
         Action::NativeScheduleReserve => "native-schedule-reserve",
         Action::NativeScheduleCancel { .. } => "native-schedule-cancel",
+        Action::NativeProcessLaunch { .. } => "native-process-launch",
+        Action::NativeProcessImport { .. } => "native-process-import",
+        Action::NativeResultReview { .. } => "native-result-review",
+        Action::NativeResultClose { .. } => "native-result-close",
         Action::Advance => "advance",
         Action::Resume => "resume",
         Action::Complete => "complete",
@@ -814,6 +852,24 @@ fn operate(action: &Action, state: Option<&Path>) -> Result<Outcome> {
     }
     if let Action::NativeAdmission { attempt } = action {
         controller.arg("--attempt").arg(attempt);
+    }
+    match action {
+        Action::NativeProcessLaunch { attempt }
+        | Action::NativeProcessImport { attempt, .. }
+        | Action::NativeResultReview { attempt, .. }
+        | Action::NativeResultClose { attempt, .. } => {
+            controller.arg("--attempt").arg(attempt);
+        }
+        _ => {}
+    }
+    if let Action::NativeProcessImport { receipt, .. } = action {
+        controller.arg("--receipt").arg(checked_path(receipt)?);
+    }
+    if let Action::NativeResultReview { review, .. } = action {
+        controller.arg("--review").arg(checked_path(review)?);
+    }
+    if let Action::NativeResultClose { reason, .. } = action {
+        controller.arg("--reason").arg(reason);
     }
     if let Action::NativeScheduleBind { schedule } = action {
         controller.arg("--schedule").arg(checked_path(schedule)?);
@@ -918,6 +974,9 @@ pub fn main(action: &Action, state: Option<&Path>) {
                 "utility_session_schema": "devforge.utility-session/v1",
                 "utility_native_schedule_schema": "devforge.utility-native-schedule/v1",
                 "native_execution_enabled": false,
+                "native_process_interface": "EXPLICIT_FROZEN_CONFIGURATION_REQUIRED",
+                "native_process_receipt_schema": "devforge.native-process-receipt/v1",
+                "native_semantic_review": "SEPARATE_SELECTED_OPERATOR_OR_INDEPENDENT_REVIEW",
                 "mechanical_scope": "phase evidence and persisted artifact verification; no semantic acceptance"
             })
         );

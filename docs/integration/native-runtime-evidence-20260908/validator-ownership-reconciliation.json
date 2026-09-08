@@ -1,0 +1,24 @@
+{
+  "schema_version": "devforge.ownership-reconciliation/v1",
+  "ruling": "Bounded edit reservation release is settled. Later alignment is authorized against a completed reviewed interface; candidate/runtime validation and acceptance remain separate.",
+  "release": {
+    "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-continuation-20260907T165107Z/validator-release-checkpoint.json",
+    "sha256": "1dc7ec076e1e438b6ec16c2f82fa1841d3ab7336f45876c487d0768dcb44874e"
+  },
+  "later_stale_root_statements": [
+    {
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-journal-integration-20260907T231223422364Z/native-evaluation-proposal.json",
+      "sha256": "8e2f9a7f765f6ab715cdc06e99089d9ba718d20a6e94d2c9f4b501430162e0dc",
+      "disposition": "Incorrect carried-forward ownership status; not evidence of a new reservation. Original bytes retained."
+    },
+    {
+      "path": "/home/bryan/Projects/DevForge/worktrees/skill-utilities-runtime-continuation-20260907T220803638693Z/docs/integration/runtime-continuation-assignment-20260907.json",
+      "sha256": "57d75e63f636fd633682683c24a35ced4b88a441ad9501d4e15622268d29eb5a",
+      "disposition": "Incorrect carried-forward ownership status; not evidence of a new reservation. Original bytes retained."
+    }
+  ],
+  "current_canonical_head": "a78b9bff83c090153952b31b84b0584ef1650f02",
+  "target_tracked_status": "",
+  "newer_owner_change": "No newer reservation found in available release/assignment/history records. Later root statements do not supersede the explicit release.",
+  "user_decision_repeated": false
+}

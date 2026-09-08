@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,8 @@ def _guard(function):
         except OSError as error:
             return _result("COULD_NOT_RUN", issues=[f"Filesystem prerequisite unavailable: {error}"])
         except (ValueError, TypeError, KeyError, IndexError, OverflowError, RecursionError, UnicodeError) as error:
+            if type(error).__name__ == "NativeProcessError":
+                return _result("COULD_NOT_RUN", issues=[str(error)])
             return _result("FAIL", issues=[f"Malformed utility input/state: {type(error).__name__}"])
     call.__name__, call.__doc__ = function.__name__, function.__doc__
     return call
@@ -62,16 +65,16 @@ def _list(value, label, *, nonempty=False):
     return value
 
 
-def _json_file(path, label, limit=LIMIT):
-    raw = store._external(path, limit, label)
+def _json_file(path, label, limit=LIMIT, frozen=None):
+    raw = frozen[str(path)] if frozen is not None else store._external(path, limit, label)
     return core._json(raw, label), raw
 
 
-def _pin(entry, label):
+def _pin(entry, label, frozen=None):
     core._exact(entry, {"path", "sha256"}, label)
     path = store._absolute(entry["path"], label)
     core._digest(entry["sha256"], label)
-    raw = store._external(path, LIMIT, label)
+    raw = frozen[str(path)] if frozen is not None else store._external(path, LIMIT, label)
     if store._hash(raw) != entry["sha256"]:
         core._fail(f"{label}: selected bytes changed")
     return path, raw
@@ -83,9 +86,9 @@ def _nonoverlap(paths, label):
             core._fail(f"{label}: colliding paths")
 
 
-def _load_contract(path):
+def _load_contract(path, frozen=None):
     path = store._absolute(path, "utility delivery contract")
-    contract, raw = _json_file(path, "utility delivery contract")
+    contract, raw = _json_file(path, "utility delivery contract", frozen=frozen)
     core._exact(contract, {"schema_version", "task_id", "project_root", "workflow", "mode",
                            "inputs", "outputs", "phases", "gate_inputs", "questions"}, "utility delivery contract")
     if contract["schema_version"] != DELIVERY_SCHEMA or contract["workflow"] not in PHASES:
@@ -197,9 +200,9 @@ def protected_paths(contract):
         Path(row["decision_path"]) for row in contract["questions"] if row["decision_path"] is not None]
 
 
-def _configuration(session_path, root, *, initial=False):
+def _configuration(session_path, root, *, initial=False, frozen=None):
     session_path, root = store._absolute(session_path, "session"), store._absolute(root, "state")
-    session, raw = _json_file(session_path, "utility session", store.SESSION_LIMIT)
+    session, raw = _json_file(session_path, "utility session", store.SESSION_LIMIT, frozen)
     core._exact(session, store._SESSION_KEYS, "utility session")
     if session["schema_version"] != SESSION_SCHEMA or session["provider"] != "codex":
         core._fail("utility session requires selected Codex schema")
@@ -207,17 +210,17 @@ def _configuration(session_path, root, *, initial=False):
         core._fail("correction budget must be an integer in [0,3]")
     deadline = store._stamp(session["deadline_utc"], "utility deadline")
     contract_path = store._absolute(session["delivery_contract"], "delivery path")
-    contract, contract_raw, project = _load_contract(contract_path)
+    contract, contract_raw, project = _load_contract(contract_path, frozen)
     if session["delivery_contract_sha256"] != store._hash(contract_raw) or session["task_id"] != contract["task_id"]:
         core._fail("utility session/delivery binding differs")
-    assignment, assignment_raw = _pin(session["assignment"], "utility assignment")
+    assignment, assignment_raw = _pin(session["assignment"], "utility assignment", frozen)
     if core._within(assignment, project) or core._within(session_path, project):
         core._fail("utility authority must be outside worker project")
     fixed = [("session", str(session_path), raw), ("delivery", str(contract_path), contract_raw),
              ("assignment", str(assignment), assignment_raw)]
     installed_paths = []
     for entry in _list(session["installed_inputs"], "installed inputs", nonempty=True):
-        path, value = _pin(entry, "installed input")
+        path, value = _pin(entry, "installed input", frozen)
         installed_paths.append(path)
         fixed.append(("installed", str(path), value))
     _nonoverlap(installed_paths, "installed files")
@@ -248,7 +251,8 @@ def _configuration(session_path, root, *, initial=False):
     if any(store._collide(receipt, p) for p in [project, *immutable, Path(__file__).resolve().parent]):
         core._fail("utility receipt overlaps worker/code/input scope")
     if core._within(receipt, root):
-        if receipt.relative_to(root).parts[0] in {"LOCK", "MANIFEST.json", "HEAD.json", "records", "snapshots", "pending"}:
+        if receipt.relative_to(root).parts[0] in {"LOCK", "MANIFEST.json", "HEAD.json", "records", "snapshots", "pending",
+                                                 "native-collector", "native-launch-requests"}:
             core._fail("receipt collides with protected journal")
     elif store._collide(receipt, root):
         core._fail("receipt is an ancestor of state")
@@ -259,7 +263,8 @@ def _configuration(session_path, root, *, initial=False):
     preimages = {}
     with core._directory(project, "utility project") as fd:
         for row in contract["inputs"]:
-            value = store._read_at(fd, row["path"], LIMIT, "utility fixed input")
+            value = (frozen[str(project / row["path"])] if frozen is not None else
+                     store._read_at(fd, row["path"], LIMIT, "utility fixed input"))
             if store._hash(value) != row["sha256"]:
                 core._fail("utility fixed input changed")
             fixed.append(("input", str(project / row["path"]), value))
@@ -272,7 +277,7 @@ def _configuration(session_path, root, *, initial=False):
                     core._fail("prelaunch output differs from selected baseline")
                 if value is not None:
                     preimages[rel] = value
-            if row["archive"] is not None:
+            if row["archive"] is not None and frozen is None:
                 value = store._read_at(fd, row["archive"], LIMIT, "output archive", optional=initial)
                 if value is not None and store._hash(value) != row["sha256"]:
                     core._fail("output preimage archive changed")
@@ -326,7 +331,7 @@ def _structured(raw, spec):
     inspect(value)
 
 
-def _gate(raw, spec, cfg):
+def _gate(raw, spec, cfg, state=None):
     value = core._json(raw, "external utility gate input")
     core._exact(value, {"schema_version", "task_id", "phase", "producer", "inputs_sha256",
                         "outcome", "reason", "evidence"}, "external utility gate input")
@@ -337,11 +342,13 @@ def _gate(raw, spec, cfg):
     if value["outcome"] not in spec["allowed_outcomes"]:
         core._fail("gate outcome does not admit the selected dependent action")
     if spec["id"] in {"native-C", "native-B", "native-A"} and value["outcome"] in {"PASS", "FAIL"}:
-        core._fail("native executed outcomes require an authenticated result importer, which is not implemented")
+        if state is None:
+            core._fail("native executed outcomes require an authenticated result importer")
+        state.check_native_gate(spec, value)
     core._text(value["reason"], "gate scope/reason")
     evidence = []
     for ref in _list(value["evidence"], "gate underlying evidence", nonempty=True):
-        path, evidence_raw = _pin(ref, "gate underlying evidence")
+        path, evidence_raw = _pin(ref, "gate underlying evidence", state.frozen if state else None)
         if str(path) == spec["path"]:
             core._fail("gate input cannot cite itself as underlying evidence")
         evidence.append(("gate_evidence", str(path), evidence_raw))
@@ -349,7 +356,7 @@ def _gate(raw, spec, cfg):
         plans = [(path, data) for _, path, data in evidence]
         if len(plans) != 1:
             core._fail("native prerequisite PASS requires exactly one complete frozen native plan")
-        _, fixed = utility_evidence.native_plan(plans[0][1], cfg["session"]["task_id"])
+        _, fixed = utility_evidence.native_plan(plans[0][1], cfg["session"]["task_id"], frozen=state.frozen if state else None)
         evidence.extend(fixed)
     return evidence
 
@@ -360,7 +367,7 @@ def _prior_native_gates(state):
                       if row["id"] == identity and row["phase"] == phase), None)
         if prior is None or prior["path"] not in state.gates:
             core._fail("native scheduling lacks prior independent gate input " + identity)
-        raw = store._external(Path(prior["path"]), LIMIT, "prior native gate")
+        raw = state.source(prior["path"], "prior native gate")
         if core._json(raw, "prior native gate").get("outcome") != "PASS":
             core._fail("prior native gate remains failed or unavailable: " + identity)
 
@@ -370,11 +377,11 @@ def _native_prerequisites(state):
         core._fail("native scheduling requires active validator P4 after independent inspection/review")
     _prior_native_gates(state)
     spec = next(row for row in state.cfg["contract"]["gate_inputs"] if row["id"] == "native-prerequisites")
-    raw = store._external(Path(spec["path"]), LIMIT, "native prerequisite gate")
+    raw = state.source(spec["path"], "native prerequisite gate")
     value = core._json(raw, "native prerequisite gate")
     if value.get("outcome") != "PASS":
         core._fail("native prerequisites remain unresolved; reporting can continue separately")
-    fixed = _gate(raw, spec, state.cfg)
+    fixed = _gate(raw, spec, state.cfg, state)
     plans = [(path, data) for kind, path, data in fixed if kind == "gate_evidence"]
     if len(plans) != 1:
         core._fail("native plan binding is missing or ambiguous")
@@ -382,20 +389,35 @@ def _native_prerequisites(state):
     return spec, raw, fixed, {"path": path, "sha256": store._hash(plan_raw)}, core._json(plan_raw, "native plan")
 
 
+def _native_complete_allocation(state, plan):
+    """Validate the independent coverage oracle before any campaign binding."""
+    allocation, sources = utility_evidence.launch_allocation(plan, frozen=state.frozen)
+    for call in allocation["required_calls"]:
+        _native_protected(state, call["review_path"], "native selected review path", plan=plan)
+    for _, path, _ in sources:
+        _native_protected(state, path, "native complete allocation input", plan=plan)
+    return allocation, sources
+
+
 class State:
-    def __init__(self, root, fd):
+    def __init__(self, root, fd, *, cleanup=False):
         self.root, self.fd = root, fd
         self.manifest, manifest_raw = store._json_at(fd, "MANIFEST.json", "utility manifest")
         core._exact(self.manifest, {"schema_version", "state_root", "session_path", "session_sha256",
                                    "task_id", "project_root", "started_at_utc", "snapshots"}, "utility manifest")
         if self.manifest["schema_version"] != STATE_SCHEMA or self.manifest["state_root"] != str(root):
             core._fail("utility manifest identity mismatch")
-        self.cfg = _configuration(Path(self.manifest["session_path"]), root)
+        self.blobs = store._object_directory(fd, "snapshots", ".bin", max(LIMIT, store.INSTALLED_LIMIT))
+        self.frozen = {} if cleanup else None
+        if cleanup:
+            for ref in self.manifest["snapshots"]:
+                store._validate_ref(ref, self.blobs)
+                self.frozen[ref["source"]] = self.blobs[ref["sha256"]]
+        self.cfg = _configuration(Path(self.manifest["session_path"]), root, frozen=self.frozen)
         if (store._hash(self.cfg["raw"]) != self.manifest["session_sha256"]
                 or self.manifest["task_id"] != self.cfg["session"]["task_id"]
                 or self.manifest["project_root"] != str(self.cfg["project"])):
             core._fail("selected utility session changed")
-        self.blobs = store._object_directory(fd, "snapshots", ".bin", max(LIMIT, store.INSTALLED_LIMIT))
         for ref in self.manifest["snapshots"]:
             store._validate_ref(ref, self.blobs)
         pins = {(kind, source): store._hash(raw) for kind, source, raw in self.cfg["fixed"]}
@@ -413,6 +435,10 @@ class State:
         self.accepted, self.gates, self.questions, self.nonces = {}, {}, {}, set()
         self.native_attempts = {}
         self.schedule = None
+        self.schedule_allocation = None
+        self.native_claims, self.native_imports, self.native_reviews = {}, {}, {}
+        self.reservation_refs = {}
+        self.schedule_plan, self.schedule_plan_ref = None, None
         self.gate_outcomes = {}
         self.pending, self.intent, self.receipt = None, None, None
         self.corrections, self.issues, self.last_time = 0, [], store._stamp(self.manifest["started_at_utc"], "start time")
@@ -426,12 +452,17 @@ class State:
             if row["sequence"] != index or row["previous"] != (self.head["records"][index - 1] if index else None):
                 core._fail("utility journal chain mismatch")
             stamp = store._stamp(row["at_utc"], "utility record time")
-            if stamp < self.last_time or stamp >= self.cfg["deadline"] and row["operation"] != "native_schedule_cancel":
+            if stamp < self.last_time or stamp >= self.cfg["deadline"] and row["operation"] not in {"native_schedule_cancel", "native_process_import", "native_result_close"}:
                 core._fail("utility journal time violates original deadline")
             self.last_time = stamp
             for ref in row["snapshots"]:
                 store._validate_ref(ref, self.blobs)
+                if self.frozen is not None:
+                    self.frozen[ref["source"]] = self.blobs[ref["sha256"]]
             self._apply(row)
+            self._retain_reservation_ref(row, digest)
+        if cleanup:
+            return
         for relative, digest in self.accepted.items():
             with core._directory(self.cfg["project"], "utility current outputs") as project_fd:
                 raw = store._read_at(project_fd, relative, LIMIT, "accepted output")
@@ -444,6 +475,14 @@ class State:
         receipt = store._external(self.cfg["receipt"], LIMIT, "utility receipt", optional=True)
         if receipt is not None and self.intent is None:
             core._fail("receipt collision without protected publication intent")
+
+    def source(self, path, label):
+        return self.frozen[str(path)] if self.frozen is not None else store._external(Path(path), LIMIT, label)
+
+    def _retain_reservation_ref(self, record, digest):
+        if record["operation"] == "native_schedule_reserve" and self.schedule.inflight():
+            identity = self.schedule.state.reservations[-1].attempt_id
+            self.reservation_refs.setdefault(identity, {"sha256": digest, "challenge": self.challenge})
 
     def _nonce(self, nonce):
         store._nonce_value(nonce)
@@ -560,7 +599,7 @@ class State:
             refs = [ref for ref in record["snapshots"] if ref["kind"] == "native_plan"]
             if len(refs) != 1:
                 core._fail("native admission lacks a complete frozen plan")
-            plan, _ = utility_evidence.native_plan(self.blobs[refs[0]["sha256"]], self.cfg["session"]["task_id"])
+            plan, _ = utility_evidence.native_plan(self.blobs[refs[0]["sha256"]], self.cfg["session"]["task_id"], frozen=self.frozen)
             matches = [row for row in plan["attempts"] if row["attempt_id"] == data["attempt_id"]]
             if len(matches) != 1:
                 core._fail("native attempt is outside the selected plan")
@@ -574,7 +613,7 @@ class State:
             gate_raw = self.blobs[gate_refs[0]["sha256"]]
             if core._json(gate_raw, "native prerequisite gate").get("outcome") != "PASS":
                 core._fail("native admission cannot consume failed prerequisites")
-            fixed = _gate(gate_raw, gate_spec, self.cfg)
+            fixed = _gate(gate_raw, gate_spec, self.cfg, self)
             by_source = {(ref["kind"], ref["source"]): ref for ref in record["snapshots"]}
             for kind, path, raw in fixed:
                 expected = by_source.get((kind, path))
@@ -589,6 +628,8 @@ class State:
             if self.schedule is not None or self.native_attempts:
                 core._fail("native schedule binding is exclusive and cannot reset prior reservations")
             spec, gate_raw, fixed, plan_ref, plan = _native_prerequisites(self)
+            _, allocation_sources = _native_complete_allocation(self, plan)
+            fixed.extend(allocation_sources)
             refs = [r for r in record["snapshots"] if r["kind"] == "schedule_binding"]
             if len(refs) != 1:
                 core._fail("native schedule lacks its one frozen dependency binding")
@@ -608,13 +649,16 @@ class State:
                                                self.cfg["session"]["task_id"])
             self.schedule = utility_schedule.JournalSchedule(kernel, store._stamp(record["at_utc"], "schedule origin"),
                                                              self.cfg["deadline"])
+            self.schedule_plan, self.schedule_plan_ref = plan, plan_ref
+            self.schedule_allocation = next({"path": path, "sha256": store._hash(raw)}
+                                            for kind, path, raw in allocation_sources if kind == "native_allocation")
             for (_, path), digest in expected.items():
                 self.gates[path] = digest
             self._nonce(data["next_challenge"])
         elif op == "native_schedule_reserve":
             core._exact(data, {"next_challenge"}, "native schedule reservation")
-            if self.schedule is None or self.phase != "P4" or self.status != "ACTIVE":
-                core._fail("native schedule reservation requires a bound active P4 schedule")
+            if self.schedule is None or self.schedule_allocation is None or self.phase != "P4" or self.status != "ACTIVE":
+                core._fail("native schedule reservation requires a complete bound allocation and active P4 schedule")
             self.schedule.reserve(store._stamp(record["at_utc"], "schedule reservation time"))
             self._nonce(data["next_challenge"])
         elif op == "native_schedule_cancel":
@@ -622,7 +666,11 @@ class State:
             core._text(data["reason"], "cancellation reason")
             if self.schedule is None or self.phase != "P4":
                 core._fail("cancellation requires a bound P4 schedule")
+            if data["attempt_id"] in self.native_claims:
+                core._fail("a claimed launch cannot be cancelled as unlaunched; authenticate process cleanup")
             self.schedule.cancel_unlaunched(data["attempt_id"], store._stamp(record["at_utc"], "cancellation time"))
+        elif op in {"native_process_claim", "native_process_import", "native_result_review", "native_result_close"}:
+            self._native_apply(record)
         elif op == "completion_intent":
             core._exact(data, {"receipt_sha256"}, "utility completion intent")
             if self.status != "READY" or self.intent is not None:
@@ -640,6 +688,127 @@ class State:
         else:
             core._fail("unknown utility operation")
         self.sequence = record["sequence"]
+
+    def native_inflight(self, attempt_id, *, cleanup=False):
+        if (self.schedule is None or self.phase != "P4" or not cleanup and self.status != "ACTIVE"
+                or not self.schedule.inflight() or self.schedule.state.reservations[-1].attempt_id != attempt_id):
+            core._fail("native lifecycle requires the exact unsettled protected reservation")
+        return self.schedule.state.reservations[-1]
+
+    def native_binding(self, attempt_id):
+        self.native_inflight(attempt_id)
+        ref = self.reservation_refs[attempt_id]
+        return {"task_id": self.cfg["session"]["task_id"], "attempt_id": attempt_id,
+                "plan_sha256": self.schedule_plan_ref["sha256"], "schedule_binding": self.schedule.kernel.binding,
+                "reservation_sha256": ref["sha256"], "challenge": ref["challenge"]}
+
+    def _native_apply(self, record):
+        op, data = record["operation"], record["data"]
+        identity = data.get("attempt_id")
+        row = self.native_inflight(identity, cleanup=op in {"native_process_import", "native_result_close"})
+        stamp = store._stamp(record["at_utc"], "native lifecycle time")
+        elapsed = (stamp - self.schedule.origin).total_seconds()
+        if op == "native_process_claim":
+            core._exact(data, {"attempt_id", "next_challenge"}, "native process claim")
+            if identity in self.native_claims or elapsed >= row.deadline:
+                core._fail("native launch claim is repeated or its original deadline expired")
+            refs = [r for r in record["snapshots"] if r["kind"] == "native_launch_request"]
+            if len(refs) != 1:
+                core._fail("native launch claim lacks the frozen host launch request")
+            request = core._json(self.blobs[refs[0]["sha256"]], "native launch request")
+            if any(request["binding"].get(k) != v for k, v in self.native_binding(identity).items()):
+                core._fail("native launch request differs from original reservation/plan/challenge")
+            allocation_refs = [r for r in record["snapshots"] if r["kind"] == "native_allocation"]
+            if len(allocation_refs) != 1:
+                core._fail("native launch claim lacks complete immutable call allocation")
+            allocation = core._json(self.blobs[allocation_refs[0]["sha256"]], "complete native allocation")
+            selected = [a for a in allocation["required_calls"] if a["attempt_id"] == identity]
+            if len(selected) != 1:
+                core._fail("native launch lacks selected independent/operator review authority")
+            self.native_claims[identity] = {"request": request, "allocation": selected[0], "request_sha256": refs[0]["sha256"]}
+            for ref in record["snapshots"]:
+                if ref["kind"] != "native_launch_request":
+                    self.gates[ref["source"]] = ref["sha256"]
+            self._nonce(data["next_challenge"])
+            return
+        claim = self.native_claims.get(identity)
+        if claim is None:
+            core._fail("native result has no protected one-use launch claim")
+        if op == "native_process_import":
+            core._exact(data, {"attempt_id", "source_intact"}, "native process import")
+            if type(data["source_intact"]) is not bool or identity in self.native_imports:
+                core._fail("native process receipt is replayed or source identity is malformed")
+            refs = [r for r in record["snapshots"] if r["kind"] == "native_process_receipt"]
+            if len(refs) != 1:
+                core._fail("native result import requires one authenticated collector receipt")
+            ref = refs[0]
+            path = store._absolute(ref["source"], "native process receipt")
+            authority = self.root / "native-collector"
+            if not core._within(path, authority):
+                core._fail("native receipt is outside the selected host collector authority")
+            body = _native_collector().verify_receipt(authority, path, claim["request"]["binding"])
+            if store._hash(store._external(path, LIMIT, "authenticated native receipt")) != ref["sha256"]:
+                core._fail("native receipt differs from protected imported bytes")
+            if body.get("provenance") != "OWNED_NATIVE_COLLECTOR":
+                core._fail("fixture or foreign receipt cannot establish native execution")
+            process = body["process"]
+            started, finished = process.get("started_elapsed_seconds"), process.get("finished_elapsed_seconds")
+            if (any(type(value) not in (int, float) or not math.isfinite(value) for value in (started, finished))
+                    or not row.reserved_at <= started <= finished <= elapsed
+                    or process.get("deadline_elapsed_seconds") != row.deadline
+                    or body.get("campaign_origin_utc") != self.schedule.origin.isoformat()
+                    or body.get("request_sha256") != _native_collector().digest(
+                        _native_collector().canonical_json(claim["request"]))):
+                core._fail("native process timing/request differs from its original reservation and import clock")
+            if process.get("leader_reaped") is not True or process.get("group_absent") is not True:
+                core._fail("native process cleanup is unproven; reservation remains unsettled")
+            eligible = (_native_grade_eligible(body, claim["allocation"].get("managed_worker_required", True))
+                        and data["source_intact"] and elapsed < row.deadline
+                        and self.status == "ACTIVE" and stamp < self.cfg["deadline"])
+            self.native_imports[identity] = {"path": str(path), "sha256": ref["sha256"], "eligible": eligible,
+                                             "body": body}
+            if not eligible:
+                outcome = "TIMED_OUT" if elapsed >= row.deadline or process.get("status") == "TIMED_OUT" else "COULD_NOT_RUN"
+                integrity = "CONTAMINATED" if not data["source_intact"] or body["freshness"].get("status") != "INTACT" else "UNOBTAINABLE"
+                self.schedule.record(identity, outcome, integrity, stamp)
+            return
+        imported = self.native_imports.get(identity)
+        if imported is None or not imported["eligible"]:
+            core._fail("native review/closure requires a prior authenticated intact process receipt")
+        if op == "native_result_close":
+            core._exact(data, {"attempt_id", "reason"}, "native result closure")
+            core._text(data["reason"], "native result closure reason")
+            self.schedule.record(identity, "TIMED_OUT" if elapsed >= row.deadline else "COULD_NOT_RUN", "UNOBTAINABLE", stamp)
+            return
+        core._exact(data, {"attempt_id"}, "native independent review")
+        refs = [r for r in record["snapshots"] if r["kind"] == "native_review"]
+        selected = claim["allocation"]
+        if len(refs) != 1 or refs[0]["source"] != selected["review_path"]:
+            core._fail("native result review must use its frozen selected external reviewer path")
+        review = utility_evidence.semantic_review(self.blobs[refs[0]["sha256"]], task_id=self.cfg["session"]["task_id"],
+                                                 attempt_id=identity, receipt_sha256=imported["sha256"],
+                                                 binding=claim["request"]["binding"], reviewer=selected["reviewer"])
+        expected = {ref["path"]: ref["sha256"] for ref in review["evidence"]}
+        actual = {ref["source"]: ref["sha256"] for ref in record["snapshots"] if ref["kind"] == "native_review_evidence"}
+        if expected != actual or len(expected) != len(review["evidence"]):
+            core._fail("native review evidence must have exact independent pinned snapshot coverage")
+        self.schedule.record(identity, review["outcome"], "INTACT", stamp)
+        self.native_reviews[identity] = {"path": refs[0]["source"], "sha256": refs[0]["sha256"], "outcome": review["outcome"]}
+        for ref in record["snapshots"]:
+            self.gates[ref["source"]] = ref["sha256"]
+
+    def check_native_gate(self, spec, value):
+        tier = spec["id"].removeprefix("native-")
+        attempts = [a.attempt_id for a in self.schedule.kernel.attempts if a.tier == tier] if self.schedule else []
+        if not attempts or any(a not in self.native_reviews for a in attempts):
+            core._fail("native tier outcome lacks exact authenticated result importer coverage and independent reviews")
+        expected = [{"path": row["path"], "sha256": row["sha256"]}
+                    for identity in attempts for row in (self.native_imports[identity], self.native_reviews[identity])]
+        if value["evidence"] != expected:
+            core._fail("native gate evidence differs from complete imported tier receipt/review coverage")
+        outcome = "PASS" if all(self.native_reviews[a]["outcome"] == "PASS" for a in attempts) else "FAIL"
+        if value["outcome"] != outcome:
+            core._fail("native gate outcome disagrees with separately imported independent reviews")
 
     def _check_snapshot_evidence(self, snapshots, checkpoint):
         by_kind = {(r["kind"], r["source"]): r for r in snapshots}
@@ -663,7 +832,7 @@ class State:
             ref = by_kind.get(("gate", spec["path"]))
             if ref is None:
                 core._fail("allocated producer gate evidence snapshot missing")
-            for kind, path, raw in _gate(self.blobs[ref["sha256"]], spec, self.cfg):
+            for kind, path, raw in _gate(self.blobs[ref["sha256"]], spec, self.cfg, self):
                 underlying = by_kind.get((kind, path))
                 if underlying is None or underlying["sha256"] != store._hash(raw):
                     core._fail("underlying gate evidence snapshot missing")
@@ -687,7 +856,7 @@ class State:
         now = store._now()
         if now < self.last_time:
             core._fail("utility operation clock moved behind its journal high-water mark")
-        if operation != "native_schedule_cancel":
+        if operation not in {"native_schedule_cancel", "native_process_import", "native_result_close"}:
             store._before_deadline(now, self.cfg["deadline"])
         if len(self.head["records"]) >= MAX_RECORDS:
             core._fail("utility journal budget exhausted")
@@ -704,6 +873,7 @@ class State:
         store._publish(self.fd, "records/" + digest + ".json", raw)
         self.head["records"].append(digest)
         store._publish(self.fd, "HEAD.json", store._dump(self.head), replace=True)
+        self._retain_reservation_ref(record, digest)
 
     def _receipt_content(self, raw):
         value = core._json(raw, "utility receipt")
@@ -734,6 +904,15 @@ class State:
             result.update(question=self.pending["question"], question_id=self.pending["id"], blocking_dependency=self.pending["blocking_dependency"])
         if self.schedule is not None:
             result["native_schedule"] = self.schedule.view(store._now())
+            result["native_schedule"]["complete_allocation"] = self.schedule_allocation
+            if self.native_claims:
+                result["native_execution"] = "SEE_AUTHENTICATED_PROCESS_RECEIPTS" if self.native_imports else "NOT_ESTABLISHED_BY_RECEIPT"
+                result["native_schedule"].update(
+                    execution="AUTHENTICATED_PROCESS_IMPORTED" if self.native_imports else "LAUNCH_CLAIMED",
+                    launch_claims=sorted(self.native_claims), imported_attempts=sorted(self.native_imports),
+                    reviewed_attempts=sorted(self.native_reviews), native_callback_authentication="NOT_EVALUATED",
+                    rendered_delivery="NOT_OBSERVED", receiving_execution="NOT_OBSERVED",
+                    semantic_review_quality="NOT_EVALUATED")
         if self.status == "COMPLETED":
             result.update(receipt_path=str(self.cfg["receipt"]), receipt_sha256=self.receipt,
                           receipt_published=True, receipt_readback=True, receipt_verified=True)
@@ -835,7 +1014,7 @@ def advance(state_root):
                 if spec["phase"] == state.phase:
                     value = store._external(Path(spec["path"]), LIMIT, "utility gate input")
                     sources.append(("gate", spec["path"], value))
-                    sources.extend(_gate(value, spec, state.cfg))
+                    sources.extend(_gate(value, spec, state.cfg, state))
             # Snapshots are checked before the atomic HEAD commit; later admissions recheck current bytes.
             state.append("accepted", {"next_challenge": None if state.phase == state.phases[-1] else store._fresh(state)}, sources)
             return state.view("READY" if state.status == "READY" else "PROGRESS")
@@ -966,7 +1145,9 @@ def native_schedule_bind(state_root, schedule_path):
         state = State(root, fd)
         if state.schedule is not None or state.native_attempts:
             core._fail("native schedule binding is exclusive and cannot reset prior reservations")
-        spec, raw, fixed, _, _ = _native_prerequisites(state)
+        spec, raw, fixed, _, plan = _native_prerequisites(state)
+        _, allocation_sources = _native_complete_allocation(state, plan)
+        fixed.extend(allocation_sources)
         binding_raw = store._external(path, LIMIT, "native schedule binding")
         state.append("native_schedule_bind", {"next_challenge": store._fresh(state)},
                      [("schedule_binding", str(path), binding_raw), ("native_gate", spec["path"], raw), *fixed])
@@ -993,3 +1174,143 @@ def native_schedule_cancel(state_root, attempt_id, reason):
         state = State(root, fd)
         state.append("native_schedule_cancel", {"attempt_id": attempt_id, "reason": reason})
         return State(root, fd).view("NATIVE_UNLAUNCHED_CANCELLED")
+
+
+def _native_collector():
+    try:
+        from . import native_process
+    except ImportError:
+        import native_process
+    return native_process
+
+
+def _native_grade_eligible(body, managed_worker_required=False):
+    """Pure evidence-shape predicate; this authenticates no receipt or provenance."""
+    process = body["process"]
+    worker = body.get("managed_worker", {})
+    if managed_worker_required and (worker.get("required") is not True or worker.get("status") != "COMPLETED"
+                                    or worker.get("broker_quiescent") is not True
+                                    or not isinstance(worker.get("task_result"), dict)
+                                    or worker["task_result"].get("receipt_verified") is not True):
+        return False
+    return (process.get("status") == "EXITED" and process.get("exit_code") == 0
+            and process.get("leader_reaped") is True and process.get("group_absent") is True
+            and process.get("stdout_complete") is True and process.get("stderr_complete") is True
+            and process.get("output_limit_exceeded") is False and body["events"].get("status") == "OBSERVED"
+            and body["freshness"].get("status") == "INTACT")
+
+
+def _native_protected(state, path, label, *, plan=None):
+    path = store._absolute(path, label)
+    roots = [state.cfg["project"], state.root, state.cfg["receipt"], Path(__file__).resolve().parent]
+    roots.extend(Path(a[key]) for a in (plan or state.schedule_plan)["attempts"] for key in ("workspace", "client_state"))
+    if any(store._collide(path, root) for root in roots):
+        core._fail(f"{label}: must remain outside all worker/state/code/receipt roots")
+    return path
+
+
+@_guard
+def native_process_launch(state_root, attempt_id):
+    """Claim once while locked; launch the selected frozen configuration outside it.
+
+    Crash/resume never retries this operation. A claim without a process receipt
+    remains unavailable until host ownership and cleanup can be authenticated.
+    """
+    root = store._absolute(state_root, "state")
+    core._text(attempt_id, "native launch attempt ID")
+    with store._lock(root) as fd:
+        state = State(root, fd)
+        row = state.native_inflight(attempt_id)
+        if attempt_id in state.native_claims:
+            core._fail("native launch is already claimed; resume cannot relaunch an attempt")
+        store._before_deadline(store._now(), state.cfg["deadline"])
+        _, _, _, plan_ref, plan = _native_prerequisites(state)
+        if plan_ref != state.schedule_plan_ref:
+            core._fail("native plan changed after scheduling")
+        _, sources = _native_complete_allocation(state, plan)
+        allocation_ref = next({"path": path, "sha256": store._hash(raw)}
+                              for kind, path, raw in sources if kind == "native_allocation")
+        if allocation_ref != state.schedule_allocation:
+            core._fail("native launch allocation differs from its complete campaign binding")
+        attempt = next(a for a in plan["attempts"] if a["attempt_id"] == attempt_id)
+        request = _native_collector().prepare_request(
+            plan, attempt, state.native_binding(attempt_id), row.reserved_at, row.deadline,
+            state.schedule.origin.isoformat(), state.cfg["session"]["installed_inputs"])
+        request_raw = store._dump(request)
+        state.append("native_process_claim", {"attempt_id": attempt_id, "next_challenge": store._fresh(state)},
+                     [("native_launch_request", str(root / "native-launch-requests" / attempt_id), request_raw), *sources])
+        origin = state.schedule.origin
+
+    def check_reservation(candidate):
+        with store._lock(root) as fd:
+            current = State(root, fd)
+            current.native_inflight(attempt_id)
+            if candidate != current.native_claims[attempt_id]["request"] or attempt_id in current.native_imports:
+                core._fail("collector launch differs from current one-use protected claim")
+            store._before_deadline(store._now(), current.cfg["deadline"])
+            if (store._now() - origin).total_seconds() >= row.deadline:
+                core._fail("native launch deadline expired before actual process creation")
+            utility_evidence.native_plan(current.source(plan_ref["path"], "native launch plan"), plan["task_id"])
+
+    receipt = _native_collector().launch(root / "native-collector", request,
+                                       check_reservation=check_reservation,
+                                       elapsed_seconds=lambda: (store._now() - origin).total_seconds())
+    return native_process_import(root, attempt_id, receipt)
+
+
+@_guard
+def native_process_import(state_root, attempt_id, receipt_path):
+    """Import authenticated raw completion; drift/expiry allow cleanup only."""
+    root = store._absolute(state_root, "state")
+    path = store._absolute(receipt_path, "native receipt")
+    with store._lock(root) as fd:
+        state = State(root, fd, cleanup=True)
+        state.native_inflight(attempt_id, cleanup=True)
+        if not core._within(path, root / "native-collector"):
+            core._fail("native receipt is outside selected host collector authority")
+        source_intact = True
+        try:
+            current = State(root, fd)
+            utility_evidence.native_plan(current.source(current.schedule_plan_ref["path"], "native plan"),
+                                         current.cfg["session"]["task_id"])
+        except (core._Problem, OSError):
+            source_intact = False
+        raw = store._external(path, LIMIT, "native process receipt")
+        state.append("native_process_import", {"attempt_id": attempt_id, "source_intact": source_intact},
+                     [("native_process_receipt", str(path), raw)])
+        return state.view("NATIVE_PROCESS_IMPORTED" if state.native_imports[attempt_id]["eligible"] else "NATIVE_CLEANUP_RECORDED")
+
+
+@_guard
+def native_result_review(state_root, attempt_id, review_path):
+    """Consume the frozen external reviewer path, never a worker grade argument."""
+    root = store._absolute(state_root, "state")
+    path = store._absolute(review_path, "native review")
+    with store._lock(root) as fd:
+        state = State(root, fd)
+        state.native_inflight(attempt_id)
+        claim = state.native_claims.get(attempt_id)
+        if claim is None or str(path) != claim["allocation"]["review_path"]:
+            core._fail("native review path differs from frozen independent/operator selection")
+        _native_protected(state, path, "native independent review")
+        raw = store._external(path, LIMIT, "native independent review")
+        value = core._json(raw, "native review")
+        sources = [("native_review", str(path), raw)]
+        for ref in _list(value.get("evidence"), "native review evidence", nonempty=True):
+            if isinstance(ref, dict) and "path" in ref:
+                _native_protected(state, ref["path"], "native independent review evidence")
+            evidence_path, evidence_raw = _pin(ref, "native independent review evidence")
+            _native_protected(state, evidence_path, "native independent review evidence")
+            sources.append(("native_review_evidence", str(evidence_path), evidence_raw))
+        state.append("native_result_review", {"attempt_id": attempt_id}, sources)
+        return state.view("NATIVE_REVIEW_RECORDED")
+
+
+@_guard
+def native_result_close(state_root, attempt_id, reason):
+    """Close a completed but ungraded attempt without granting any quality grade."""
+    root = store._absolute(state_root, "state")
+    with store._lock(root) as fd:
+        state = State(root, fd, cleanup=True)
+        state.append("native_result_close", {"attempt_id": attempt_id, "reason": reason})
+        return state.view("NATIVE_UNGRADED_CLOSED")

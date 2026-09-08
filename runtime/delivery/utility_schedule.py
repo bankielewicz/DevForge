@@ -1,10 +1,4 @@
-"""Versioned scheduling binding and journal replay, without native execution.
-
-Only utility_state's protected journal owns the current instance. This adapter
-does not launch a client or accept model-declared execution/termination results.
-Every returned reservation is unlaunched and may only be cancelled here. An
-authenticated process/result lifecycle must be implemented before enabling it.
-"""
+"""Protected schedule replay; process authentication belongs to the collector."""
 from datetime import timedelta
 
 try:
@@ -62,9 +56,12 @@ class JournalSchedule:
             core._fail(str(error))
 
     def cancel_unlaunched(self, attempt_id, stamp):
+        self.record(attempt_id, "CANCELLED", "UNOBTAINABLE", stamp)
+
+    def record(self, attempt_id, outcome, integrity, stamp):
         try:
             self.state = self.kernel.record(self.state, attempt_id,
-                                           native_schedule.Observation("CANCELLED", "UNOBTAINABLE"),
+                                           native_schedule.Observation(outcome, integrity),
                                            (stamp - self.origin).total_seconds())
             self.decision = None
         except native_schedule.ScheduleError as error:
