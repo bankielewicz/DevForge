@@ -19,6 +19,11 @@ read_json = runtime_requirements.read_json
 validate_hook_groups = runtime_requirements.validate_hook_groups
 load_plugin_hooks = runtime_requirements.load_plugin_hooks
 
+_adoption_spec = importlib.util.spec_from_file_location(
+    "devforge_manual_expert_adoption", Path(__file__).with_name("manual_expert_adoption.py"))
+manual_adoption = importlib.util.module_from_spec(_adoption_spec)
+_adoption_spec.loader.exec_module(manual_adoption)
+
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
@@ -104,7 +109,7 @@ def export_plugin(framework, provider, output):
         dest.write_bytes(data)
     result = {"status": "EXPORTED", "provider": provider, "output": str(output.resolve()),
               "files_sha256": {rel: digest(data) for rel, data in planned.items()},
-              "behavior": "NOT_EVALUATED"}
+              "behavior": "NOT_EVALUATED", "adoption": "NOT_ACCEPTED_STAGING"}
     if requirement is not None:
         result.update(runtime_requirements={provider: requirement}, runtime_host="NOT_VERIFIED")
     return result
@@ -207,21 +212,28 @@ def plan_hook_merge(project, provider, source, previous):
     return payload, entry
 
 
-def install(framework, project, provider, include_experts=False, runtime=None):
+def install(framework, project, provider, include_experts=False, runtime=None, manual_evidence=None,
+            manual_experts_only=False):
     framework, project = framework.resolve(), project.resolve()
     if not project.is_dir():
         raise ValueError("project must already exist")
+    if manual_experts_only and (provider != "codex" or include_experts):
+        raise ValueError("manual-experts-only requires Codex and excludes project experts")
     planned = {}
     hook_sources = {}
     requirements = {}
     providers = ("codex", "claude") if provider == "both" else (provider,)
     for target in providers:
         plugin = provider_plugin(framework, target)
-        hook_sources[target] = load_plugin_hooks(plugin, target)
-        requirement = runtime_requirements.load_requirement(plugin, target)
+        hook_sources[target] = None if manual_experts_only else load_plugin_hooks(plugin, target)
+        requirement = None if manual_experts_only else runtime_requirements.load_requirement(plugin, target)
         if requirement is not None:
             requirements[target] = requirement
         skills = [p for p in sorted((plugin / "skills").iterdir()) if p.is_dir()]
+        if manual_experts_only:
+            skills = [p for p in skills if p.name in manual_adoption.NAMES]
+            if not skills:
+                raise ValueError("no promoted Codex experts found")
         if include_experts and (project / "experts").is_dir():
             # Explicit portable POC experts, not a fallback for provider framework sources.
             skills += [p for p in sorted((project / "experts").iterdir()) if (p / "SKILL.md").is_file()]
@@ -232,10 +244,13 @@ def install(framework, project, provider, include_experts=False, runtime=None):
                 if name in planned:
                     raise ValueError(f"skill name collision: {name}")
                 planned[name] = path.read_bytes()
+        if manual_experts_only:
+            continue
         agents = framework / "providers/codex/agents" if target == "codex" else plugin / "agents"
         dest = ".codex/agents" if target == "codex" else ".claude/agents"
         for path, rel in regular_files(agents):
             planned[f"{dest}/{rel.as_posix()}"] = path.read_bytes()
+    adoption = manual_adoption.validate(manual_evidence, planned, project, framework)
     runtime_evidence = runtime_requirements.probe_runtime(runtime, requirements) if requirements else None
     record_path = safe_destination(project, ".devforge-install.json")
     previous = read_json(record_path) if record_path.exists() else {"schema": 1, "files": {}}
@@ -247,7 +262,7 @@ def install(framework, project, provider, include_experts=False, runtime=None):
         raise ValueError("invalid installation inventory")
     managed_hooks = dict(previous.get("managed_hooks", {}))
     hook_writes = {}
-    for target in providers:
+    for target in (() if manual_experts_only else providers):
         payload, entry = plan_hook_merge(project, target, hook_sources[target], managed_hooks.get(target))
         if entry is not None:
             managed_hooks[target] = entry
@@ -259,6 +274,7 @@ def install(framework, project, provider, include_experts=False, runtime=None):
         parts = Path(rel).parts
         # Only retire previously managed authoring files in the selected skill scopes.
         if (len(parts) >= 4 and parts[0] in selected_roots and parts[1] == "skills"
+                and (not manual_experts_only or parts[2] in manual_adoption.NAMES)
                 and authoring_only(Path(*parts[3:]))):
             dest = safe_destination(project, rel)
             if dest.exists() and digest(dest.read_bytes()) != old_digest:
@@ -271,13 +287,13 @@ def install(framework, project, provider, include_experts=False, runtime=None):
             if old != data and previous["files"].get(rel) != digest(old):
                 raise ValueError(f"local edit/collision; refusing replacement: {rel}")
     evidence = dict(previous.get("runtime_evidence", {}))
-    for target in providers:
+    for target in (() if manual_experts_only else providers):
         evidence.pop(target, None)
         if target in requirements:
             evidence[target] = {**runtime_evidence, "requirement": requirements[target]}
     # Preflight every destination before writes. Existing identical installs are idempotent.
     tracked = dict(previous["files"])
-    for target in providers:
+    for target in (() if manual_experts_only else providers):
         tracked.pop(HOOK_DESTINATIONS[target], None)
     for rel in retired:
         tracked.pop(rel, None)
@@ -285,6 +301,8 @@ def install(framework, project, provider, include_experts=False, runtime=None):
     updated = {**previous, "schema": 1, "files": tracked, "managed_hooks": managed_hooks}
     if evidence or "runtime_evidence" in previous:
         updated["runtime_evidence"] = evidence
+    if adoption is not None:
+        updated["manual_expert_adoption"] = {k: v for k, v in adoption.items() if k != "_evidence"}
     record_bytes = (json.dumps(updated, indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
     if runtime_evidence is not None:
         write_paths = set(planned) | set(hook_writes) | set(retired) | {".devforge-install.json"}
@@ -292,6 +310,24 @@ def install(framework, project, provider, include_experts=False, runtime=None):
             raise ValueError("selected runtime binary overlaps an installation destination")
         if runtime_requirements.runtime_digest(runtime) != runtime_evidence["sha256_after"]:
             raise ValueError("selected runtime binary changed before installation writes")
+    if adoption is not None:
+        replacements = {**planned, **hook_writes, ".devforge-install.json": record_bytes}
+        overwritten_inodes = {}
+        for relative, payload in replacements.items():
+            destination = project / relative
+            if destination.is_file():
+                stat = destination.stat()
+                overwritten_inodes.setdefault((stat.st_dev, stat.st_ino), set()).add(digest(payload))
+        for path, sha in adoption["_evidence"].pins.items():
+            resolved = Path(path)
+            stat = resolved.stat()
+            if any(value != sha for value in overwritten_inodes.get((stat.st_dev, stat.st_ino), ())):
+                raise ValueError("manual expert evidence: installation would invalidate selected evidence through an alias")
+            if resolved.is_relative_to(project):
+                relative = resolved.relative_to(project).as_posix()
+                if relative in retired or (relative in replacements and digest(replacements[relative]) != sha):
+                    raise ValueError("manual expert evidence: installation would invalidate selected evidence")
+        adoption["_evidence"].recheck()
     for rel in retired:
         safe_destination(project, rel).unlink(missing_ok=True)
     for rel, data in planned.items():
@@ -305,7 +341,8 @@ def install(framework, project, provider, include_experts=False, runtime=None):
     record_path.write_bytes(record_bytes)
     result = {"status": "INSTALLED", "project": str(project), "providers": providers,
               "files": len(planned), "removed_authoring_files": retired,
-              "scope": "project-local; no global configuration changed"}
+              "scope": "promoted Codex experts only; agents/hooks preserved" if manual_experts_only
+                       else "project-local; no global configuration changed"}
     if requirements:
         result.update(runtime_requirements=requirements,
                       runtime_compatibility="VERIFIED", native_activation="NOT_VERIFIED")
@@ -323,14 +360,19 @@ def main():
     parser.add_argument("--include-experts", action="store_true")
     parser.add_argument("--runtime", type=Path,
                         help="Explicit absolute devforge executable required by delivery-aware project installs")
+    parser.add_argument("--manual-evidence", type=Path,
+                        help="Exact owner-selected evidence required to adopt promoted Codex expert workflows")
+    parser.add_argument("--manual-experts-only", action="store_true",
+                        help="Refresh only promoted Codex expert skills, preserving agents and hooks")
     args = parser.parse_args()
     try:
         if args.export_plugin:
-            if args.provider == "both" or args.include_experts:
-                raise ValueError("export requires one provider and excludes project experts")
+            if args.provider == "both" or args.include_experts or args.manual_evidence or args.manual_experts_only:
+                raise ValueError("export is unaccepted staging; requires one provider and excludes project experts/adoption evidence")
             result = export_plugin(args.framework, args.provider, args.export_plugin)
         else:
-            result = install(args.framework, args.project, args.provider, args.include_experts, args.runtime)
+            result = install(args.framework, args.project, args.provider, args.include_experts, args.runtime, args.manual_evidence,
+                             args.manual_experts_only)
         print(json.dumps(result, indent=2))
     except (ValueError, OSError, KeyError) as error:
         print(json.dumps({"status": "BLOCKED", "reason": str(error)}))

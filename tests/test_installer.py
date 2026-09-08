@@ -34,6 +34,14 @@ class InstallerTest(unittest.TestCase):
     def install(self):
         return installer.install(self.framework, self.project, "both")
 
+    def test_promoted_codex_expert_requires_evidence_before_any_install_write(self):
+        # A recognized identity cannot opt out by omitting a candidate-owned profile.
+        self.skill.parent.rename(self.skill.parent.with_name("devforge-evaluate-expert"))
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, "manual.*evidence"):
+            self.install()
+        self.assertEqual(self.snapshot(), before)
+
     def test_installs_both_providers_and_repeats(self):
         self.install()
         self.install()
