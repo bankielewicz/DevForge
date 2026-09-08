@@ -22,7 +22,7 @@ import threading
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from delivery import delivery_core, hook_protocol, native_terminal, phase_state
+from delivery import delivery_core, hook_protocol, native_terminal, phase_state, workflow_runtime
 
 MAX_WIRE = 65536
 MAX_EVENTS = 1000
@@ -115,6 +115,7 @@ class Broker:
             raise ValueError("Unsupported completion_mode")
         self.state = state
         self.session = session
+        self.engine = workflow_runtime.engine(session)
         self.contract = contract
         self.contract_digest = contract_digest
         self.observations = observations
@@ -190,7 +191,7 @@ class Broker:
             self.current_applicability = "NOT_VERIFIED"
             self.current_issues = ["Managed completion unavailable after broker interruption, error or shutdown"]
             return failed(self.current_issues[0], "COULD_NOT_RUN")
-        result = phase_state.complete(self.state)
+        result = self.engine.complete(self.state)
         if result.get("status") == "COMPLETED":
             try:
                 self._remember_completed(result)
@@ -225,7 +226,7 @@ class Broker:
             raise ValueError("Callback session differs from this owned process")
         if self.count >= MAX_EVENTS:
             raise ValueError("Callback observation limit exceeded")
-        before = phase_state.context(self.state)
+        before = self.engine.context(self.state)
         if (self.completion_mode == "managed-session"
                 and name in {"SessionStart", "UserPromptSubmit", "Stop"}
                 and (self.task_result is not None or before["status"] == "COMPLETED")):
@@ -235,13 +236,15 @@ class Broker:
             # Reinspect every occurrence, including repaired artifacts with the
             # same checkpoint bytes. Configuration duplicates must be refused at
             # native admission rather than guessed away by content caching.
-            result = phase_state.advance(self.state) if before["status"] == "ACTIVE" else before
+            result = self.engine.advance(self.state) if before["status"] == "ACTIVE" else before
             if self.completion_mode == "managed-session" and result["status"] == "READY":
                 result = self._complete_managed()
         else:
             if name == "UserPromptSubmit" and before["status"] == "WAITING_USER":
                 # Reopening inspection is not evidence of a human answer/approval.
-                result = phase_state.resume(self.state)
+                result = (self.engine.resume(self.state, event.get("prompt"))
+                          if self.session["schema_version"] == "devforge.utility-session/v1"
+                          else self.engine.resume(self.state))
             else:
                 result = before
         try:
@@ -419,7 +422,10 @@ def sandbox_command(project, profile, client_root, command, session_path, sessio
     protected += [Path(row["path"]) for row in session["installed_inputs"]]
     protected += [project / row["path"] for row in contract["inputs"]]
     protected += [project / row["archive"] for row in session["output_baselines"] if row["archive"]]
-    protected += delivery_core.catalog_paths(contract)
+    # Utility gate/answer evidence is consumed outside the worker sandbox. Do
+    # not expose an entire parent directory merely because a future file is absent.
+    if contract.get("schema_version") != "devforge.utility-delivery/v1":
+        protected += workflow_runtime.protected_paths(contract)
     git_entry = project / ".git"
     if git_entry.exists() or git_entry.is_symlink():
         canonical(git_entry)
@@ -526,7 +532,7 @@ def run(session_path, state, profile, command, timeout, client_root, result_path
                     result.update(status="COULD_NOT_RUN")
                     verification_issues = ["Runtime callback service did not become quiescent"]
                 else:
-                    current = phase_state.complete(state)
+                    current = engine.complete(state)
                     if current.get("status") == "COMPLETED":
                         broker._remember_completed(current)
                         applicability = "VERIFIED"
@@ -569,8 +575,9 @@ def run(session_path, state, profile, command, timeout, client_root, result_path
         session = delivery_core._json(session_raw, "session")
         if not isinstance(session, dict) or not isinstance(session.get("delivery_contract"), str):
             raise ValueError("Session must select a delivery contract path")
-        contract, _, project = delivery_core._load_contract(Path(session["delivery_contract"]))
-        reference_paths = delivery_core.catalog_paths(contract)
+        engine = workflow_runtime.engine(session)
+        contract, _, project = workflow_runtime.load_delivery(Path(session["delivery_contract"]))
+        reference_paths = workflow_runtime.protected_paths(contract)
         if result_path is not None:
             result_path = canonical(result_path)
             if not result_path.parent.is_dir() or result_path.exists():
@@ -603,7 +610,7 @@ def run(session_path, state, profile, command, timeout, client_root, result_path
         observations = Path(tempfile.mkdtemp(prefix=state.name + ".process-", dir=state.parent))
         if cancellation.signal_number is not None:
             return finish(failed(cancellation.reason(), "COULD_NOT_RUN"))
-        started = phase_state.start(session_path, state)
+        started = engine.start(session_path, state)
         if started["status"] != "ACTIVE":
             return finish(started)
         deadline = datetime.fromisoformat(session["deadline_utc"].replace("Z", "+00:00"))
@@ -719,7 +726,7 @@ def run(session_path, state, profile, command, timeout, client_root, result_path
         elif completion_mode == "managed-session" and broker.task_result is not None:
             result = dict(broker.task_result)
         else:
-            current = phase_state.context(state)
+            current = engine.context(state)
             if current["status"] == "WAITING_USER":
                 result = current
             elif current["status"] != "READY" or completion_mode == "managed-session":
@@ -727,7 +734,7 @@ def run(session_path, state, profile, command, timeout, client_root, result_path
             elif cancellation.signal_number is not None:
                 result = failed(cancellation.reason(), "COULD_NOT_RUN")
             else:
-                result = phase_state.complete(state)
+                result = engine.complete(state)
         result = {**result, "worker": observation, "scope": SCOPE,
                   "long_lived_task_completion": "NOT_IMPLEMENTED",
                   "native_provider_admission": "NOT_VALIDATED", "native_launch_admitted": False,
@@ -823,12 +830,13 @@ def result_destination(args):
     session = delivery_core._json(raw, "session")
     if not isinstance(session, dict):
         raise ValueError("Session must be an object")
-    contract, _, project = delivery_core._load_contract(Path(session["delivery_contract"]))
+    workflow_runtime.engine(session)
+    contract, _, project = workflow_runtime.load_delivery(Path(session["delivery_contract"]))
     protected = [project, canonical(args.profile), canonical(args.state), canonical(args.contract),
                  Path(session["delivery_contract"]), Path(session["assignment"]["path"]),
                  Path(session["receipt_path"]), Path(__file__).resolve().parent.parent]
     protected += [Path(row["path"]) for row in session["installed_inputs"]]
-    protected += delivery_core.catalog_paths(contract)
+    protected += workflow_runtime.protected_paths(contract)
     if args.client_root is not None:
         protected.append(canonical(args.client_root))
     if any(not separate(path, target) for target in protected):

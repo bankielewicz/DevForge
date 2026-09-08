@@ -1,0 +1,38 @@
+{
+  "schema_version": "devforge.demo-compatibility-verification/v1",
+  "scope": "Pin two installed validator runtime helpers in both fixed demonstration policies. No acceptance predicate or source layout rule changed.",
+  "runtime_base": "8a9702523569e3713863a3abc8f811e17cedb926",
+  "framework_source": "a78b9bff83c090153952b31b84b0584ef1650f02",
+  "canonical_installed_pins": {
+    "assess_evidence.py": "d5b31a5448b84ecee81816a2997577366fe348dd281adb1d1fc6d487c47e7066",
+    "inspect_skill.py": "6054d6a01776590c706612afd9b1d1688ac71923044660094c111a7708591e4d"
+  },
+  "installed_mode": 420,
+  "preexisting_main_edits": "The same two policy additions were already present uncommitted on main. Their bytes were independently derived from frozen source and matched; main files were preserved.",
+  "checks": {
+    "demo_both_fixtures": "PASS, including stale/refresh discrimination",
+    "gate_acceptance_tests": "30 PASS including tooling bytes/mode/undeclared path negatives",
+    "full_suite": "457 PASS",
+    "rust_fmt_clippy_build": "PASS"
+  },
+  "evidence": [
+    {
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/demo-policy-change.json",
+      "sha256": "c453be860804625f96a82e2c007ff21282dbc4c7abdaf49d68b32b58ff06023e"
+    },
+    {
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/demo-policy-regressions.json",
+      "sha256": "b630588ffa5549374d8e1f20fd0194e81e2bab26662e35874982cb24f00f7774"
+    },
+    {
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/demo-fixed.json",
+      "sha256": "35f71f650d1a8d924e5bd5a31d241d24d5ced6f027107209b7b98e578cb77782"
+    },
+    {
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/required-checks.json",
+      "sha256": "96dda820f69e5842625250a2621b912f18d6f70d2f61b1310ba714a024e53243"
+    }
+  ],
+  "native_model_calls": 0,
+  "new_native_lifecycle_code": "These checks precede the separate new lifecycle implementation; they do not validate later code."
+}

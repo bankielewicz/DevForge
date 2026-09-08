@@ -1,0 +1,19 @@
+{
+  "authority": "User continuation request: branch before changes; implement decision-independent work; propose one native config for approval",
+  "base_commit": "cd403cfee0b120ada2f9e198d3a15db5d4147252",
+  "branch": "impl/skill-utilities-runtime-continuation-20260907T220803Z",
+  "worktree": "/home/bryan/Projects/DevForge/worktrees/skill-utilities-runtime-continuation-20260907T220803638693Z",
+  "frozen_skill_source_commit": "a78b9bff83c090153952b31b84b0584ef1650f02",
+  "allocation_sha256": "b380b4406e49567cfb844d614927f319717f9283b0c1c9de40d22101bba59fd5",
+  "scope": [
+    "Versioned complete schedule dependency binding",
+    "Protected journal reservation/time/cancellation accounting",
+    "Controller and Rust embedding/interface integration",
+    "Deterministic regression tests and independent review",
+    "Native evaluation recommendation only"
+  ],
+  "enforcement": "All five builder phases and required actions Enforced",
+  "validator_ownership": "Other owner retained; no source edits or installation release inferred",
+  "native_run": "Approval pending; no native launch/authentication attempt",
+  "merge": "Only completed reviewed integration; preserve concurrent main edits"
+}

@@ -56,6 +56,8 @@ def _content_example(phase, contract):
 
 
 def instructions(result, session_contract, delivery_contract):
+    if session_contract.get("schema_version") == "devforge.utility-session/v1":
+        return utility_instructions(result, session_contract, delivery_contract)
     phase = result.get("phase")
     checkpoint = {
         "schema_version": "devforge.brainstorm-checkpoint/v1",
@@ -154,3 +156,31 @@ def response(event_name, result, session_contract, delivery_contract, *,
         return {"decision": "block", "reason": reason[:MAX_MESSAGE]}
     return {"continue": False, "stopReason": "Runtime task incomplete: " + (issues or str(status)),
             "systemMessage": "No runtime completion receipt was issued."}
+
+
+def utility_instructions(result, session, contract):
+    """Supply exact permitted evidence locators; examples cannot grant admission."""
+    phase = result.get("phase")
+    outputs = [row for row in contract["outputs"] if row["phase"] == phase]
+    gates = [row for row in contract["gate_inputs"] if row["phase"] == phase]
+    checkpoint = {
+        "schema_version": "devforge.utility-checkpoint/v1", "task_id": session["task_id"],
+        "phase": phase, "sequence": result.get("sequence"), "challenge": result.get("challenge"),
+        "inputs_sha256": result.get("inputs_sha256"), "state": "ready", "question_id": None,
+        "evidence": [{"id": row["id"], "path": str(Path(contract["project_root"]) / row["path"]),
+                      "sha256": "Complete saved-file digest; not a completion claim"} for row in outputs],
+    }
+    questions = [q for q in contract["questions"] if q["phase"] == phase]
+    note = (ORIGIN + "Use the applicable installed " + contract["workflow"] + ". Current phase: " + str(phase)
+            + ". Do its substantive work. Save outputs only at the selected paths. The runtime supplies this evidence shape: "
+            + json.dumps(checkpoint) + ". Save it at " + str(Path(contract["project_root"]) / session["checkpoint_path"])
+            + ". These are shapes, not facts or approvals. Output contracts: " + json.dumps(outputs)
+            + ". Runtime-consumed external gate producers (do not author or hash their records): " + json.dumps(gates)
+            + ". Pending-question definitions: " + json.dumps(questions)
+            + ". For a required unresolved question, ask its actual question and save state awaiting_user, its question_id,"
+              " and evidence []. An unrelated user message cannot answer it. No phase, receipt or check commands are"
+              " model tasks. Runtime owns transition, deadlines, bounded correction and final receipt publication/readback."
+              " A prepared handoff is separate from runtime admission and actual receiving execution.")
+    if len(note) > MAX_MESSAGE:
+        raise ValueError("Utility runtime context exceeds bounded transport; reduce the allocated phase evidence shape")
+    return note

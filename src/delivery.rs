@@ -171,6 +171,26 @@ const SOURCES: &[(&str, &str)] = &[
         include_str!("../runtime/delivery/phase_state.py"),
     ),
     (
+        "utility_evidence.py",
+        include_str!("../runtime/delivery/utility_evidence.py"),
+    ),
+    (
+        "utility_state.py",
+        include_str!("../runtime/delivery/utility_state.py"),
+    ),
+    (
+        "native_schedule.py",
+        include_str!("../runtime/delivery/native_schedule.py"),
+    ),
+    (
+        "utility_schedule.py",
+        include_str!("../runtime/delivery/utility_schedule.py"),
+    ),
+    (
+        "workflow_runtime.py",
+        include_str!("../runtime/delivery/workflow_runtime.py"),
+    ),
+    (
         "hook_protocol.py",
         include_str!("../runtime/delivery/hook_protocol.py"),
     ),
@@ -198,6 +218,25 @@ pub enum Action {
         contract: PathBuf,
     },
     Status,
+    /// Reserve a fully bound validator native attempt; does not launch a client.
+    NativeAdmission {
+        #[arg(long)]
+        attempt: String,
+    },
+    /// Bind a frozen native dependency schedule; does not launch a client.
+    NativeScheduleBind {
+        #[arg(long)]
+        schedule: PathBuf,
+    },
+    /// Journal the next unlaunched reservation or budget/dependency decision.
+    NativeScheduleReserve,
+    /// Cancel an unlaunched reservation; never import a native execution grade.
+    NativeScheduleCancel {
+        #[arg(long)]
+        attempt: String,
+        #[arg(long)]
+        reason: String,
+    },
     Advance,
     Resume,
     Complete,
@@ -429,7 +468,14 @@ fn project_for(action: &Action, state: Option<&Path>) -> Result<PathBuf> {
             );
             Ok(project)
         }
-        Action::Status | Action::Advance | Action::Resume | Action::Complete => {
+        Action::Status
+        | Action::Advance
+        | Action::Resume
+        | Action::Complete
+        | Action::NativeAdmission { .. }
+        | Action::NativeScheduleBind { .. }
+        | Action::NativeScheduleReserve
+        | Action::NativeScheduleCancel { .. } => {
             let root = state.context("FAIL: --state is required")?;
             let manifest = read_json(&root.join("MANIFEST.json"))?;
             let project = field_path(&manifest, "project_root")?;
@@ -740,6 +786,10 @@ fn operate(action: &Action, state: Option<&Path>) -> Result<Outcome> {
     let name = match action {
         Action::Init { .. } => "init",
         Action::Status => "status",
+        Action::NativeAdmission { .. } => "native-admission",
+        Action::NativeScheduleBind { .. } => "native-schedule-bind",
+        Action::NativeScheduleReserve => "native-schedule-reserve",
+        Action::NativeScheduleCancel { .. } => "native-schedule-cancel",
         Action::Advance => "advance",
         Action::Resume => "resume",
         Action::Complete => "complete",
@@ -761,6 +811,19 @@ fn operate(action: &Action, state: Option<&Path>) -> Result<Outcome> {
     }
     if let Action::Verify { receipt, .. } = action {
         controller.arg("--receipt").arg(checked_path(receipt)?);
+    }
+    if let Action::NativeAdmission { attempt } = action {
+        controller.arg("--attempt").arg(attempt);
+    }
+    if let Action::NativeScheduleBind { schedule } = action {
+        controller.arg("--schedule").arg(checked_path(schedule)?);
+    }
+    if let Action::NativeScheduleCancel { attempt, reason } = action {
+        controller
+            .arg("--attempt")
+            .arg(attempt)
+            .arg("--reason")
+            .arg(reason);
     }
     capture(controller)
 }
@@ -851,6 +914,10 @@ pub fn main(action: &Action, state: Option<&Path>) {
                 "io_modes": ["inherited", "interactive-tty"],
                 "hook_events": ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"],
                 "native_admission": "NOT_VALIDATED",
+                "utility_workflows": ["skill-builder", "skill-validator"],
+                "utility_session_schema": "devforge.utility-session/v1",
+                "utility_native_schedule_schema": "devforge.utility-native-schedule/v1",
+                "native_execution_enabled": false,
                 "mechanical_scope": "phase evidence and persisted artifact verification; no semantic acceptance"
             })
         );

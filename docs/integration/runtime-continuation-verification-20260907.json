@@ -1,0 +1,45 @@
+{
+  "schema_version": "devforge.runtime-integration-verification/v1",
+  "scope": "Decision-independent protected scheduling checkpoint; native execution remains disabled",
+  "base_commit": "cd403cfee0b120ada2f9e198d3a15db5d4147252",
+  "frozen_skill_commit": "a78b9bff83c090153952b31b84b0584ef1650f02",
+  "frozen_package_identities": "All 43 source files rechecked unchanged",
+  "tests": {
+    "focused_new_tests": 17,
+    "full_suite_tests": 457,
+    "full_suite": "PASS",
+    "rust_fmt": "PASS",
+    "rust_clippy": "PASS",
+    "rust_build": "PASS",
+    "independent_static_review": "No actionable defect found; external custody/native conformance unproven",
+    "gate_fixture_demo": "BLOCKED; same source-outside-approved-layout validator helper failure reproduced with cd403cf baseline and a78b9bf framework"
+  },
+  "native": {
+    "execution": "NOT_RUN",
+    "launch_enabled": false,
+    "C": "COULD_NOT_RUN",
+    "B": "COULD_NOT_RUN",
+    "A": "COULD_NOT_RUN",
+    "receiving_transfer": "NOT_OBSERVED"
+  },
+  "proposal": "CLI0.153.4 gpt-6-astra medium; direct per-attempt subscription device login; one repetition; 24 attempts; 600 seconds each; 14400-second campaign. User approval pending.",
+  "remaining": [
+    "Owned native process launch/termination, authenticated result import and end-to-end observations",
+    "Validator ownership release/source alignment",
+    "Pinned framework/demo layout compatibility; concurrent main policy work preserved",
+    "Native configuration and bounded attempt setup approval"
+  ],
+  "evidence_root": "/home/bryan/Projects/DevForge/tmp/skill-utilities-journal-integration-20260907T231223422364Z",
+  "evidence_sha256": {
+    "manifest.json": "10a3e9af573ec6b3fdcabaa411d706546580978d2cd2706dc0825240a97dc655",
+    "checks.json": "f43b5a63452f49b89bc24d25b6197649918ee679ea4d513316baf998a97e0628",
+    "check-1.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "check-2.log": "f25b5eb3e73bc06df839becc8e675f843724d83639ec0796a906747891dc3bee",
+    "check-3.log": "ee1d3fffa2022e962e63e0dbe4d35c9c198450a20c29fc09030f635dbb38bfcd",
+    "check-4.log": "39603b4996b42a8b2d7573d1dfd67a412cc97a7f0a95d007a533e8271ea091ee",
+    "independent-review.md": "7ef6f8ac925f4067aca35c1d6713b19ff16fa3d7d8f00b6d56019f68557d3be3",
+    "demo.log": "d667112d12079d9d4e435fa1c22e4cbaae49bf8367406523c74a4eebd30fda62",
+    "baseline-demo-layout-check.json": "4f964cccfc2970c6aa7054e56f5c6f44824705e02c0b9645cd870de4bbdf6cbd",
+    "native-evaluation-proposal.json": "8e2f9a7f765f6ab715cdc06e99089d9ba718d20a6e94d2c9f4b501430162e0dc"
+  }
+}
