@@ -1,0 +1,6 @@
+test_unknown_question_requires_exact_bound_operator_selection (test_native_interactive.OperatorPolicyTests.test_unknown_question_requires_exact_bound_operator_selection) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.018s
+
+OK

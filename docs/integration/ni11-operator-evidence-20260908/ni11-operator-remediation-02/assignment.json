@@ -1,0 +1,14 @@
+{
+  "at": "2026-09-08T03:06:00.248956+00:00",
+  "owner": "/root after prior worker frozen/complete",
+  "worktree": "/home/bryan/Projects/DevForge/worktrees/ni11-interactive-20260908",
+  "head": "dc32c02967e7ec540151af7220ae2d1ca3dc85e0",
+  "scope": [
+    "runtime/delivery/native_process.py",
+    "tests/test_native_interactive.py",
+    "docs/integration/native-process-contract.md"
+  ],
+  "finding": "NI11-R04-001",
+  "contract": "Complete pending request JSON is bounded to8MiB before publication; larger document stops collection without answer or publication; exact boundary remains readable and replayable.",
+  "prior_frozen_manifest_sha256": "6f31f5aa3e12d0a6fb53f50505b597f87b4659718be264cbd5600335d9dac267"
+}

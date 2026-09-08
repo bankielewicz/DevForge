@@ -524,12 +524,15 @@ def _group_exists(pid):
 
 def answer_policy(value):
     _exact(value, {"schema_version", "steps"}, "answer policy")
-    if value["schema_version"] != "devforge.native-answer-policy/v1" or not isinstance(value["steps"], list) or len(value["steps"]) > 23:
+    if value["schema_version"] not in {"devforge.native-answer-policy/v1", "devforge.native-answer-policy/v2"} or not isinstance(value["steps"], list) or len(value["steps"]) > 23:
         raise NativeProcessError("Invalid bounded answer policy")
     units = []
     for step in value["steps"]:
         action = step.get("action")
-        _exact(step, {"unit_id", "action", "questions", "answers"} if action == "answer" else {"unit_id", "action", "text"}, "answer step")
+        fields = {"unit_id", "action", "questions", "answers"} if action == "answer" else {"unit_id", "action", "text"}
+        if action in {"operator_answer", "operator_turn"} and value["schema_version"] == "devforge.native-answer-policy/v2":
+            fields = {"unit_id", "action", "allowed_answers"}
+        _exact(step, fields, "answer step")
         unit = step["unit_id"]
         if not isinstance(unit, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,80}", unit) is None or unit == "initial" or unit in units:
             raise NativeProcessError("Invalid or duplicate continuation unit")
@@ -542,14 +545,134 @@ def answer_policy(value):
                 _exact(answer, {"answers"}, "operator answer")
                 if not isinstance(answer["answers"], list) or not answer["answers"] or any(not isinstance(a, str) for a in answer["answers"]):
                     raise NativeProcessError("Operator answer is empty or invalid")
+        elif action in {"operator_answer", "operator_turn"}:
+            answers = step["allowed_answers"]
+            if not isinstance(answers, dict) or not 1 <= len(answers) <= 64 or any(not isinstance(k, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,80}", k) is None or not isinstance(v, str) or not 1 <= len(v) <= 4096 for k, v in answers.items()):
+                raise NativeProcessError("Operator choices must be finite frozen literal answers")
         elif action != "turn" or not isinstance(step["text"], str) or not step["text"]:
             raise NativeProcessError("Unsupported continuation action")
     return units
 
 
+def _operator_questions(message):
+    if message.get("method") == "devforge/operatorTurn":
+        if not message["params"].get("assistantMessages"):
+            raise NativeProcessError("Completed assistant text is unavailable")
+        return ["next_turn"]
+    questions = message.get("params", {}).get("questions")
+    if not isinstance(questions, list) or not 1 <= len(questions) <= 16:
+        raise NativeProcessError("Bounded actual operator questions required")
+    ids = []
+    for question in questions:
+        if not isinstance(question, dict) or not isinstance(question.get("id"), str) or not question["id"] or not isinstance(question.get("question"), str) or not question["question"]:
+            raise NativeProcessError("Actual operator question is malformed")
+        ids.append(question["id"])
+    if len(set(ids)) != len(ids):
+        raise NativeProcessError("Duplicate actual question ID")
+    return ids
+
+
+def _operator_pending(binding, policy, step, message):
+    return {"schema_version": "devforge.native-operator-request/v1", "binding": binding,
+            "unit_id": step["unit_id"], "policy_sha256": digest(canonical_json(policy)),
+            "request_sha256": digest(canonical_json(message)), "request": message,
+            "question_ids": _operator_questions(message), "allowed_answers": step["allowed_answers"]}
+
+
+def _operator_selection(pending, value):
+    _exact(value, {"schema_version", "binding", "unit_id", "policy_sha256", "request_sha256", "relevance_confirmed", "selections"}, "operator decision")
+    if value["schema_version"] != "devforge.native-operator-decision/v1" or value["relevance_confirmed"] is not True or any(value[k] != pending[k] for k in ("binding", "unit_id", "policy_sha256", "request_sha256")):
+        raise NativeProcessError("Operator decision does not bind this request and frozen policy")
+    choices = value["selections"]
+    if not isinstance(choices, dict) or set(choices) != set(pending["question_ids"]) or any(not isinstance(k, str) or k not in pending["allowed_answers"] for k in choices.values()):
+        raise NativeProcessError("Operator decision must cover every actual question with frozen keys")
+    return {question: {"answers": [pending["allowed_answers"][key]]} for question, key in choices.items()}
+
+
+def write_operator_decision(pending_path, selections, *, relevance_confirmed):
+    """Operator-only helper: exclusive publication, no inferred answer or authority."""
+    path = _path(pending_path)
+    if re.fullmatch(r"operator-[A-Za-z0-9_-]{1,80}-request\.json", path.name) is None:
+        raise NativeProcessError("Exact protected pending request filename required")
+    info = path.parent.stat()
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise NativeProcessError("Operator inbox must be host-private")
+    pending = _json(_read(path))
+    if pending.get("schema_version") != "devforge.native-operator-request/v1" or not isinstance(pending.get("unit_id"), str) or path.name != "operator-" + pending["unit_id"] + "-request.json" or re.fullmatch(r"[A-Za-z0-9_-]{1,80}", pending["unit_id"]) is None:
+        raise NativeProcessError("Pending request unit binding is invalid")
+    value = {"schema_version": "devforge.native-operator-decision/v1", **{k: pending[k] for k in ("binding", "unit_id", "policy_sha256", "request_sha256")},
+             "relevance_confirmed": relevance_confirmed, "selections": selections}
+    _operator_selection(pending, value)
+    target = path.parent / ("operator-" + pending["unit_id"] + "-decision.json")
+    if target.name != path.name.replace("-request.json", "-decision.json"):
+        raise NativeProcessError("Pending unit filename differs")
+    _new(target, canonical_json(value))
+    return target
+
+
+class OperatorInbox:
+    """Protected collector-owned request/decision custody; no worker-selected path."""
+    def __init__(self, root, binding, policy, *, replay=None):
+        self.root, self.binding, self.policy = _path(root, directory=True), binding, policy
+        info = self.root.stat()
+        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise NativeProcessError("Operator inbox must be an owned private directory")
+        self.records = [] if replay is None else replay
+        self.replay = replay is not None
+        self.current = None
+        self.used = set()
+
+    def publish(self, step, message):
+        unit = step["unit_id"]
+        if unit in self.used or self.current is not None:
+            raise NativeProcessError("Operator unit cannot be reused")
+        self.used.add(unit)
+        raw = canonical_json(_operator_pending(self.binding, self.policy, step, message))
+        if len(raw) > LIMIT:
+            raise NativeProcessError("Operator request document exceeds bound")
+        pending = _json(raw)
+        path = self.root / ("operator-" + unit + "-request.json")
+        if self.replay:
+            rows = [r for r in self.records if r["unit_id"] == unit]
+            if len(rows) != 1 or rows[0]["request"]["path"] != str(path) or _json(_pin(rows[0]["request"])) != pending:
+                raise NativeProcessError("Operator request replay differs")
+            row = rows[0]
+        else:
+            _new(path, canonical_json(pending))
+            row = {"unit_id": unit, "request": {"path": str(path), "sha256": digest(canonical_json(pending))}, "decision": None, "accepted": None}
+            self.records.append(row)
+        self.current = (pending, row)
+
+    def poll(self):
+        if self.current is None:
+            return None
+        pending, row = self.current
+        path = self.root / ("operator-" + pending["unit_id"] + "-decision.json")
+        if self.replay:
+            if row["decision"] is None or row["decision"]["path"] != str(path):
+                raise NativeProcessError("Operator decision is missing")
+            raw = _pin(row["decision"])
+        else:
+            try:
+                raw = _read(path)
+            except FileNotFoundError:
+                return None
+            row["decision"] = {"path": str(path), "sha256": digest(raw)}
+        answers = _operator_selection(pending, _json(raw))
+        accepted = self.root / ("operator-" + pending["unit_id"] + "-accepted.json")
+        if self.replay:
+            if row["accepted"] is None or row["accepted"]["path"] != str(accepted) or _pin(row["accepted"]) != raw:
+                raise NativeProcessError("Accepted operator bytes differ")
+        else:
+            _new(accepted, raw)
+            row["accepted"] = {"path": str(accepted), "sha256": digest(raw)}
+        self.current = None
+        return answers
+
+
 class Interactive:
     """Frozen app-server protocol. Reservation callback must fsync before returning."""
-    def __init__(self, policy, prompt, workspace, reserve, transcript):
+    def __init__(self, policy, prompt, workspace, reserve, transcript, operator=None):
         answer_policy(policy)
         self.steps = list(policy["steps"])
         self.prompt, self.workspace = prompt.decode("utf-8"), workspace
@@ -559,6 +682,8 @@ class Interactive:
         self.requests = set()
         self.buffer = b""
         self.sent_prompts = []
+        self.operator, self.pending_operator = operator, None
+        self.agent_messages = []
 
     def record(self, direction, message):
         self.transcript.write(canonical_json({"direction": direction, "message": message}) + b"\n")
@@ -581,10 +706,37 @@ class Interactive:
         self.state = "init"
         return {"id": "init", "method": "initialize", "params": {"clientInfo": {"name": "devforge", "version": "1"}, "capabilities": {"experimentalApi": True}}}
 
+    def poll(self):
+        if self.pending_operator is None:
+            return []
+        answers = self.operator.poll()
+        if answers is None:
+            return []
+        step, message = self.pending_operator
+        self.pending_operator = None
+        self.index += 1
+        if step["action"] == "operator_turn":
+            self.sequence += 1
+            return self.begin_turn(answers["next_turn"]["answers"][0], step["unit_id"])
+        answer = {"id": message["id"], "result": {"answers": answers}}
+        self.reserve(step["unit_id"], answer)
+        self.requests.add(message["id"])
+        self.state = "running"
+        return [answer]
+
+    def await_operator(self, step, message):
+        if self.operator is None:
+            raise NativeProcessError("Protected operator inbox is unavailable")
+        self.operator.publish(step, message)
+        self.pending_operator = (step, message)
+        self.state = "operator-wait"
+        return []
+
     def begin_turn(self, text, unit):
         message = {"id": "turn-" + str(self.sequence), "method": "turn/start", "params": {"threadId": self.thread, "input": [{"type": "text", "text": text, "text_elements": []}]}}
         self.reserve(unit, message)
         self.state = "turn-response"
+        self.agent_messages = []
         return [message]
 
     def receive(self, message):
@@ -629,6 +781,9 @@ class Interactive:
                     self.done = True
                     return []
                 step = self.steps[self.index]
+                if step["action"] == "operator_turn":
+                    pending = {"method": "devforge/operatorTurn", "params": {"threadId": self.thread, "turnId": self.turn, "completion": message, "assistantMessages": self.agent_messages}}
+                    return self.await_operator(step, pending)
                 if step["action"] != "turn":
                     raise NativeProcessError("Required operator question was not observed")
                 self.index += 1
@@ -640,6 +795,8 @@ class Interactive:
             if self.state != "running" or params.get("turnId") != self.turn or params.get("isBlocking") is not True or params.get("autoResolutionMs") is not None or not params.get("itemId") or type(identity) not in (str, int) or identity in self.requests or self.index >= len(self.steps):
                 raise NativeProcessError("Unanswered or uncorrelated operator request")
             step = self.steps[self.index]
+            if step["action"] == "operator_answer":
+                return self.await_operator(step, message)
             if step["action"] != "answer" or params.get("questions") != step["questions"]:
                 raise NativeProcessError("Question differs from frozen operator policy")
             answer = {"id": identity, "result": {"answers": step["answers"]}}
@@ -649,7 +806,12 @@ class Interactive:
             return [answer]
         if "id" in message:
             raise NativeProcessError("Unapproved server request")
-        if self.state == "running" and method in {"item/started", "item/completed", "item/agentMessage/delta", "item/reasoning/textDelta", "item/reasoning/summaryTextDelta", "item/reasoning/summaryPartAdded", "thread/tokenUsage/updated", "item/commandExecution/outputDelta"} and params.get("turnId", self.turn) == self.turn:
+        if self.state in {"running", "operator-wait"} and method in {"item/started", "item/completed", "item/agentMessage/delta", "item/reasoning/textDelta", "item/reasoning/summaryTextDelta", "item/reasoning/summaryPartAdded", "thread/tokenUsage/updated", "item/commandExecution/outputDelta"} and params.get("turnId", self.turn) == self.turn:
+            if method == "item/completed" and params.get("item", {}).get("type") == "agentMessage":
+                item = params["item"]
+                if not isinstance(item.get("text"), str) or not item["text"]:
+                    raise NativeProcessError("Completed agent message is malformed")
+                self.agent_messages.append(item)
             return []
         raise NativeProcessError("Unsupported app-server notification")
 
@@ -730,6 +892,15 @@ def _collect(command, prompt, deadline, elapsed_seconds, output_limit, stdout_fi
                 if now >= deadline or time.monotonic() >= local_deadline:
                     stop_reason = "TIMED_OUT"
                     break
+                if interactive is not None:
+                    for message in interactive.poll():
+                        interactive.record("client", message)
+                        prompt += canonical_json(message) + b"\n"
+                    if prompt:
+                        try:
+                            selector.get_key(process.stdin)
+                        except KeyError:
+                            selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
                 if _exited(process):
                     terminal_at = terminal_at or time.monotonic()
                     if time.monotonic() - terminal_at >= 0.5:
@@ -1055,6 +1226,7 @@ def launch(authority_root, request, *, check_reservation, elapsed_seconds):
     _new(attempt_dir / "request.json", canonical_json(request))
     broker = None
     interactive = None
+    operator = None
     transcript = None
     command_digest = None
     managed_evidence = attempt_dir / "managed"
@@ -1079,7 +1251,8 @@ def launch(authority_root, request, *, check_reservation, elapsed_seconds):
                     if unit not in allowed:
                         raise NativeProcessError("Unallocated continuation")
                     _new(attempt_dir / ("unit-" + unit + ".json"), canonical_json({"unit_id": unit, "binding": request["binding"], "elapsed_seconds": now, "message": message}))
-                interactive = Interactive(request["answer_policy"], _pin(request["prompt"]), request["workspace"], reserve_unit, transcript)
+                operator = OperatorInbox(attempt_dir, request["binding"], request["answer_policy"])
+                interactive = Interactive(request["answer_policy"], _pin(request["prompt"]), request["workspace"], reserve_unit, transcript, operator=operator)
                 if broker is not None:
                     broker.native_sent_prompts = interactive.sent_prompts
             process = _collect(command, _pin(request["prompt"]), request["deadline"], elapsed_seconds,
@@ -1130,7 +1303,8 @@ def launch(authority_root, request, *, check_reservation, elapsed_seconds):
         raw = _read(path, OUTPUT_LIMIT)
         body["interactive"] = {"transcript": {"path": str(path), "sha256": digest(raw)},
             "units": [{"path": str(path), "sha256": digest(_read(path))} for path in sorted(attempt_dir.glob("unit-*.json"))]}
-        body["events"] = observe_interactive(request, raw, raw_out, body["interactive"]["units"], process)
+        body["interactive"]["operators"] = operator.records if operator is not None else []
+        body["events"] = observe_interactive(request, raw, raw_out, body["interactive"]["units"], process, operators=operator.records if operator is not None else [])
     receipt = {"body": body, "hmac_sha256": hmac.new(key, canonical_json(body), hashlib.sha256).hexdigest()}
     path = attempt_dir / "receipt.json"
     _new(path, canonical_json(receipt))
@@ -1186,7 +1360,14 @@ def verify_receipt(authority_root, receipt_path, expected):
             if Path(unit["path"]).parent != expected_parent:
                 raise NativeProcessError("Continuation authority mismatch")
             _pin(unit)
-        events = observe_interactive(request, transcript_raw, _read(body["stdout"]["path"], OUTPUT_LIMIT), evidence["units"], body["process"])
+        for record in evidence.get("operators", []):
+            for name in ("request", "decision", "accepted"):
+                ref = record[name]
+                if ref is not None:
+                    if Path(ref["path"]).parent != expected_parent:
+                        raise NativeProcessError("Operator evidence authority mismatch")
+                    _pin(ref)
+        events = observe_interactive(request, transcript_raw, _read(body["stdout"]["path"], OUTPUT_LIMIT), evidence["units"], body["process"], operators=evidence.get("operators", []))
         if events != body["events"]:
             raise NativeProcessError("Interactive replay differs")
     for ref in body["managed_worker"]["evidence"]:
@@ -1215,7 +1396,7 @@ def run_fixture(command, *, prompt=b"", timeout=1.0, output_limit=LIMIT):
                                     and not process["output_limit_exceeded"])}
 
 
-def observe_interactive(request, transcript_raw, stdout_raw, units, process):
+def observe_interactive(request, transcript_raw, stdout_raw, units, process, *, operators=None):
     """Replay exact client/server bytes and durable generation claims."""
     import io
     result = {"status": "UNOBTAINABLE", "thread_started": False, "turn_started": False, "turn_completed": False, "turn_failed": False, "errors": 0, "issues": []}
@@ -1231,7 +1412,11 @@ def observe_interactive(request, transcript_raw, stdout_raw, units, process):
             claim = claims.pop(unit, None)
             if claim is None or claim["message"] != message:
                 raise NativeProcessError("Missing authentic pre-send claim")
-        adapter = Interactive(request["answer_policy"], _pin(request["prompt"]), request["workspace"], reserved, io.BytesIO())
+        operator = None
+        if operators:
+            parent = Path(operators[0]["request"]["path"]).parent
+            operator = OperatorInbox(parent, request["binding"], request["answer_policy"], replay=operators)
+        adapter = Interactive(request["answer_policy"], _pin(request["prompt"]), request["workspace"], reserved, io.BytesIO(), operator=operator)
         pending = [adapter.start()]
         server = []
         if not transcript_raw.endswith(b"\n"):
@@ -1240,6 +1425,8 @@ def observe_interactive(request, transcript_raw, stdout_raw, units, process):
             row = _json(line)
             _exact(row, {"direction", "message"}, "transcript row")
             if row["direction"] == "client":
+                if not pending:
+                    pending.extend(adapter.poll())
                 if not pending or pending.pop(0) != row["message"]:
                     raise NativeProcessError("Interactive client sequence differs")
             elif row["direction"] == "server" and not pending:
@@ -1249,6 +1436,8 @@ def observe_interactive(request, transcript_raw, stdout_raw, units, process):
                 raise NativeProcessError("Interactive direction/order differs")
         if server != [_json(line) for line in stdout_raw.splitlines()] or not stdout_raw.endswith(b"\n"):
             raise NativeProcessError("Transcript differs from authentic stdout")
+        if operator is not None and len(operator.used) != len(operators):
+            raise NativeProcessError("Unconsumed operator evidence")
         if pending or claims or not adapter.done or not process["stdout_complete"] or process["output_limit_exceeded"]:
             raise NativeProcessError("Interactive completion unavailable")
         result.update(status="OBSERVED", thread_started=True, turn_started=True, turn_completed=True)

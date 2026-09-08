@@ -1,0 +1,15 @@
+test_exact_document_limit_is_readable_and_replayable (test_native_interactive.OperatorDocumentBoundaryTests.test_exact_document_limit_is_readable_and_replayable) ... ok
+test_wire_limit_cannot_publish_unreadable_wrapped_request (test_native_interactive.OperatorDocumentBoundaryTests.test_wire_limit_cannot_publish_unreadable_wrapped_request) ... FAIL
+
+======================================================================
+FAIL: test_wire_limit_cannot_publish_unreadable_wrapped_request (test_native_interactive.OperatorDocumentBoundaryTests.test_wire_limit_cannot_publish_unreadable_wrapped_request)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/ni11-interactive-20260908/tests/test_native_interactive.py", line 323, in test_wire_limit_cannot_publish_unreadable_wrapped_request
+    with self.assertRaisesRegex(ValueError, 'Operator request document exceeds bound'):
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.281s
+
+FAILED (failures=1)

@@ -1,0 +1,18 @@
+test_failed_reservation_cannot_emit_generation_message (test_native_interactive.InteractiveTests.test_failed_reservation_cannot_emit_generation_message) ... ok
+test_fake_server_cannot_continue_after_durable_answer_claim_failure (test_native_interactive.InteractiveTests.test_fake_server_cannot_continue_after_durable_answer_claim_failure) ... ok
+test_fake_server_failure_paths_reap_owned_process_without_completion (test_native_interactive.InteractiveTests.test_fake_server_failure_paths_reap_owned_process_without_completion) ... ok
+test_frozen_answer_is_reserved_before_send_and_correlated (test_native_interactive.InteractiveTests.test_frozen_answer_is_reserved_before_send_and_correlated) ... ok
+test_mismatch_sends_no_answer (test_native_interactive.InteractiveTests.test_mismatch_sends_no_answer) ... ok
+test_owned_transport_completes_and_reaps_fake_server (test_native_interactive.InteractiveTests.test_owned_transport_completes_and_reaps_fake_server) ... ok
+test_replay_rejects_transcript_claim_and_cross_attempt_mutations (test_native_interactive.InteractiveTests.test_replay_rejects_transcript_claim_and_cross_attempt_mutations) ... ok
+test_signal_shutdown_is_ineligible_without_complete_protocol_and_cleanup (test_native_interactive.InteractiveTests.test_signal_shutdown_is_ineligible_without_complete_protocol_and_cleanup) ... ok
+test_actual_fake_transport_delivers_only_owner_selected_frozen_fact (test_native_interactive.OperatorPolicyTests.test_actual_fake_transport_delivers_only_owner_selected_frozen_fact) ... ok
+test_operator_turn_uses_captured_question_and_bound_decision_in_replay (test_native_interactive.OperatorPolicyTests.test_operator_turn_uses_captured_question_and_bound_decision_in_replay) ... ok
+test_stale_unit_coverage_key_and_relevance_decisions_are_rejected (test_native_interactive.OperatorPolicyTests.test_stale_unit_coverage_key_and_relevance_decisions_are_rejected) ... ok
+test_unanswered_operator_deadline_reaps_actual_fake_process (test_native_interactive.OperatorPolicyTests.test_unanswered_operator_deadline_reaps_actual_fake_process) ... ok
+test_unknown_question_requires_exact_bound_operator_selection (test_native_interactive.OperatorPolicyTests.test_unknown_question_requires_exact_bound_operator_selection) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 1.151s
+
+OK

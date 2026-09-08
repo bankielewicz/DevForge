@@ -1,0 +1,29 @@
+{
+  "review": "NI-11 runtime review 05",
+  "status": "STATIC_REVIEW_COMPLETE",
+  "manifest": {
+    "path": "ni11-review-05/manifest.json",
+    "sha256": "cded180ff823f103d007f03cbbc7f54b26de1ae2941f7709bfa710c1a0030775",
+    "baseline": "ni11-review-04/candidate",
+    "verified_inputs": 64
+  },
+  "prior_finding": {
+    "id": "NI11-R04-001",
+    "status": "CLOSED",
+    "basis": [
+      "runtime/delivery/native_process.py:102-117",
+      "runtime/delivery/native_process.py:625-642",
+      "tests/test_native_interactive.py:306-346",
+      "docs/integration/native-process-contract.md:204-210"
+    ],
+    "closure": "Publication rejects a complete operator request document above LIMIT, while an exactly-LIMIT document remains readable, selectable, accepted, and replayable."
+  },
+  "new_findings": [],
+  "validation": {
+    "static": "Performed",
+    "tests": "Not performed",
+    "native_client": "Not performed",
+    "authentication": "Not performed",
+    "real_operator_identity_or_relevance": "Not observed"
+  }
+}

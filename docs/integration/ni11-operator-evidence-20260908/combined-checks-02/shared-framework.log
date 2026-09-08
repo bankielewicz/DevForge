@@ -1,0 +1,35 @@
+{
+  "status": "PASS",
+  "skills": 20,
+  "scope": "structure only",
+  "behavior": "NOT_EVALUATED",
+  "runtime_requirements": {
+    "claude": {
+      "schema_version": "devforge.runtime-requirement/v1",
+      "runtime": "devforge.delivery",
+      "protocol": "devforge.delivery-runtime/v1",
+      "provider": "claude",
+      "completion_mode": "managed-session",
+      "required_events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ]
+    },
+    "codex": {
+      "schema_version": "devforge.runtime-requirement/v1",
+      "runtime": "devforge.delivery",
+      "protocol": "devforge.delivery-runtime/v1",
+      "provider": "codex",
+      "completion_mode": "managed-session",
+      "required_events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+        "SessionEnd"
+      ]
+    }
+  },
+  "runtime_host": "NOT_VERIFIED"
+}

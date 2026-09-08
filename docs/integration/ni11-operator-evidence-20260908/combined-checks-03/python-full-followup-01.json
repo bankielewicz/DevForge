@@ -1,0 +1,7 @@
+{
+  "at": "2026-09-08T03:13:45.025841+00:00",
+  "exit_code": 0,
+  "seconds": 88.5868535250047,
+  "log_sha256": "c88529750a492aeda8cdd13f72fee1209018a50a424b3febdccbc6891200d2fb",
+  "reason": "Prior full suite clock high-water rejection; unchanged focused replay passed; repeat full suite once without source changes; prior failure retained."
+}

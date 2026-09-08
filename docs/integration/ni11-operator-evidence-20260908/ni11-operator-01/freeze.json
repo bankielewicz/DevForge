@@ -1,0 +1,10 @@
+{
+  "frozen_at": "2026-09-08T02:59:02.841242+00:00",
+  "head": "dc32c02967e7ec540151af7220ae2d1ca3dc85e0",
+  "files": {
+    "runtime/delivery/native_process.py": "d58de9beecf7cd1270cc0827da1d2031a97b7459920a5fcf402e3672a73edce4",
+    "tests/test_native_interactive.py": "8db467a7039d0bcf5d8572d3ad04d15827de63aa957b2be1148baded8b1f1a7a",
+    "docs/integration/native-process-contract.md": "70290a8982d797e71d3b33ab478a94a3dcfc60d486dcb60854a90c728951e88c"
+  },
+  "diff_sha256": "aaee3db1a91616429c5f56735230e8d2561d0056c20f9610452c418dd6c7b517"
+}

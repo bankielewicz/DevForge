@@ -1,0 +1,33 @@
+{
+  "review": "NI-11 runtime review 04",
+  "status": "STATIC_REVIEW_COMPLETE",
+  "manifest": {
+    "path": "ni11-review-04/manifest.json",
+    "sha256": "6f31f5aa3e12d0a6fb53f50505b597f87b4659718be264cbd5600335d9dac267",
+    "baseline": "dc32c02967e7ec540151af7220ae2d1ca3dc85e0",
+    "verified_inputs": 64
+  },
+  "findings": [
+    {
+      "id": "NI11-R04-001",
+      "severity": "P2",
+      "title": "Accepted maximum-size protocol lines produce unreadable operator requests",
+      "exposure": "A correlated blocking request at the accepted 8 MiB JSONL boundary is wrapped with metadata, exceeds the helper's 8 MiB read limit, and cannot receive an operator decision before deadline.",
+      "evidence": [
+        "runtime/delivery/native_process.py:102-117",
+        "runtime/delivery/native_process.py:575-579",
+        "runtime/delivery/native_process.py:592-600",
+        "runtime/delivery/native_process.py:815-826"
+      ],
+      "reproduction": "Send one correlated blocking item/tool/requestUserInput record exactly LIMIT bytes before newline; then call write_operator_decision for its pending request.",
+      "recommendation": "Bound the complete pending request below the helper read limit, or establish and enforce a dedicated consistent request-document limit; add boundary tests."
+    }
+  ],
+  "validation": {
+    "static": "Performed",
+    "tests": "Not performed",
+    "native_client": "Not performed",
+    "authentication": "Not performed",
+    "real_operator_identity_or_relevance": "Not observed"
+  }
+}

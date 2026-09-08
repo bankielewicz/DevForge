@@ -1,0 +1,174 @@
+{
+  "at": "2026-09-08T03:16:12.594656+00:00",
+  "scope": "Copied immutable review and check evidence; not runtime admission",
+  "files": [
+    {
+      "path": "ni11-review-04/manifest.json",
+      "sha256": "6f31f5aa3e12d0a6fb53f50505b597f87b4659718be264cbd5600335d9dac267"
+    },
+    {
+      "path": "ni11-review-04/reports/ni11-runtime-review-04.md",
+      "sha256": "66c4d03779c3ed2e8de4be4f751d84522e9e8dc096494297f0b94de75547f955"
+    },
+    {
+      "path": "ni11-review-04/reports/ni11-runtime-review-04.json",
+      "sha256": "a256c19e73f81d515f4f6dfc9bc6479c2268cff91c9f7ed623880e8534c9d654"
+    },
+    {
+      "path": "ni11-review-05/manifest.json",
+      "sha256": "cded180ff823f103d007f03cbbc7f54b26de1ae2941f7709bfa710c1a0030775"
+    },
+    {
+      "path": "ni11-review-05/reports/ni11-runtime-review-05.md",
+      "sha256": "f52520c5921514d55cfd39fce8efa51956f87ae24b5d009ce3adf152e3b78dbb"
+    },
+    {
+      "path": "ni11-review-05/reports/ni11-runtime-review-05.json",
+      "sha256": "eda39b0ecf7f1da0095754030da2d2f0ccff7e608875f5100b0f43c5bf8274b2"
+    },
+    {
+      "path": "ni11-operator-01/build.log",
+      "sha256": "e35dcf12cb0d8e17374acc696b695cfafc27f02eca15e5e4500607af70060b6c"
+    },
+    {
+      "path": "ni11-operator-01/cargo-test.log",
+      "sha256": "1b0467c2b7f5e91f0e1a9875e509593d68ba21c87be55111cc61dc66143eea28"
+    },
+    {
+      "path": "ni11-operator-01/clippy.log",
+      "sha256": "29f2b5ba3c1cf3ba2f4b79c82f401bac992bd66694314e24f0e6184a2304f212"
+    },
+    {
+      "path": "ni11-operator-01/closeout.md",
+      "sha256": "c42f5428024956f6b6d21418950bac5802eeeb2ee69d9cd00cd83a200e6c835b"
+    },
+    {
+      "path": "ni11-operator-01/existing.log",
+      "sha256": "a347bdd83e7cb50cbd88406976ea3e73910a023391113f87fba56f14d701309b"
+    },
+    {
+      "path": "ni11-operator-01/final-focused.log",
+      "sha256": "598d18393df0ec3ff26d834e7603ae58b77089a292d64894d357f32afad09739"
+    },
+    {
+      "path": "ni11-operator-01/final-focused2.log",
+      "sha256": "9d871f16fa38d9f71b8c51ae48f16f16132a76bf3ab62ff59efa5d6d2d512a50"
+    },
+    {
+      "path": "ni11-operator-01/fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "ni11-operator-01/focused.log",
+      "sha256": "13f435711e01f3f5b876c8047bca6b97808255e24200c271e1f330547e10b5cb"
+    },
+    {
+      "path": "ni11-operator-01/freeze.json",
+      "sha256": "0f0a9bede06c0dc9c8295e9c4b5f23ce57b997cac2da0b90594f93ba1b4ccbb5"
+    },
+    {
+      "path": "ni11-operator-01/tdd-green.log",
+      "sha256": "742b6f7b8344fb1f7bc34a6f51b4ffd19c5185e6cdc5fc3bb1b93ccfe3bad364"
+    },
+    {
+      "path": "ni11-operator-01/tdd-red.log",
+      "sha256": "0dcc0fc6f52e04ebcbeb686f3e42c18c67274d3eda5fe3326782a647b7cd77c1"
+    },
+    {
+      "path": "ni11-operator-remediation-02/assignment.json",
+      "sha256": "1ce156782b34e524eb97a3982d86e89f3c52ac4ec449e30ce2060a9bcca9ced8"
+    },
+    {
+      "path": "ni11-operator-remediation-02/tdd-green.log",
+      "sha256": "c017daf63bb115596f7d488b726487009ac2c31213a73f1ad629bfbcba5e23d5"
+    },
+    {
+      "path": "ni11-operator-remediation-02/tdd-red.log",
+      "sha256": "f079c7eab16ff0037279ae832775dd3d14f766466e989e8f9bce628c138554bf"
+    },
+    {
+      "path": "combined-checks-02/build.log",
+      "sha256": "ee1d3fffa2022e962e63e0dbe4d35c9c198450a20c29fc09030f635dbb38bfcd"
+    },
+    {
+      "path": "combined-checks-02/cargo-test.log",
+      "sha256": "280b59f3fac9f16b342956a8b380bf3b5c9e0279050c0ae8939f9663ce06454a"
+    },
+    {
+      "path": "combined-checks-02/clippy.log",
+      "sha256": "99f71393b9903dca098310bb446022a4bdee195ea9996f351a787195555210a6"
+    },
+    {
+      "path": "combined-checks-02/demo.log",
+      "sha256": "41872e4510ecd632be99865743b97c6b674aab205034cf6a0ff3d0edefaad21a"
+    },
+    {
+      "path": "combined-checks-02/fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "combined-checks-02/frozen-framework.log",
+      "sha256": "4eb6710f000be4277d05364c9edda8620a0093ab9fe267c15f6f36fd06bf78d5"
+    },
+    {
+      "path": "combined-checks-02/python.log",
+      "sha256": "ac902aed5ab6bad5583d4faa2e7b2b927b943aeb5ca2fac49de9c31e4f14fb45"
+    },
+    {
+      "path": "combined-checks-02/results.json",
+      "sha256": "ba4c9d9d932140a2f76977f7b1c5a097615e5500f0cbe648f5881870684da38c"
+    },
+    {
+      "path": "combined-checks-02/shared-framework.log",
+      "sha256": "91d6a279c2fb19dd5e0bd3c4d31fdf948d54db0ddb84eed4fdd88c2c85a91117"
+    },
+    {
+      "path": "combined-checks-03/build.log",
+      "sha256": "ee1d3fffa2022e962e63e0dbe4d35c9c198450a20c29fc09030f635dbb38bfcd"
+    },
+    {
+      "path": "combined-checks-03/cargo-test.log",
+      "sha256": "ed1d96eeb6964281cca257ba3c1413361955aaa40e19ea74fc9c7a78fe3762cc"
+    },
+    {
+      "path": "combined-checks-03/clippy.log",
+      "sha256": "49a61556293d5dea91b7150f4c9c70f0b53b4186d1244b8c844b87c270bdf347"
+    },
+    {
+      "path": "combined-checks-03/clock-failure-followup.log",
+      "sha256": "24691ffdb1e409e70805b569c0504679951925d28bff45e00899d53643afd0e7"
+    },
+    {
+      "path": "combined-checks-03/demo.log",
+      "sha256": "5bc08743d7bae1eb5f0c7037bbdff80a1fb3bedec791e824cfb23d83bb0bd97d"
+    },
+    {
+      "path": "combined-checks-03/fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "combined-checks-03/frozen-framework.log",
+      "sha256": "4eb6710f000be4277d05364c9edda8620a0093ab9fe267c15f6f36fd06bf78d5"
+    },
+    {
+      "path": "combined-checks-03/python-full-followup-01.json",
+      "sha256": "b5de677ea0261421561492a4719ae6e613f0888eb44df14834d6b71d7e9a5299"
+    },
+    {
+      "path": "combined-checks-03/python-full-followup-01.log",
+      "sha256": "c88529750a492aeda8cdd13f72fee1209018a50a424b3febdccbc6891200d2fb"
+    },
+    {
+      "path": "combined-checks-03/python.log",
+      "sha256": "5254fe645c1d75bed77f7222ac5567e5a1782b6aa5cf62b6a5a5963e1ce35417"
+    },
+    {
+      "path": "combined-checks-03/results.json",
+      "sha256": "afa19c8ac2c517e0fd0291dc7b3ef122e49e9db31b0d152b2e0aeddaafaa6598"
+    },
+    {
+      "path": "combined-checks-03/shared-framework.log",
+      "sha256": "91d6a279c2fb19dd5e0bd3c4d31fdf948d54db0ddb84eed4fdd88c2c85a91117"
+    }
+  ]
+}
