@@ -118,7 +118,7 @@ def catalog_coverage(cases_ref, policy, evidence):
     require(isinstance(refs, list) and cases_ref in refs, "missing original case catalog")
     projection = policy.get("catalog_assertions", [])
     require(isinstance(projection, list) and projection, "missing catalog assertion projection")
-    known = set()
+    known, obligations = set(), {}
     for ref in refs:
         raw = evidence.pin(ref)
         if ref != cases_ref and not ref["path"].endswith(".json"):
@@ -147,6 +147,7 @@ def catalog_coverage(cases_ref, policy, evidence):
                 for row in matches:
                     if case.get("tier") in ("C", "B", "A"):
                         require("N" in row.get("evidence_kinds", []), "native catalog evidence kind weakened")
+                    obligations[row.get("assertion_id")] = {"tier": case.get("tier"), "kinds": row.get("evidence_kinds", [])}
                     known.add(row.get("assertion_id"))
     ids = [row.get("assertion_id") for row in projection]
     require(all(isinstance(value, str) and value for value in ids) and len(ids) == len(set(ids)), "invalid/duplicate catalog projection")
@@ -158,6 +159,8 @@ def catalog_coverage(cases_ref, policy, evidence):
             raw = evidence.pin(row["source_ref"])
             require(not row["source_ref"]["path"].endswith(".json")
                     and text(row.get("source_pointer"), "source anchor") in raw.decode(), "unknown catalog assertion pointer")
+            obligations[row["assertion_id"]] = {"tier": None, "kinds": row.get("evidence_kinds", [])}
+    return obligations
 
 
 def validate(evidence_path, planned, project, framework):
@@ -287,7 +290,7 @@ def _validate(evidence_path, planned, project, framework):
                     "consequential/unbounded or ineligible Routine adoption")
         require(decision.get("lineage") == results.get("lineage") == policy.get("lineage")
                 and isinstance(policy.get("lineage"), dict), "lineage differs/missing")
-        catalog_coverage(package["cases"], policy, evidence)
+        obligations = catalog_coverage(package["cases"], policy, evidence)
         selected = policy.get("assertions", [])
         require(isinstance(selected, list) and selected, "missing assertion selection")
         selected_ids = [row.get("assertion_id") for row in selected]
@@ -303,6 +306,13 @@ def _validate(evidence_path, planned, project, framework):
                 and {row.get("check_id") for row in checks} == set(selected_ids), "decision coverage differs")
         by_id = {row["assertion_id"]: row for row in assertions}
         for selection in selected:
+            obligation = obligations[selection["assertion_id"]]
+            kinds = obligation["kinds"]
+            require(isinstance(kinds, list) and kinds and set(kinds) <= {"D", "S", "N"}, "invalid catalog evidence obligation")
+            if "N" in kinds:
+                require(selection.get("tier") in ("C", "B", "A")
+                        and (obligation["tier"] not in ("C", "B", "A") or selection["tier"] == obligation["tier"]),
+                        "native catalog tier/obligation changed")
             result = by_id[selection["assertion_id"]]
             require(result.get("selection") == selection.get("selection"), "post-hoc assertion exclusion")
             if selection.get("selection") == "REQUIRED":
@@ -311,7 +321,7 @@ def _validate(evidence_path, planned, project, framework):
                         "required assertion incomplete/failed")
                 evidence.refs(result.get("observation_refs"))
                 require(next(row for row in checks if row["check_id"] == selection["assertion_id"]).get("effective_outcome") == "PASS", "required decision check did not pass")
-                if selection.get("tier") in ("S", "C", "B", "A"):
+                if {"S", "N"} & set(kinds) or selection.get("tier") in ("S", "C", "B", "A"):
                     evidence.refs(result.get("grade_refs"))
             else:
                 require((selection.get("selection"), result.get("outcome")) in

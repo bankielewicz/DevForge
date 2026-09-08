@@ -292,3 +292,27 @@ class ManualAdoptionTest(unittest.TestCase):
             {'path': str(alias), 'sha256': hashlib.sha256(alias.read_bytes()).hexdigest()})
         self.freeze()
         self.refused('invalidate')
+
+    def test_native_catalog_assertion_cannot_be_relabelled_deterministic(self):
+        self.prepare()
+        catalog = json.loads(Path(self.cases['path']).read_text())
+        catalog['cases'].append({'id': 'NATIVE-EXTRA', 'tier': 'B',
+                                 'required_observations': ['Observe actual bounded native behavior']})
+        self.cases = self.put('cases.json', catalog)
+        self.plan['input_refs'] = [{'kind': 'specification', **self.specification}, {'kind': 'cases', **self.cases}]
+        policy = self.plan['validation_policy']
+        policy['catalog_refs'] = [self.cases]
+        for row in policy['catalog_assertions']:
+            row['source_ref'] = self.cases
+        policy['catalog_assertions'].append({'assertion_id': 'NATIVE-EXTRA', 'case_id': 'NATIVE-EXTRA',
+                                             'source_ref': self.cases, 'source_pointer': '/cases/5/required_observations/0',
+                                             'evidence_kinds': ['N']})
+        policy['assertions'].append({'assertion_id': 'NATIVE-EXTRA', 'task_id': 'T07', 'tier': 'D',
+                                     'selection': 'REQUIRED', 'expectation': 'pass'})
+        self.review['selection_review']['reviewed_assertion_ids'].append('NATIVE-EXTRA')
+        self.results['assertion_results'].append({'assertion_id': 'NATIVE-EXTRA', 'selection': 'REQUIRED',
+                                                 'integrity': 'INTACT', 'outcome': 'PASS',
+                                                 'observation_refs': [self.raw], 'grade_refs': []})
+        self.decision['checks'].append({'check_id': 'NATIVE-EXTRA', 'effective_outcome': 'PASS'})
+        self.freeze()
+        self.refused('native.*tier|native.*obligation')
