@@ -569,3 +569,37 @@ class ManagedBrokerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class V2FundedCollectorTests(unittest.TestCase):
+    def test_selected_funding_reaches_actual_preparation_with_900_second_bound(self):
+        from test_utility_schedule import V2FundingFixture
+        import utility_schedule
+        schema = RequestPreparationTests(); schema.setUp(); self.addCleanup(schema.doCleanups)
+        root = schema.root / 'funding'; root.mkdir()
+        selected = V2FundingFixture(root)
+        schema.plan = selected.plan
+        schema.plan['client'] = native.CLIENT.copy()
+        schema.plan['model'] = native.MODEL
+        attempt = schema.plan['attempts'][0]
+        attempt.update(workspace=str(schema.workspace), client_state=str(schema.profile))
+        schema.runtime['schema_version'] = 'devforge.native-runtime-configuration/v2'
+        schema.runtime['allocation'] = selected.allocation_ref
+        schema.runtime['attempts'][0]['attempt_id'] = attempt['attempt_id']
+        schema.runtime['attempts'].append({'attempt_id': schema.plan['attempts'][1]['attempt_id']})
+        schema.report['attempt_id'] = attempt['attempt_id']
+        schema.save()
+        policy = selected.policy()
+        utility_schedule.validate_allocation_v2(schema.plan, policy=policy)
+        binding = {**schema.binding, 'task_id': schema.plan['task_id'], 'attempt_id': attempt['attempt_id']}
+        request = native.prepare_request(schema.plan, attempt, binding, 35, 935,
+            selected.funding['origin_utc'], schema.installed, funding=policy.funding_context)
+        self.assertEqual(request['deadline'], 935)
+        self.assertEqual(request['funding_clock'], selected.funding)
+        self.assertEqual(request['binding']['reserved_at'], 35)
+        with self.assertRaises(native.NativeProcessError):
+            native.prepare_request(schema.plan, attempt, binding, 35, 936,
+                selected.funding['origin_utc'], schema.installed, funding=policy.funding_context)
+        with self.assertRaises(native.NativeProcessError):
+            native.prepare_request(schema.plan, attempt, binding, 35, 935,
+                datetime.now(timezone.utc).isoformat(), schema.installed, funding=policy.funding_context)

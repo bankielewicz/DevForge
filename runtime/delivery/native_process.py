@@ -232,7 +232,7 @@ def _config(raw, workspace, profile):
     return cfg
 
 
-def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_origin_utc, installed_inputs):
+def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_origin_utc, installed_inputs, *, funding=None):
     """Validate a frozen native config and derive the only supported exec command.
 
     Binding is supplied by the locked journal. Effective observations are owner
@@ -241,14 +241,26 @@ def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_orig
     """
     version = plan.get("schema_version", "devforge.utility-native-plan/v1")
     if version == "devforge.utility-native-plan/v2":
-        raise NativeProcessError("v2 funding authority admission unavailable; no legacy collector fallback")
-    if version != "devforge.utility-native-plan/v1":
+        try:
+            from . import utility_schedule
+        except ImportError:
+            import utility_schedule
+        if not isinstance(funding, utility_schedule.Funding) or funding.plan != plan:
+            raise NativeProcessError("v2 funding authority admission requires exact protected context")
+        if campaign_origin_utc != funding.funding["origin_utc"]:
+            raise NativeProcessError("v2 collector cannot reset original funding origin")
+        max_seconds = min(funding.allocation["max_seconds"], (funding.deadline-funding.origin).total_seconds(),
+            (funding.funding["deadline_monotonic_ns"]-funding.funding["origin_monotonic_ns"])/1e9)
+        per_seconds = min(funding.allocation["per_attempt_max_seconds"], attempt["max_seconds"])
+    elif version == "devforge.utility-native-plan/v1":
+        max_seconds, per_seconds = 14400, 600
+    else:
         raise NativeProcessError("Unsupported native plan version")
     if plan.get("client") != CLIENT or plan.get("model") != MODEL:
         raise NativeProcessError("Client/model differs from the approved native selection")
     _number(reserved_at, "reserved_at")
     _number(deadline, "deadline")
-    if not reserved_at < deadline <= min(14400, reserved_at + 600):
+    if not reserved_at < deadline <= min(max_seconds, reserved_at + per_seconds):
         raise NativeProcessError("Reservation deadline exceeds the approved original clock")
     try:
         origin = datetime.fromisoformat(campaign_origin_utc.replace("Z", "+00:00"))
@@ -261,7 +273,7 @@ def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_orig
     cfgraw = _pin(plan["runtime_configuration"])
     runtime = _json(cfgraw)
     _exact(runtime, {"schema_version", "allocation", "attempts"}, "runtime configuration")
-    if runtime["schema_version"] != "devforge.native-runtime-configuration/v1":
+    if runtime["schema_version"] != ("devforge.native-runtime-configuration/v2" if funding else "devforge.native-runtime-configuration/v1"):
         raise NativeProcessError("Unsupported runtime configuration")
     _pin(runtime["allocation"])
     rows = runtime["attempts"]
@@ -277,7 +289,10 @@ def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_orig
         units = answer_policy(policy)
         allocation = _json(_pin(runtime["allocation"]))
         selected = [c for c in allocation["required_calls"] if c["attempt_id"] == attempt["attempt_id"]]
-        if len(selected) != 1 or selected[0].get("continuation_units") != units:
+        expected_units = ([(c["call_id"]) for c in allocation["required_calls"]
+            if c["kind"] == "continuation" and len(selected) == 1 and c["parent_call_id"] == selected[0]["call_id"]]
+            if funding else selected[0].get("continuation_units") if len(selected) == 1 else None)
+        if len(selected) != 1 or expected_units != units:
             raise NativeProcessError("Every continuation requires exact frozen counted allocation")
     elif row["interaction"] != "single-turn":
         raise NativeProcessError("Interactive answer transport does not support this interaction")
@@ -407,6 +422,13 @@ def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_orig
         command += ["-c", key + "=" + _toml(value)]
     if policy is None:
         command.append("-")
+    if funding:
+        forbidden = [funding.root, *[Path(path) for path in funding.policy.sources]]
+        visible = [workspace, profile, *[Path(ref["path"]) for ref in readonly],
+                   *[Path(item) for item in mounts], *[Path(ref["path"]) for ref in fixture_dirs]]
+        if any(_overlap(target, mount) for target in forbidden for mount in visible):
+            raise NativeProcessError("Funding authority or shared grant custody is worker-visible")
+        pins += [{"path": path, "sha256": digest(raw)} for path, raw in funding.policy.sources.items()]
     binding = dict(binding)
     required = {"task_id", "schedule_binding", "challenge", "reservation_sha256", "attempt_id", "plan_sha256"}
     if set(binding) != required or binding["task_id"] != plan["task_id"] or binding["attempt_id"] != attempt["attempt_id"]:
@@ -422,6 +444,7 @@ def prepare_request(plan, attempt, binding, reserved_at, deadline, campaign_orig
             "system_mounts": mounts, "fixture_git_dirs": fixture_dirs, "reserved_at": reserved_at,
             "deadline": deadline, "campaign_origin_utc": campaign_origin_utc, "output_limit": OUTPUT_LIMIT,
             "managed_worker": managed, "immutable_discovery_dirs": immutable,
+            **({"funding_clock": funding.funding} if funding else {}),
             **({"answer_policy": policy, "answer_policy_pin": row["answer_policy"]} if policy is not None else {})}
 
 
@@ -1213,6 +1236,8 @@ def launch(authority_root, request, *, check_reservation, elapsed_seconds):
     A crash without a receipt remains unresolved; never rerun its reservation.
     """
     request = _json(canonical_json(request))
+    if "funding_clock" in request:
+        raise NativeProcessError("v2 funded launch unavailable: complete grader/parent-return charge and completion consumers remain unresolved")
     check_reservation(request)
     if (request["binding"]["client"] != CLIENT or request["binding"]["model"] != MODEL
             or digest(canonical_json(request["command"])) != request["binding"]["command_sha256"]):

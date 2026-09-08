@@ -454,7 +454,7 @@ def _native_prerequisites(state):
 
 def _native_complete_allocation(state, plan):
     """Validate the independent coverage oracle before any campaign binding."""
-    allocation, sources = utility_evidence.launch_allocation(plan, frozen=state.frozen)
+    allocation, sources = utility_evidence.launch_allocation(plan, frozen=state.frozen, policy=state.cfg["validation_policy"])
     for call in allocation["required_calls"]:
         if call["review_path"] is None:
             continue
@@ -501,6 +501,7 @@ class State:
         self.native_attempts = {}
         self.schedule = None
         self.schedule_allocation = None
+        self.funding = None
         self.native_claims, self.native_imports, self.native_reviews = {}, {}, {}
         self.reservation_refs = {}
         self.schedule_plan, self.schedule_plan_ref = None, None
@@ -590,6 +591,19 @@ class State:
 
     def _apply(self, record):
         op, data = record["operation"], record["data"]
+        if self.funding:
+            mono = data.get("funding_monotonic_ns")
+            validation_policy.require(type(mono) is int and mono >= self.schedule.last_monotonic_ns,
+                                      "funding journal monotonic clock reset")
+            stamp = store._stamp(record["at_utc"], "funded operation time")
+            self.schedule.observed_elapsed = self.funding.elapsed(stamp, mono)
+            if op not in {"native_schedule_cancel", "native_process_import", "native_result_close"}:
+                validation_policy.require(stamp < self.funding.deadline and mono < self.funding.funding["deadline_monotonic_ns"],
+                                          "funding original deadline expired in journal")
+            self.schedule.last_monotonic_ns = mono
+            if op != "native_schedule_reserve":
+                data = {k:v for k,v in data.items() if k != "funding_monotonic_ns"}
+                record = {**record, "data":data}
         self.sequence = record["sequence"] - 1
         if op == "start":
             core._exact(data, {"challenge"}, "utility start")
@@ -693,7 +707,7 @@ class State:
             if self.schedule is not None or self.native_attempts:
                 core._fail("native schedule binding is exclusive and cannot reset prior reservations")
             spec, gate_raw, fixed, plan_ref, plan = _native_prerequisites(self)
-            _, allocation_sources = _native_complete_allocation(self, plan)
+            allocation, allocation_sources = _native_complete_allocation(self, plan)
             fixed.extend(allocation_sources)
             refs = [r for r in record["snapshots"] if r["kind"] == "schedule_binding"]
             if len(refs) != 1:
@@ -719,8 +733,17 @@ class State:
                                             "sha256": store._hash(self.cfg["contract_raw"])}}
             kernel = utility_schedule.validate(self.blobs[refs[0]["sha256"]], plan, plan_ref,
                                                self.cfg["session"]["task_id"], **options)
-            self.schedule = utility_schedule.JournalSchedule(kernel, store._stamp(record["at_utc"], "schedule origin"),
-                                                             self.cfg["deadline"])
+            origin = store._stamp(record["at_utc"], "schedule origin")
+            if plan["schema_version"] == "devforge.utility-native-plan/v2":
+                self.funding = self.cfg["validation_policy"].funding_context
+                _native_protected(self, self.funding.root, "shared grant custody", plan=plan)
+                self.funding.claim(self)
+                origin = self.funding.origin
+                effective = min(kernel.max_seconds, (self.cfg["deadline"]-origin).total_seconds(),
+                                (self.funding.deadline-origin).total_seconds(),
+                                (self.funding.funding["deadline_monotonic_ns"]-self.funding.funding["origin_monotonic_ns"])/1e9)
+                object.__setattr__(kernel, "max_seconds", effective)
+            self.schedule = utility_schedule.JournalSchedule(kernel, origin, self.cfg["deadline"], funding=self.funding)
             self.schedule_plan, self.schedule_plan_ref = plan, plan_ref
             self.schedule_allocation = next({"path": path, "sha256": store._hash(raw)}
                                             for kind, path, raw in allocation_sources if kind == "native_allocation")
@@ -728,10 +751,19 @@ class State:
                 self.gates[path] = digest
             self._nonce(data["next_challenge"])
         elif op == "native_schedule_reserve":
-            core._exact(data, {"next_challenge"}, "native schedule reservation")
+            core._exact(data, {"next_challenge"} | ({"funding_monotonic_ns"} if self.funding else set()), "native schedule reservation")
             if self.schedule is None or self.schedule_allocation is None or self.phase != "P4" or self.status != "ACTIVE":
                 core._fail("native schedule reservation requires a complete bound allocation and active P4 schedule")
-            self.schedule.reserve(store._stamp(record["at_utc"], "schedule reservation time"))
+            stamp = store._stamp(record["at_utc"], "schedule reservation time")
+            if self.funding:
+                tentative = self.schedule.kernel.reserve(self.schedule.state, self.funding.elapsed(stamp, data["funding_monotonic_ns"]))
+                if tentative.status == "RESERVED":
+                    call = next(c for c in self.funding.calls.values() if c["attempt_id"] == tentative.attempt.attempt_id)
+                    self.funding.dependencies(call["call_id"], stamp, data["funding_monotonic_ns"])
+                    for _, path, raw in self.funding.policy.fixed():
+                        if not any(r["source"] == path and r["sha256"] == store._hash(raw) for r in record["snapshots"]) and path not in self.gates:
+                            core._fail("funding dependency lacks protected snapshot")
+            self.schedule.reserve(stamp, data.get("funding_monotonic_ns"))
             self._nonce(data["next_challenge"])
         elif op == "native_schedule_cancel":
             core._exact(data, {"attempt_id", "reason"}, "native unlaunched cancellation")
@@ -780,6 +812,8 @@ class State:
         row = self.native_inflight(identity, cleanup=op in {"native_process_import", "native_result_close"})
         stamp = store._stamp(record["at_utc"], "native lifecycle time")
         elapsed = (stamp - self.schedule.origin).total_seconds()
+        if self.funding:
+            elapsed = max(elapsed, self.schedule.observed_elapsed)
         if op == "native_process_claim":
             core._exact(data, {"attempt_id", "next_challenge"}, "native process claim")
             if identity in self.native_claims or elapsed >= row.deadline:
@@ -930,6 +964,11 @@ class State:
 
     def append(self, operation, data, sources=()):
         now = store._now()
+        if self.funding:
+            data = dict(data)
+            data["funding_monotonic_ns"] = (utility_schedule.time.monotonic_ns()
+                if operation in {"native_schedule_cancel", "native_process_import", "native_result_close"}
+                else self.funding.live(now, self.cfg["deadline"]))
         if now < self.last_time:
             core._fail("utility operation clock moved behind its journal high-water mark")
         if operation not in {"native_schedule_cancel", "native_process_import", "native_result_close"}:
@@ -1225,10 +1264,28 @@ def native_schedule_bind(state_root, schedule_path):
         state = State(root, fd)
         if state.schedule is not None or state.native_attempts:
             core._fail("native schedule binding is exclusive and cannot reset prior reservations")
-        spec, raw, fixed, _, plan = _native_prerequisites(state)
+        spec, raw, fixed, plan_ref, plan = _native_prerequisites(state)
         _, allocation_sources = _native_complete_allocation(state, plan)
         fixed.extend(allocation_sources)
         binding_raw = store._external(path, LIMIT, "native schedule binding")
+        if plan["schema_version"] == "devforge.utility-native-plan/v2":
+            policy = state.cfg["validation_policy"]
+            funding = policy.funding_context
+            _native_protected(state, path, "native schedule binding", plan=plan)
+            _native_protected(state, funding.root, "shared grant custody", plan=plan)
+            review_gate = next(g for g in state.cfg["contract"]["gate_inputs"] if g["id"] == "independent-review")
+            review_ref = core._json(state.source(review_gate["path"], "admitted T04"), "T04")["evidence"][0]
+            utility_schedule.validate(binding_raw, plan, plan_ref,
+                plan["task_id"], policy=policy, review_ref=review_ref,
+                delivery_ref={"path":state.cfg["session"]["delivery_contract"],"sha256":store._hash(state.cfg["contract_raw"])})
+            validation_policy.require(any(review_ref in completed["evidence"]
+                for cid, completed in funding.completed.items() if cid in funding.calls
+                and funding.calls[cid]["kind"] == "static_review"), "funding completion does not bind the admitted T04 review")
+            funding.live(store._now(), state.cfg["deadline"])
+            for completed in funding.completed.values():
+                validation_policy.require(store._stamp(completed["completed_utc"], "call completion") <= store._now()
+                    and completed["completed_monotonic_ns"] <= utility_schedule.time.monotonic_ns(), "call completion is in the future")
+            funding.claim(state, create=True)
         state.append("native_schedule_bind", {"next_challenge": store._fresh(state)},
                      [("schedule_binding", str(path), binding_raw), ("native_gate", spec["path"], raw), *fixed])
         return State(root, fd).view("NATIVE_SCHEDULE_BOUND")
@@ -1240,7 +1297,20 @@ def native_schedule_reserve(state_root):
     root = store._absolute(state_root, "state")
     with store._lock(root) as fd:
         state = State(root, fd)
-        state.append("native_schedule_reserve", {"next_challenge": store._fresh(state)})
+        data = {"next_challenge": store._fresh(state)}
+        sources = []
+        if state.funding:
+            now = store._now()
+            data["funding_monotonic_ns"] = state.funding.live(now, state.cfg["deadline"])
+            state.funding.claim(state)
+            tentative = state.schedule.kernel.reserve(state.schedule.state, state.funding.elapsed(now, data["funding_monotonic_ns"]))
+            if tentative.status == "RESERVED":
+                call = next(c for c in state.funding.calls.values() if c["attempt_id"] == tentative.attempt.attempt_id)
+                state.funding.dependencies(call["call_id"], now, data["funding_monotonic_ns"])
+                sources = state.funding.policy.fixed()
+                for _, path, _ in sources:
+                    _native_protected(state, path, "funding dependency", plan=state.schedule_plan)
+        state.append("native_schedule_reserve", data, sources)
         return State(root, fd).view("NATIVE_SCHEDULE_RECORDED")
 
 
@@ -1317,7 +1387,8 @@ def native_process_launch(state_root, attempt_id):
         attempt = next(a for a in plan["attempts"] if a["attempt_id"] == attempt_id)
         request = _native_collector().prepare_request(
             plan, attempt, state.native_binding(attempt_id), row.reserved_at, row.deadline,
-            state.schedule.origin.isoformat(), state.cfg["session"]["installed_inputs"])
+            state.schedule.origin.isoformat(), state.cfg["session"]["installed_inputs"],
+            **({"funding":state.funding} if state.funding else {}))
         request_raw = store._dump(request)
         state.append("native_process_claim", {"attempt_id": attempt_id, "next_challenge": store._fresh(state)},
                      [("native_launch_request", str(root / "native-launch-requests" / attempt_id), request_raw), *sources])
@@ -1330,7 +1401,12 @@ def native_process_launch(state_root, attempt_id):
             if candidate != current.native_claims[attempt_id]["request"] or attempt_id in current.native_imports:
                 core._fail("collector launch differs from current one-use protected claim")
             store._before_deadline(store._now(), current.cfg["deadline"])
-            if (store._now() - origin).total_seconds() >= row.deadline:
+            elapsed = (store._now() - origin).total_seconds()
+            if current.funding:
+                mono = current.funding.live(store._now(), current.cfg["deadline"])
+                current.funding.claim(current)
+                elapsed = max(elapsed, current.funding.elapsed(store._now(), mono))
+            if elapsed >= row.deadline:
                 core._fail("native launch deadline expired before actual process creation")
             utility_evidence.native_plan(current.source(plan_ref["path"], "native launch plan"), plan["task_id"])
 

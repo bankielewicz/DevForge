@@ -173,7 +173,7 @@ def _plan_rest(plan, task_id, fixed, client_path, frozen):
     return plan, fixed
 
 
-def launch_allocation(plan, *, frozen=None):
+def launch_allocation(plan, *, frozen=None, policy=None):
     """Supplement v1 with a complete call inventory before campaign binding.
 
     The cases file is the independently frozen required-call oracle. A list of
@@ -188,7 +188,7 @@ def launch_allocation(plan, *, frozen=None):
         validator = getattr(utility_schedule, "validate_allocation_v2", None)
         if validator is None:
             core._fail("v2 allocation consumer requires the separately integrated scheduler")
-        return validator(plan, frozen=frozen)
+        return validator(plan, frozen=frozen, policy=policy)
     runtime_path, runtime_raw = _pin(plan["runtime_configuration"], "native runtime configuration", frozen)
     runtime = core._json(runtime_raw, "native runtime configuration")
     if not isinstance(runtime, dict) or runtime.get("schema_version") != "devforge.native-runtime-configuration/v1":

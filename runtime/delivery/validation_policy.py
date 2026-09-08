@@ -87,6 +87,7 @@ class Policy:
         require(all(p[k] == selection[k] for k in ("version", "policy_ref", "acceptance_ref")), "plan policy/acceptance differs from delivery")
         authority = core._json(assignment, "external assignment authorization")
         auth = authority.get("authorization", {})
+        self.authorization, self.owner = auth, authority.get("owner")
         require(auth.get("validation_policy") == selection and auth.get("selection_reviewer") == p["selection_reviewer"], "assignment does not select exact policy and reviewer")
         require(authority.get("owner") == self.plan["assignment"].get("owner"), "plan owner differs from assignment")
         self.author = authority.get("author", self.plan["assignment"]["owner"])

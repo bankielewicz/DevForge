@@ -519,3 +519,155 @@ class V2PrerequisiteTests(unittest.TestCase):
                 self.assertEqual(result['status'], 'FAIL', result)
                 self.assertIn('funding authority', str(result))
                 self.assertEqual((f.state / 'HEAD.json').read_bytes(), before)
+
+
+class V2FundingFixture(V2ScheduleFixture):
+    """Synthetic owner documents: never a live grant or qualification claim."""
+    def __init__(self, root):
+        import time
+        super().__init__(root)
+        f = self.f
+        self.now = datetime.now(timezone.utc)
+        self.mono = time.monotonic_ns()
+        prepared = root / 'prepared'; prepared.mkdir()
+        self.native = admitted.NativePlanFixture(prepared)
+        n = self.native
+        for a in self.plan['attempts']:
+            Path(a['workspace']).mkdir(); Path(a['client_state']).mkdir()
+        n.plan.update(self.plan)
+        self.plan = n.plan
+        self.plan['max_seconds'] = 3600
+        self.claim_root = f.owner / 'shared-grant-custody'; self.claim_root.mkdir(mode=0o700)
+        proof = f.put('synthetic-dispatch-output.txt', 'Synthetic actual-output fixture bytes; not a model observation')
+        self.prior = {'schema_version': 'devforge.funding-terminal/v1', 'grant_id': 'old-exhausted',
+            'producer': 'external-owner', 'approved': 24, 'charged': 24, 'remaining': 0,
+            'status': 'EXHAUSTED', 'evidence': [proof]}
+        prior_ref = f.put('prior-ledger.json', self.prior)
+        self.funding = {'grant_id': 'new-synthetic-grant', 'authority_ref': None, 'owner': 'external-owner',
+            'purpose': 'native campaign UTILITY-001', 'origin_utc': (self.now-timedelta(seconds=30)).isoformat(),
+            'deadline_utc': (self.now+timedelta(seconds=3570)).isoformat(),
+            'clock_id': 'linux-boot:' + Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+            'origin_monotonic_ns': self.mono-30_000_000_000, 'deadline_monotonic_ns': self.mono+3570_000_000_000,
+            'prior_ledgers': [prior_ref]}
+        def completion(cid, producer, evidence):
+            return {'schema_version': 'devforge.funding-call/v1', 'grant_id': self.funding['grant_id'],
+                'call_id': cid, 'producer': producer, 'charged': True, 'status': 'COMPLETED',
+                'started_utc': (self.now-timedelta(seconds=20)).isoformat(),
+                'completed_utc': (self.now-timedelta(seconds=10)).isoformat(),
+                'started_monotonic_ns': self.mono-20_000_000_000,
+                'completed_monotonic_ns': self.mono-10_000_000_000, 'evidence': evidence}
+        setup = f.put('setup-completion.json', completion('setup-1', 'external-owner', [proof]))
+        review = f.put('review-completion.json', completion('T04-review', 'independent-reviewer', [f.pin(f.review_path)]))
+        self.authority = {'schema_version': 'devforge.funding-authority/v1', 'producer': 'external-owner',
+            'task_id': 'UTILITY-001', 'validation_plan': f.pin(f.plan_path),
+            **{k:v for k,v in self.funding.items() if k not in ('authority_ref', 'owner')},
+            'max_total_attempts': 4, 'max_seconds': 3600, 'per_attempt_max_seconds': 900,
+            'claim_root': str(self.claim_root), 'preparation': [setup], 'completed_calls': [review],
+            'call_records': {c['call_id']: str(self.claim_root / (c['call_id'] + '.completion.json')) for c in f.vp['call_graph']}}
+        self.allocation = {'schema_version': 'devforge.utility-native-allocation/v2', 'task_id': 'UTILITY-001',
+            'cases_sha256': self.plan['cases']['sha256'], 'validation_plan': f.pin(f.plan_path),
+            'funding': self.funding, 'max_total_attempts': 4, 'preparation_attempts': 1,
+            'max_seconds': 3600, 'per_attempt_max_seconds': 900, 'required_calls': copy.deepcopy(f.vp['call_graph'])}
+        boundary = json.loads(n.boundary_path.read_bytes()); obs = boundary['attempts'][0]['observations']
+        boundary['attempts'] = [{'attempt_id': a['attempt_id'], 'workspace': a['workspace'],
+            'client_state': a['client_state'], 'observations': obs} for a in self.plan['attempts']]
+        n.boundary_path.write_bytes(encoded(boundary)); self.plan['boundary_evidence'] = f.pin(n.boundary_path)
+        self.save_funding()
+
+    def save_funding(self):
+        f = self.f
+        self.funding['authority_ref'] = f.put('funding-authority.json', self.authority)
+        assignment_path = f.owner / 'assignment.md'; assignment = json.loads(assignment_path.read_bytes())
+        assignment['authorization']['funding'] = {'authority_ref': self.funding['authority_ref'],
+            'owner': self.funding['owner'], 'claim_root': str(self.claim_root)}
+        assignment_path.write_bytes(encoded(assignment)); f.session['assignment'] = f.pin(assignment_path); f.write_contracts()
+        self.allocation_ref = f.put('allocation.json', self.allocation)
+        self.plan['runtime_configuration'] = f.put('native-runtime.json', {
+            'schema_version': 'devforge.native-runtime-configuration/v2', 'allocation': self.allocation_ref,
+            'attempts': [{'attempt_id': a['attempt_id'], 'interaction': 'single-turn', 'managed_worker': None} for a in self.plan['attempts']]})
+        self.native.save(); self.plan_ref = f.pin(self.native.plan_path)
+        self.binding.update(plan=self.plan_ref, allocation=self.allocation_ref)
+        self.schedule_path = f.owner / 'funded-schedule.json'; self.schedule_path.write_bytes(encoded(self.binding))
+        spec = next(g for g in f.delivery['gate_inputs'] if g['id'] == 'native-prerequisites')
+        value = json.loads(Path(spec['path']).read_bytes())
+        value.update(outcome='PASS', selection='REQUIRED', disposition='SATISFIED', evidence=[self.plan_ref])
+        Path(spec['path']).write_bytes(encoded(value))
+
+    def p4(self):
+        result = self.f.start()
+        if result['status'] != 'ACTIVE': raise AssertionError(result)
+        for phase in ('P1', 'P2', 'P3'):
+            self.f.checkpoint(); result = utility.advance(self.f.state)
+            if result['status'] != 'PROGRESS': raise AssertionError((phase,result))
+
+
+class V2FundingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.fixture = V2FundingFixture(Path(self.tmp.name)); self.f = self.fixture.f
+        clock = mock.patch.object(store, 'utc_now', return_value=self.fixture.now)
+        self.now = clock.start(); self.addCleanup(clock.stop)
+
+    def bind(self):
+        return utility.native_schedule_bind(self.f.state, self.fixture.schedule_path)
+
+    def test_distinct_external_grant_admits_real_cli_binding_and_failed_reservation_stays_charged(self):
+        self.fixture.p4()
+        binary = Path(__file__).resolve().parents[1] / 'target/debug/devforge'
+        run = subprocess.run([str(binary), 'delivery', '--state', str(self.f.state), 'native-schedule-bind',
+            '--schedule', str(self.fixture.schedule_path)], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        value = json.loads(run.stdout); self.assertEqual(value['status'], 'NATIVE_SCHEDULE_BOUND', value)
+        head = json.loads((self.f.state / 'HEAD.json').read_bytes())
+        bound_record = json.loads((self.f.state / 'records' / (head['records'][-1] + '.json')).read_bytes())
+        self.now.return_value = datetime.fromisoformat(bound_record['at_utc']) + timedelta(seconds=1)
+        self.assertEqual(value['native_schedule']['origin_utc'], self.fixture.funding['origin_utc'])
+        first = utility.native_schedule_reserve(self.f.state)
+        self.assertEqual(first['native_schedule']['inflight_attempt'], 'C-candidate', first)
+        closed = utility.native_schedule_cancel(self.f.state, 'C-candidate', 'Synthetic failed allocated launch')
+        self.assertEqual(closed['native_schedule']['reservations_consumed'], 1, closed)
+        before = (self.f.state/'HEAD.json').read_bytes()
+        self.assertEqual(self.bind()['status'], 'FAIL')
+        self.assertEqual(before, (self.f.state/'HEAD.json').read_bytes())
+        self.assertEqual(utility.native_schedule_reserve(self.f.state)['native_schedule']['decision'], 'BLOCKED')
+        self.assertTrue(list(self.fixture.claim_root.glob('grant-*.json')))
+
+    def test_grant_claim_cannot_be_reused_in_another_session(self):
+        self.fixture.p4(); self.assertEqual(self.bind()['status'], 'NATIVE_SCHEDULE_BOUND')
+        other_state = self.f.state.parent / 'another-session'
+        original = self.f.state; self.f.state = other_state
+        # Fresh fixture outputs must match the declared absent preimages.
+        for output in self.f.session['output_baselines']:
+            if output['sha256'] is None:
+                (self.f.project / output['path']).unlink(missing_ok=True)
+        self.fixture.p4()
+        before = (other_state/'HEAD.json').read_bytes()
+        result = utility.native_schedule_bind(other_state, self.fixture.schedule_path)
+        self.assertEqual(result['status'], 'FAIL', result)
+        self.assertIn('grant', str(result)); self.assertEqual(before, (other_state/'HEAD.json').read_bytes())
+        self.f.state = original
+
+    def test_incomplete_graph_setup_completion_and_exhausted_grant_refuse_before_head_or_claim(self):
+        for mutation in ('graph', 'setup', 'completion', 'owner', 'exhausted', 'cap', 'reset-clock'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                x = V2FundingFixture(Path(tmp))
+                if mutation == 'graph': x.allocation['required_calls'].pop(0)
+                elif mutation == 'setup': x.authority['preparation'] = []
+                elif mutation == 'completion': x.authority['completed_calls'] = []
+                elif mutation == 'owner': x.authority['producer'] = 'candidate-author'
+                elif mutation == 'exhausted': x.funding['grant_id'] = x.authority['grant_id'] = 'old-exhausted'
+                elif mutation == 'cap': x.allocation['max_total_attempts'] = 3
+                else: x.funding['origin_monotonic_ns'] += 60_000_000_000
+                x.save_funding(); x.p4(); before = (x.f.state/'HEAD.json').read_bytes()
+                result = utility.native_schedule_bind(x.f.state, x.schedule_path)
+                self.assertEqual(result['status'], 'FAIL', result)
+                self.assertEqual(before, (x.f.state/'HEAD.json').read_bytes())
+                self.assertEqual(list(x.claim_root.glob('grant-*.json')), [])
+
+    def test_original_monotonic_deadline_refuses_without_a_new_charge(self):
+        self.fixture.p4(); self.assertEqual(self.bind()['status'], 'NATIVE_SCHEDULE_BOUND')
+        before = (self.f.state/'HEAD.json').read_bytes()
+        with mock.patch('time.monotonic_ns', return_value=self.fixture.funding['deadline_monotonic_ns']):
+            result = utility.native_schedule_reserve(self.f.state)
+        self.assertIn(result['status'], ('FAIL','COULD_NOT_RUN'), result)
+        self.assertEqual(before, (self.f.state/'HEAD.json').read_bytes())
