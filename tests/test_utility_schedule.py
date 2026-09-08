@@ -42,6 +42,30 @@ class ScheduleFixture:
         boundary["attempts"] = observations
         self.native.boundary_path.write_bytes(encoded(boundary))
         plan["boundary_evidence"] = Fixture.pin(self.native.boundary_path)
+        # Campaign admission requires a complete independent call oracle even
+        # though this fixture never launches the inert selected client.
+        owner = self.native.owner
+        calls = [{**{k: a[k] for k in ("attempt_id", "case_id", "tier", "arm", "repetition")},
+                  "purpose": "case", "review_path": str(owner / (a["attempt_id"] + "-review.json")),
+                  "reviewer": "Independent fixture reviewer", "interaction": "single-turn",
+                  "managed_worker_required": False} for a in attempts]
+        self.cases_path = owner / "cases.json"
+        self.cases_path.write_bytes(encoded({"schema_version": "devforge.utility-native-cases/v1",
+                                            "task_id": plan["task_id"], "required_calls": calls}))
+        plan["cases"] = Fixture.pin(self.cases_path)
+        self.allocation_path = owner / "allocation.json"
+        self.allocation = {"schema_version": "devforge.utility-native-allocation/v1", "task_id": plan["task_id"],
+                           "cases_sha256": plan["cases"]["sha256"], "max_total_attempts": 9,
+                           "preparation_attempts": 3, "max_seconds": 120, "per_attempt_max_seconds": 20,
+                           "required_calls": calls}
+        self.allocation_path.write_bytes(encoded(self.allocation))
+        self.runtime_path = owner / "runtime_configuration.json"
+        self.runtime = {"schema_version": "devforge.native-runtime-configuration/v1",
+                        "allocation": Fixture.pin(self.allocation_path),
+                        "attempts": [{"attempt_id": a["attempt_id"], "interaction": "single-turn", "managed_worker": None}
+                                     for a in attempts]}
+        self.runtime_path.write_bytes(encoded(self.runtime))
+        plan["runtime_configuration"] = Fixture.pin(self.runtime_path)
         self.native.save()
         self.validator = admitted.NativeAdmissionTests.validator(SimpleNamespace(root=root, f=self.native))
         self.binding_path = self.validator.owner / "schedule.json"

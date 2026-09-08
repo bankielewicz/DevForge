@@ -1,0 +1,32 @@
+{
+  "schema_version": "devforge.native-component-checkpoint/v1",
+  "created_at": "2026-09-08T01:49:48.116055+00:00",
+  "baseline_commit": "d4155426ce8019e338d45fc168bb01da1a5680f1",
+  "reviewed_candidate_manifest": {
+    "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/runtime-review-04/manifest.json",
+    "sha256": "adc044cd840d9865d0606f9406d2d319c066660e6afd3326208e833cce3695e6"
+  },
+  "review": "R03-001 structurally closed in preserved review04; no new actionable findings in remediation scope",
+  "checks": "fmt/clippy/build, 514 deterministic tests, fixture demo against preserved and newly aligned framework sources PASS",
+  "implemented": [
+    "one-use protected launch claims",
+    "single-turn owned native process collector with explicit mounts and immutable discovery inputs",
+    "bounded binary stdout/stderr and scoped stop/reap",
+    "host-owned HMAC receipt custody and exact import binding",
+    "complete allocation/cap validation before schedule binding/reservation",
+    "immutable replay and original deadlines",
+    "separate external semantic review and tier coverage gates"
+  ],
+  "native_execution": "NOT_RUN",
+  "campaign_clock": "NOT_BOUND",
+  "receiving_invocation": "NOT_RUN",
+  "native_acceptance": "NOT_GRANTED",
+  "remaining": [
+    "complete native allocation cannot fit approved 24 calls",
+    "first fresh subscription authorization expired without login",
+    "effective native hooks/filesystem/history/tool/authentication boundaries unobserved",
+    "NI-11 interactive answer transport unsupported",
+    "actual receiving execution and rendered delivery unobserved"
+  ],
+  "scope": "Reviewed deterministic component implementation; full native integration remains incomplete. Tests and signatures do not establish native behavior. Earlier failed report and candidate bytes remain retained."
+}

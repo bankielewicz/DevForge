@@ -1,0 +1,69 @@
+{
+  "schema_version": "devforge.coverage-freeze-status/v1",
+  "created_at": "2026-09-08T01:46:25.190032+00:00",
+  "status": "COMPLETE_EXECUTABLE_ALLOCATION_NOT_FROZEN_INFEASIBLE",
+  "evidence": {
+    "path": "/home/bryan/Projects/DevForge/tmp/native-coverage-shortfall-20260908T010731268008Z.json",
+    "sha256": "97c3b63a9a8b208563ec5a6cb0f246916da6eff487d667bd35c87eb816317219"
+  },
+  "required_validator_amendment_outer_executions": 40,
+  "approved_cap": 24,
+  "conservative_delegation_charges": [
+    {
+      "id": "/root/native_coverage_plan",
+      "role": "read-only planning",
+      "count": 1
+    },
+    {
+      "id": "/root/native_launcher_implementation",
+      "role": "engineering",
+      "count": 1
+    },
+    {
+      "id": "/root/native_importer_implementation",
+      "role": "engineering",
+      "count": 1
+    },
+    {
+      "id": "/root/native_runtime_review_03",
+      "role": "independent implementation review",
+      "count": 1
+    },
+    {
+      "id": "/root/utility_alignment_review_01",
+      "role": "independent source static review",
+      "count": 1
+    },
+    {
+      "id": "/root/native_importer_implementation:remediation-01",
+      "role": "R03-001 engineering remediation",
+      "count": 1
+    },
+    {
+      "id": "/root/native_runtime_review_03:remediation-review-04",
+      "role": "independent R03-001 remediation review",
+      "count": 1
+    }
+  ],
+  "current_minimum_total": 47,
+  "current_minimum_shortfall": 23,
+  "excluded_from_lower_bound": [
+    "remaining validator cases",
+    "builder cases",
+    "installed C",
+    "discovery A",
+    "semantic graders",
+    "new independent source/runtime reviewers",
+    "missing authentic control runs",
+    "receiving execution",
+    "failed launches"
+  ],
+  "native_executions": 0,
+  "campaign_clock": "NOT_BOUND",
+  "automatic_retries": 0,
+  "action": "Do not silently remove cases or launch an incomplete campaign. Continue prerequisite engineering and one-profile auth staging only.",
+  "supersedes": {
+    "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/coverage-freeze-status-04.json",
+    "sha256": "44e3a730ca852081e0eb3f1e9b9b821f468961e6a017d616a18f5f44633571ef"
+  }
+}

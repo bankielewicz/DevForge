@@ -1,0 +1,2398 @@
+{
+  "schema_version": "devforge.native-coverage-feasibility/v1",
+  "created_at_utc": "2026-09-08T01:07:31.267963+00:00",
+  "status": "INFEASIBLE_WITHIN_APPROVED_24_NO_CAMPAIGN_SCHEDULE_BOUND",
+  "purpose": "Read-only static coverage analysis; not native execution, evaluation PASS, a skill revision, or authorization to exceed the budget.",
+  "budget": {
+    "approved_attempt_cap": 24,
+    "planning_agent_calls_charged": 1,
+    "available_after_this_planning_call": 23,
+    "root_chat_counting": "Parent defines ongoing root engineering conversation as outside separate campaign execution; do not infer free delegated calls or native controls.",
+    "per_attempt_seconds": 600,
+    "campaign_seconds": 14400,
+    "clock_bound_by_this_report": false,
+    "retries": 0
+  },
+  "selected_source_commit": "a78b9bff83c090153952b31b84b0584ef1650f02",
+  "package_trees": {
+    "skill-builder": "f1518557f213e239336ac3e7278641b8139d6c21",
+    "skill-validator": "73a5e00d9d06d8bc40f15489c9a686521bfa0536"
+  },
+  "package_identity_check": "Every frozen file matched allocation sha256 in this read-only analysis.",
+  "allocation_manifest": {
+    "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-workspace-20260907T220803638693Z/allocation.json",
+    "sha256": "b380b4406e49567cfb844d614927f319717f9283b0c1c9de40d22101bba59fd5"
+  },
+  "source_identities": [
+    {
+      "repository": "/home/bryan/Projects/DevForge/framework/DevForgeAI",
+      "commit": "a78b9bff83c090153952b31b84b0584ef1650f02",
+      "path": "docs/skill-authoring/skill-validator-design.md",
+      "sha256": "3195bb4125970fcd59eaaae4695af60d11de0d99eb204381548331c29c77f5d7"
+    },
+    {
+      "repository": "/home/bryan/Projects/DevForge/framework/DevForgeAI",
+      "commit": "a78b9bff83c090153952b31b84b0584ef1650f02",
+      "path": "docs/skill-authoring/skill-builder-modernization-20260907T125046Z/selected-inputs/requirements.md",
+      "sha256": "27f87e3cc5ade477cc0d830c2daebb3320b691fcdbc059b7e262372e71c20e43"
+    },
+    {
+      "repository": "/home/bryan/Projects/DevForge/framework/DevForgeAI",
+      "commit": "a78b9bff83c090153952b31b84b0584ef1650f02",
+      "path": "docs/skill-authoring/skill-builder-modernization-20260907T125046Z/selected-inputs/skill-enhancement-spec-v3.md",
+      "sha256": "ccdcf240f75e582e093a91389e70ebe3bf0825309e4d1101ed0107b8186bcaf2"
+    },
+    {
+      "repository": "/home/bryan/Projects/DevForge/framework/DevForgeAI",
+      "commit": "a78b9bff83c090153952b31b84b0584ef1650f02",
+      "path": "docs/skill-authoring/skill-builder-modernization-20260907T125046Z/runtime-integration-spec.md",
+      "sha256": "af737fc3f1c7e19270e6a23d6df784f63065cdeb4447ee4a83f308c09e8d2a68"
+    },
+    {
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-workspace-20260907T220803638693Z/frozen-skills/skill-validator/evals/evals.json",
+      "sha256": "0f5bea903bb5b1cb42576d5e1e9684c274794e17b85e616305251321d67b801c"
+    },
+    {
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-workspace-20260907T220803638693Z/frozen-skills/skill-validator/references/native-evaluation.md",
+      "sha256": "109a416cbe94b3790b7cf3ef99fc8f8a244b5b9954839d7056198b007bc2953c"
+    },
+    {
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-workspace-20260907T220803638693Z/frozen-skills/skill-validator/references/contracts/skill-authoring-contract.md",
+      "sha256": "fbba6f9fda1e969cf3187c79232373aee06c629902cc3b9b07fea91b3670b2fa"
+    },
+    {
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-workspace-20260907T220803638693Z/frozen-skills/skill-builder/SKILL.md",
+      "sha256": "05c3f10b9eb4592bab0bd0934218b94b906140634ee17eca74f35790c02386c8"
+    },
+    {
+      "path": "/home/bryan/Projects/DevForge/tmp/skill-utilities-workspace-20260907T220803638693Z/frozen-skills/skill-builder/references/contracts/skill-authoring-contract.md",
+      "sha256": "962a27b2c538b7033d458bf12900a1fe32a1f161ba6e535f171ae93847b22fe9"
+    }
+  ],
+  "decisive_lower_bound": {
+    "scope": "Only seven explicitly required amendment case IDs, expanded into expressly independent variants, with candidate and preserved old_skill arms.",
+    "required_case_ids": [
+      "SV-019",
+      "SV-022",
+      "SV-024",
+      "SV-025",
+      "SV-026",
+      "SV-027",
+      "SV-028"
+    ],
+    "candidate_outer_attempts": 20,
+    "old_skill_outer_attempts": 20,
+    "outer_attempts_total": 40,
+    "including_planning_call": 41,
+    "shortfall_against_approved_total": 17,
+    "excluded_from_this_lower_bound": [
+      "All other applicable validator cases",
+      "Installed resources C for both skills",
+      "Explicit/direct/indirect/near-miss A for both skills",
+      "All builder B behavior",
+      "Independent semantic graders",
+      "New independent source AI reviewers if required",
+      "Native model probes",
+      "Actual receiving execution",
+      "Nested admitted native controls or delegated reviewer calls",
+      "Independent review of remaining engineering",
+      "Failed launches or other retries"
+    ],
+    "interpretation": "This is a provable lower bound, not an exact price for the complete campaign. It remains infeasible even if every supplemental cost is zero."
+  },
+  "coverage_rule_evidence": [
+    {
+      "source": "skill-validator-design.md, Workspace allocation refinement, Runtime integration and evaluation ownership",
+      "requirement": "Independent evaluation must select this candidate and preserved former candidate as old_skill, cover revised SV-019/SV-022 and SV-024-SV-028 alongside applicable existing cases and separate C/B/A."
+    },
+    {
+      "source": "skill-validator/references/native-evaluation.md section 3 item2 and section5 introductory text/items1-5",
+      "requirement": "Same raw task facts in separate candidate and baseline attempts; independent semantic review for semantic assertions."
+    },
+    {
+      "source": "skill-validator/evals/evals.json cases SV-020-SV-028",
+      "requirement": "Explicit independent/distinct attempt variant text is retained in the detailed source case records."
+    }
+  ],
+  "deterministic_vs_native": {
+    "zero_model_call_checks": [
+      "S001-S013 structural inspection",
+      "assess_evidence.py reducer unit tests",
+      "Synthetic consultation/completion detector tests",
+      "Filesystem/process/network/source-exclusion sentinels executed without a model",
+      "CLI version/help and subscription login status",
+      "Static artifact/digest/collision checks",
+      "Runtime transition, stale evidence, bounded correction, receipt collision, and deadline tests using deterministic fixtures"
+    ],
+    "not_substitutable": "All 28 source SV records label tier B and observe the skill-validator response, decisions, actual tool use or saved report. A helper unit test can support a scoped deterministic result but cannot establish that the native validator follows the workflow. Even synthetic-input cases such as SV-011 concern the validator response to that input; the synthetic input never becomes native tier A evidence.",
+    "nested_case_caution": "Where a self-case intentionally withholds INNER validation authentication/boundary, its OUTER evaluator must still be confined and subscription authenticated. SV-024 states this explicitly."
+  },
+  "full_validator_variant_lower_bound": {
+    "outer_candidate_variants": 43,
+    "paired_outer_attempts": 86,
+    "note": "SV-017 counts as one outer run handling its two task-equivalent frozen versions; the text does not explicitly demand independent outer sessions. SV-028 counts as one outer run; its separately authorized actual native/readiness execution is additional unless legitimately supplied by an independently retained compatible bundle. Source applicability review may identify justified exclusions for other old cases, but the required seven-case amendment subset cannot be removed."
+  },
+  "required_subset_allocation": [
+    {
+      "coverage_id": "SV-019/primary/candidate",
+      "case_id": "SV-019",
+      "title": "Selected generation provisions assigned worktrees",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-019/primary/old_skill",
+      "case_id": "SV-019",
+      "title": "Selected generation provisions assigned worktrees",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-022/subscription_authentication_unavailable/candidate",
+      "case_id": "SV-022",
+      "title": "Created worktrees do not satisfy missing native prerequisites",
+      "variant": "subscription_authentication_unavailable",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-022/subscription_authentication_unavailable/old_skill",
+      "case_id": "SV-022",
+      "title": "Created worktrees do not satisfy missing native prerequisites",
+      "variant": "subscription_authentication_unavailable",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-022/required_boundary_unavailable/candidate",
+      "case_id": "SV-022",
+      "title": "Created worktrees do not satisfy missing native prerequisites",
+      "variant": "required_boundary_unavailable",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-022/required_boundary_unavailable/old_skill",
+      "case_id": "SV-022",
+      "title": "Created worktrees do not satisfy missing native prerequisites",
+      "variant": "required_boundary_unavailable",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/model_pending/candidate",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "model_pending",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/model_pending/old_skill",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "model_pending",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/auth_arrangement_pending/candidate",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "auth_arrangement_pending",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/auth_arrangement_pending/old_skill",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "auth_arrangement_pending",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/repetitions_and_attempt_time_budget_pending/candidate",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "repetitions_and_attempt_time_budget_pending",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/repetitions_and_attempt_time_budget_pending/old_skill",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "repetitions_and_attempt_time_budget_pending",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/all_native_choices_pending/candidate",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "all_native_choices_pending",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/all_native_choices_pending/old_skill",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "all_native_choices_pending",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/model_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "model_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/model_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "model_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/auth_arrangement_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "auth_arrangement_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/auth_arrangement_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "auth_arrangement_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/repetitions_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "repetitions_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/repetitions_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "repetitions_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/attempt_and_time_bounds_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "attempt_and_time_bounds_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/attempt_and_time_bounds_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "attempt_and_time_bounds_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/observation_method_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "observation_method_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/observation_method_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "observation_method_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/demonstrated_boundary_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "demonstrated_boundary_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/demonstrated_boundary_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "demonstrated_boundary_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/complete_experiment_positive_control/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "complete_experiment_positive_control",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/complete_experiment_positive_control/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "complete_experiment_positive_control",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-026/bounded_addition_authorized/candidate",
+      "case_id": "SV-026",
+      "title": "Additional attempts need bounded unused workspaces",
+      "variant": "bounded_addition_authorized",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-026/bounded_addition_authorized/old_skill",
+      "case_id": "SV-026",
+      "title": "Additional attempts need bounded unused workspaces",
+      "variant": "bounded_addition_authorized",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-026/bounded_addition_not_authorized/candidate",
+      "case_id": "SV-026",
+      "title": "Additional attempts need bounded unused workspaces",
+      "variant": "bounded_addition_not_authorized",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-026/bounded_addition_not_authorized/old_skill",
+      "case_id": "SV-026",
+      "title": "Additional attempts need bounded unused workspaces",
+      "variant": "bounded_addition_not_authorized",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/ambiguous_consuming_repository/candidate",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "ambiguous_consuming_repository",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/ambiguous_consuming_repository/old_skill",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "ambiguous_consuming_repository",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/bounded_count_or_write_authority_absent/candidate",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "bounded_count_or_write_authority_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/bounded_count_or_write_authority_absent/old_skill",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "bounded_count_or_write_authority_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/occupied_destination/candidate",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "occupied_destination",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/occupied_destination/old_skill",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "occupied_destination",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-028/primary/candidate",
+      "case_id": "SV-028",
+      "title": "Allocation preparation plan and run bindings remain acyclic",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-028/primary/old_skill",
+      "case_id": "SV-028",
+      "title": "Allocation preparation plan and run bindings remain acyclic",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    }
+  ],
+  "complete_source_case_inventory_lower_bound": [
+    {
+      "coverage_id": "SV-001/primary/candidate",
+      "case_id": "SV-001",
+      "title": "Stale frozen input identity",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-001/primary/old_skill",
+      "case_id": "SV-001",
+      "title": "Stale frozen input identity",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-002/primary/candidate",
+      "case_id": "SV-002",
+      "title": "Missing installed runtime reference",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-002/primary/old_skill",
+      "case_id": "SV-002",
+      "title": "Missing installed runtime reference",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-003/primary/candidate",
+      "case_id": "SV-003",
+      "title": "Malformed YAML frontmatter",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-003/primary/old_skill",
+      "case_id": "SV-003",
+      "title": "Malformed YAML frontmatter",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-004/primary/candidate",
+      "case_id": "SV-004",
+      "title": "Untrusted target instruction override",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-004/primary/old_skill",
+      "case_id": "SV-004",
+      "title": "Untrusted target instruction override",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-005/primary/candidate",
+      "case_id": "SV-005",
+      "title": "Required native confinement unavailable",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-005/primary/old_skill",
+      "case_id": "SV-005",
+      "title": "Required native confinement unavailable",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-006/primary/candidate",
+      "case_id": "SV-006",
+      "title": "Subscribed native authentication unavailable",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-006/primary/old_skill",
+      "case_id": "SV-006",
+      "title": "Subscribed native authentication unavailable",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-007/primary/candidate",
+      "case_id": "SV-007",
+      "title": "Repairs stay in the builder handoff",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-007/primary/old_skill",
+      "case_id": "SV-007",
+      "title": "Repairs stay in the builder handoff",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-008/primary/candidate",
+      "case_id": "SV-008",
+      "title": "A PASS claim without required evidence is rejected",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-008/primary/old_skill",
+      "case_id": "SV-008",
+      "title": "A PASS claim without required evidence is rejected",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-009/primary/candidate",
+      "case_id": "SV-009",
+      "title": "A baseline failure does not fail a passing candidate",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-009/primary/old_skill",
+      "case_id": "SV-009",
+      "title": "A baseline failure does not fail a passing candidate",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-010/primary/candidate",
+      "case_id": "SV-010",
+      "title": "Semantic failure despite structural success",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-010/primary/old_skill",
+      "case_id": "SV-010",
+      "title": "Semantic failure despite structural success",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-011/primary/candidate",
+      "case_id": "SV-011",
+      "title": "Incomplete negative activation cannot pass",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-011/primary/old_skill",
+      "case_id": "SV-011",
+      "title": "Incomplete negative activation cannot pass",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-012/primary/candidate",
+      "case_id": "SV-012",
+      "title": "A complete clean negative is recognized",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-012/primary/old_skill",
+      "case_id": "SV-012",
+      "title": "A complete clean negative is recognized",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-013/primary/candidate",
+      "case_id": "SV-013",
+      "title": "Every enforced phase and task is accounted for",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-013/primary/old_skill",
+      "case_id": "SV-013",
+      "title": "Every enforced phase and task is accounted for",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-014/primary/candidate",
+      "case_id": "SV-014",
+      "title": "Hook design is not active enforcement",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-014/primary/old_skill",
+      "case_id": "SV-014",
+      "title": "Hook design is not active enforcement",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-015/primary/candidate",
+      "case_id": "SV-015",
+      "title": "Changed bytes invalidate prior results",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-015/primary/old_skill",
+      "case_id": "SV-015",
+      "title": "Changed bytes invalidate prior results",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-016/primary/candidate",
+      "case_id": "SV-016",
+      "title": "An unavailable independent AI review remains unavailable",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-016/primary/old_skill",
+      "case_id": "SV-016",
+      "title": "An unavailable independent AI review remains unavailable",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-017/primary/candidate",
+      "case_id": "SV-017",
+      "title": "Style alone is not a hard failure",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-017/primary/old_skill",
+      "case_id": "SV-017",
+      "title": "Style alone is not a hard failure",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-018/primary/candidate",
+      "case_id": "SV-018",
+      "title": "Missing test environment offers worktree generation",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-018/primary/old_skill",
+      "case_id": "SV-018",
+      "title": "Missing test environment offers worktree generation",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-019/primary/candidate",
+      "case_id": "SV-019",
+      "title": "Selected generation provisions assigned worktrees",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-019/primary/old_skill",
+      "case_id": "SV-019",
+      "title": "Selected generation provisions assigned worktrees",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-020/existing_environment/candidate",
+      "case_id": "SV-020",
+      "title": "Existing environment or declined generation creates no worktrees",
+      "variant": "existing_environment",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-020/existing_environment/old_skill",
+      "case_id": "SV-020",
+      "title": "Existing environment or declined generation creates no worktrees",
+      "variant": "existing_environment",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-020/generation_declined/candidate",
+      "case_id": "SV-020",
+      "title": "Existing environment or declined generation creates no worktrees",
+      "variant": "generation_declined",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-020/generation_declined/old_skill",
+      "case_id": "SV-020",
+      "title": "Existing environment or declined generation creates no worktrees",
+      "variant": "generation_declined",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-021/occupied_destination_or_conflicting_branch/candidate",
+      "case_id": "SV-021",
+      "title": "Worktree setup failure preserves conflicting work",
+      "variant": "occupied_destination_or_conflicting_branch",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-021/occupied_destination_or_conflicting_branch/old_skill",
+      "case_id": "SV-021",
+      "title": "Worktree setup failure preserves conflicting work",
+      "variant": "occupied_destination_or_conflicting_branch",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-021/git_unavailable/candidate",
+      "case_id": "SV-021",
+      "title": "Worktree setup failure preserves conflicting work",
+      "variant": "git_unavailable",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-021/git_unavailable/old_skill",
+      "case_id": "SV-021",
+      "title": "Worktree setup failure preserves conflicting work",
+      "variant": "git_unavailable",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-022/subscription_authentication_unavailable/candidate",
+      "case_id": "SV-022",
+      "title": "Created worktrees do not satisfy missing native prerequisites",
+      "variant": "subscription_authentication_unavailable",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-022/subscription_authentication_unavailable/old_skill",
+      "case_id": "SV-022",
+      "title": "Created worktrees do not satisfy missing native prerequisites",
+      "variant": "subscription_authentication_unavailable",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-022/required_boundary_unavailable/candidate",
+      "case_id": "SV-022",
+      "title": "Created worktrees do not satisfy missing native prerequisites",
+      "variant": "required_boundary_unavailable",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-022/required_boundary_unavailable/old_skill",
+      "case_id": "SV-022",
+      "title": "Created worktrees do not satisfy missing native prerequisites",
+      "variant": "required_boundary_unavailable",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-023/primary/candidate",
+      "case_id": "SV-023",
+      "title": "Frozen uncommitted candidate remains distinct from Git base",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-023/primary/old_skill",
+      "case_id": "SV-023",
+      "title": "Frozen uncommitted candidate remains distinct from Git base",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [],
+      "required_amendment_subset": false,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/model_pending/candidate",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "model_pending",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/model_pending/old_skill",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "model_pending",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/auth_arrangement_pending/candidate",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "auth_arrangement_pending",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/auth_arrangement_pending/old_skill",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "auth_arrangement_pending",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/repetitions_and_attempt_time_budget_pending/candidate",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "repetitions_and_attempt_time_budget_pending",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/repetitions_and_attempt_time_budget_pending/old_skill",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "repetitions_and_attempt_time_budget_pending",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/all_native_choices_pending/candidate",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "all_native_choices_pending",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-024/all_native_choices_pending/old_skill",
+      "case_id": "SV-024",
+      "title": "Prepare workspaces while native choices remain pending",
+      "variant": "all_native_choices_pending",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/model_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "model_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/model_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "model_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/auth_arrangement_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "auth_arrangement_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/auth_arrangement_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "auth_arrangement_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/repetitions_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "repetitions_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/repetitions_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "repetitions_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/attempt_and_time_bounds_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "attempt_and_time_bounds_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/attempt_and_time_bounds_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "attempt_and_time_bounds_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/observation_method_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "observation_method_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/observation_method_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "observation_method_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/demonstrated_boundary_absent/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "demonstrated_boundary_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/demonstrated_boundary_absent/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "demonstrated_boundary_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/complete_experiment_positive_control/candidate",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "complete_experiment_positive_control",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-025/complete_experiment_positive_control/old_skill",
+      "case_id": "SV-025",
+      "title": "Prepared workspace cannot bypass experiment freeze",
+      "variant": "complete_experiment_positive_control",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-026/bounded_addition_authorized/candidate",
+      "case_id": "SV-026",
+      "title": "Additional attempts need bounded unused workspaces",
+      "variant": "bounded_addition_authorized",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-026/bounded_addition_authorized/old_skill",
+      "case_id": "SV-026",
+      "title": "Additional attempts need bounded unused workspaces",
+      "variant": "bounded_addition_authorized",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-026/bounded_addition_not_authorized/candidate",
+      "case_id": "SV-026",
+      "title": "Additional attempts need bounded unused workspaces",
+      "variant": "bounded_addition_not_authorized",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-026/bounded_addition_not_authorized/old_skill",
+      "case_id": "SV-026",
+      "title": "Additional attempts need bounded unused workspaces",
+      "variant": "bounded_addition_not_authorized",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/ambiguous_consuming_repository/candidate",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "ambiguous_consuming_repository",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/ambiguous_consuming_repository/old_skill",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "ambiguous_consuming_repository",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/bounded_count_or_write_authority_absent/candidate",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "bounded_count_or_write_authority_absent",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/bounded_count_or_write_authority_absent/old_skill",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "bounded_count_or_write_authority_absent",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/occupied_destination/candidate",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "occupied_destination",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-027/occupied_destination/old_skill",
+      "case_id": "SV-027",
+      "title": "Workspace allocation gaps still block provisioning",
+      "variant": "occupied_destination",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-028/primary/candidate",
+      "case_id": "SV-028",
+      "title": "Allocation preparation plan and run bindings remain acyclic",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "candidate",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    },
+    {
+      "coverage_id": "SV-028/primary/old_skill",
+      "case_id": "SV-028",
+      "title": "Allocation preparation plan and run bindings remain acyclic",
+      "variant": "primary",
+      "tier": "B",
+      "arm": "old_skill",
+      "repetition": 1,
+      "requirement_ids": [
+        "SV-WA-01",
+        "SV-WA-02",
+        "SV-WA-03",
+        "SV-WA-04",
+        "SV-WA-05",
+        "SV-WA-06"
+      ],
+      "required_amendment_subset": true,
+      "status": "NOT_RUN",
+      "model_execution_required_for_skill_behavior": true
+    }
+  ],
+  "supplemental_required_coverage": {
+    "validator_C": {
+      "minimum_outer_attempts": 1,
+      "requirements": [
+        "Installed entrypoint/reference/template consultation",
+        "Actual documented Python helper use where applicable",
+        "Consuming-project artifact bytes",
+        "Source exclusion"
+      ]
+    },
+    "validator_A": {
+      "minimum_outer_attempts": 4,
+      "cases": [
+        "explicit_invocation",
+        "ordinary_direct_domain",
+        "ordinary_indirect_domain",
+        "realistic_negative_near_miss"
+      ]
+    },
+    "builder_C": {
+      "minimum_outer_attempts": 1,
+      "requirements": [
+        "Installed entrypoint/required reference/specification template/handoff template consultation",
+        "Actual saved consuming-project authoring artifacts"
+      ],
+      "not_applicable": [
+        "Invented helper execution; builder has no runtime scripts"
+      ]
+    },
+    "builder_B": {
+      "minimum_outer_attempts_if_six_separate_case_pairs": 12,
+      "cases": [
+        {
+          "proposed_id": "SB-B-01",
+          "purpose": "Representative Q&A, existing-owner comparison, complete canonical authoring and prepared handoff",
+          "requirements": [
+            "SB01",
+            "SB02",
+            "SB03",
+            "SB04",
+            "SB05",
+            "SB07",
+            "SB08",
+            "SB10",
+            "CHG-001",
+            "CHG-003"
+          ]
+        },
+        {
+          "proposed_id": "SB-B-02",
+          "purpose": "Missing consequential design/classification input; useful independent work and waiting",
+          "requirements": [
+            "SB01",
+            "SB04",
+            "SB10",
+            "CHG-003"
+          ]
+        },
+        {
+          "proposed_id": "SB-B-03",
+          "purpose": "Frozen validator remediation with changed/conflicting accepted input; preserve decisions and old evidence",
+          "requirements": [
+            "SB09",
+            "SB10",
+            "CHG-002",
+            "CHG-003"
+          ]
+        },
+        {
+          "proposed_id": "SB-B-04",
+          "purpose": "Required dependency unavailable; retain gap and authoring-only boundary",
+          "requirements": [
+            "SB06",
+            "SB10"
+          ]
+        },
+        {
+          "proposed_id": "SB-B-05",
+          "purpose": "Nearby out-of-scope validation/execution request; do not perform target tests",
+          "requirements": [
+            "SB06"
+          ]
+        },
+        {
+          "proposed_id": "SB-B-06",
+          "purpose": "Instruction override in untrusted findings/task data; preserve assigned authority",
+          "requirements": [
+            "SB06",
+            "SB09",
+            "SB10"
+          ]
+        }
+      ],
+      "status": "Derived case design, not a fully frozen executable experiment. Exact prompts, artifacts, answer schedules, baseline identity, and applicability still need binding."
+    },
+    "builder_A": {
+      "minimum_outer_attempts": 4,
+      "cases": [
+        "explicit_invocation",
+        "ordinary_direct_domain",
+        "ordinary_indirect_domain",
+        "realistic_negative_near_miss"
+      ]
+    },
+    "semantic_graders": {
+      "minimum_reserved_calls": 2,
+      "basis": "One independent blinded semantic grading batch per evaluated skill can grade its several completed cases if context suffices. Per-case records remain separate. This is not permission to give task workers expectations. More calls required if batch context/independence fails."
+    },
+    "new_source_AI_reviews": {
+      "minimum_reserved_calls_if_old_reviews_reusable": 0,
+      "minimum_reserved_calls_if_new_reviews_required": 2,
+      "basis": "Reuse only exact-candidate, exact-selected-contract/rubric, raw-packet independent evidence; runtime changes may require separate review."
+    },
+    "model_probe": {
+      "minimum_reserved_calls": 0,
+      "basis": "No standalone model probe required by source contracts. Authentication/status and boundary probes can be non-model. If a model availability probe is elected, reserve/count it; a failed launch consumes its case attempt and does not produce a free replacement."
+    },
+    "receiving_execution": {
+      "minimum_reserved_calls": 1,
+      "basis": "Actual bounded builder-to-validator receiving invocation under CHG-003. It may serve an otherwise scheduled validator case only when exact task/input/phase/identity/conditions genuinely match and frozen cross-coverage is declared; a prepared handoff or static inspection cannot satisfy it."
+    },
+    "controls": {
+      "additional_call_count": "Unresolved; never assume zero if authentic retained compatible bundles are absent.",
+      "required_bundles": [
+        "SV-009 valid candidate PASS and completed failing old_skill/without_skill baseline",
+        "SV-012 completed clean native A negative",
+        "SV-015 real retained original result",
+        "SV-025 complete-experiment positive control with actual admitted subscribed runtime",
+        "SV-028 later genuinely admitted readiness/native execution"
+      ],
+      "reuse_rule": "Already generated authentic evidence may support a case only with matching requirements and immutable source/run provenance. Model attempts to generate missing bundles count; fabricated control receipts are forbidden."
+    },
+    "engineering": {
+      "root_authoring_new_delegated_calls": 0,
+      "minimum_remaining_independent_runtime_review_calls": 1,
+      "basis": "Root can implement locally without another delegated author. The approved proposal requires independent review of owned-process/result integration; a new review after meaningful implementation changes consumes a call under conservative accounting. Any further worker/reviewer/model-assisted diagnostic call must reserve its own slot."
+    }
+  },
+  "actions": [
+    "Continue authorized non-model prerequisite engineering and deterministic checks, but do not claim integration complete until demo incompatibility and launcher/importer/isolation evidence are resolved.",
+    "Preserve the original selected client/authentication/attempt/time approval. This analysis does not request repeated approval of those decisions.",
+    "Do not bind a campaign schedule that cannot cover declared requirements in 24. Do not request extra browser authorizations for unschedulable attempts.",
+    "Report the concrete coverage shortfall. A changed coverage scope or larger budget requires the relevant user decision; no silent omission, synthetic substitution, baseline exclusion, or deadline reset.",
+    "Retain native NOT_RUN and actual transfer NOT_OBSERVED until authentic execution evidence exists."
+  ]
+}

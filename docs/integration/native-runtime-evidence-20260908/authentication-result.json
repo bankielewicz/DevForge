@@ -1,0 +1,17 @@
+{
+  "schema_version": "devforge.auth-staging-result/v1",
+  "observed_at": "2026-09-08T01:23:38.375921+00:00",
+  "profile": "/home/bryan/Projects/DevForge/tmp/.skill-utilities-private-20260908T010546709607Z/attempt-001",
+  "client_state": "/home/bryan/Projects/DevForge/tmp/.skill-utilities-private-20260908T010546709607Z/attempt-001/.codex",
+  "initial_network_setup": "Restricted sandbox request failed before device authorization; same profile retried with approved network permission",
+  "device_authorization": "CLI exited1: device auth timed out after15minutes",
+  "status_command_exit": 1,
+  "status": "Not logged in",
+  "additional_profiles": 0,
+  "credentials_copied": false,
+  "credentials_read_by_agent": false,
+  "native_model_calls": 0,
+  "campaign_clock": "NOT_BOUND",
+  "automatic_authentication_restart": false,
+  "next": "Keep this profile and diagnostics private. Request a fresh browser authorization only when an authorized feasible experiment needs it."
+}

@@ -15,11 +15,11 @@ except ImportError:
     import phase_state as store
 
 
-def _pin(value, label):
+def _pin(value, label, frozen=None):
     core._exact(value, {"path", "sha256"}, label)
     path = store._absolute(value["path"], label)
     core._digest(value["sha256"], label)
-    raw = store._external(path, 8 * 1024 * 1024, label)
+    raw = frozen[str(path)] if frozen is not None else store._external(path, 8 * 1024 * 1024, label)
     if store._hash(raw) != value["sha256"]:
         core._fail(f"{label}: selected bytes changed")
     return path, raw
@@ -30,7 +30,7 @@ def _positive(value, maximum, label):
         core._fail(f"{label}: expected an integer in [1,{maximum}]")
 
 
-def native_plan(raw, task_id):
+def native_plan(raw, task_id, *, frozen=None):
     """Require an entire frozen experiment before any attempt admission."""
     plan = core._json(raw, "utility native experiment")
     core._exact(plan, {"schema_version", "task_id", "candidate", "baseline", "specification", "cases",
@@ -41,7 +41,7 @@ def native_plan(raw, task_id):
         core._fail("native plan task/schema mismatch")
     fixed = []
     for name in ("candidate", "baseline", "specification", "cases", "runtime_configuration", "boundary_evidence"):
-        path, data = _pin(plan[name], f"native plan {name}")
+        path, data = _pin(plan[name], f"native plan {name}", frozen)
         fixed.append(("native_input", str(path), data))
     core._exact(plan["client"], {"path", "sha256", "version"}, "native client")
     core._text(plan["client"]["version"], "native client version")
@@ -50,6 +50,13 @@ def native_plan(raw, task_id):
     client_path = path
     core._digest(client["sha256"], "native client digest")
     # Large client binaries are checked by streaming; never copied into evidence.
+    if frozen is None:
+        _client_identity(path, client)
+    core._text(plan["model"], "native model")
+    return _plan_rest(plan, task_id, fixed, client_path, frozen)
+
+
+def _client_identity(path, client):
     with core._directory(path.parent, "native client parent") as parent:
         initial = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
         if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
@@ -72,13 +79,15 @@ def native_plan(raw, task_id):
                 core._fail("native client selected bytes changed")
         finally:
             os.close(fd)
-    core._text(plan["model"], "native model")
+
+
+def _plan_rest(plan, task_id, fixed, client_path, frozen):
     if plan["model"].casefold() in {"unknown", "pending", "default", "tbd"}:
         core._fail("native model must be resolved before measurement")
     core._exact(plan["authentication"], {"kind", "arrangement_ref", "credential_copying"}, "native authentication")
     if plan["authentication"]["kind"] != "subscription" or plan["authentication"]["credential_copying"] is not False:
         core._fail("native authentication must use the selected subscription arrangement without credential copying")
-    path, data = _pin(plan["authentication"]["arrangement_ref"], "authentication arrangement evidence")
+    path, data = _pin(plan["authentication"]["arrangement_ref"], "authentication arrangement evidence", frozen)
     fixed.append(("native_auth_arrangement", str(path), data))
     _positive(plan["repetitions"], 100, "native repetitions")
     _positive(plan["max_attempts"], 256, "native attempt count")
@@ -146,8 +155,88 @@ def native_plan(raw, task_id):
             core._exact(observation, {"outcome", "evidence"}, "native boundary observation")
             if observation["outcome"] != "PASS":
                 core._fail(f"native {dimension} prerequisite is unobserved or failed")
-            path, data = _pin(observation["evidence"], "raw native boundary evidence")
+            path, data = _pin(observation["evidence"], "raw native boundary evidence", frozen)
             if any(core._within(path, root) for root in roots):
                 core._fail("boundary raw evidence must be protected from attempt writes")
             fixed.append(("native_boundary", str(path), data))
     return plan, fixed
+
+
+def launch_allocation(plan, *, frozen=None):
+    """Supplement v1 with a complete call inventory before campaign binding.
+
+    The cases file is the independently frozen required-call oracle. A list of
+    convenient plan attempts cannot itself establish coverage. Legacy opaque
+    cases/runtime documents remain valid for inspection, but cannot bind or reserve.
+    """
+    runtime_path, runtime_raw = _pin(plan["runtime_configuration"], "native runtime configuration", frozen)
+    runtime = core._json(runtime_raw, "native runtime configuration")
+    if not isinstance(runtime, dict) or runtime.get("schema_version") != "devforge.native-runtime-configuration/v1":
+        core._fail("native execution requires the versioned runtime configuration and complete call allocation")
+    allocation_path, allocation_raw = _pin(runtime.get("allocation"), "native complete allocation", frozen)
+    allocation = core._json(allocation_raw, "native complete allocation")
+    core._exact(allocation, {"schema_version", "task_id", "cases_sha256", "max_total_attempts", "preparation_attempts",
+                             "max_seconds", "per_attempt_max_seconds", "required_calls"}, "native complete allocation")
+    if (allocation["schema_version"] != "devforge.utility-native-allocation/v1"
+            or allocation["task_id"] != plan["task_id"] or allocation["cases_sha256"] != plan["cases"]["sha256"]):
+        core._fail("native complete allocation has wrong task/cases binding")
+    _positive(allocation["max_total_attempts"], 24, "total native call cap")
+    if type(allocation["preparation_attempts"]) is not int or not 0 <= allocation["preparation_attempts"] <= 24:
+        core._fail("preparation calls must be explicitly charged before campaign binding")
+    _positive(allocation["max_seconds"], 14400, "original native campaign time")
+    _positive(allocation["per_attempt_max_seconds"], 600, "native per-call time")
+    _, cases_raw = _pin(plan["cases"], "native required-call cases", frozen)
+    cases = core._json(cases_raw, "native required-call cases")
+    core._exact(cases, {"schema_version", "task_id", "required_calls"}, "native required-call cases")
+    if cases["schema_version"] != "devforge.utility-native-cases/v1" or cases["task_id"] != plan["task_id"]:
+        core._fail("native execution requires an independent complete versioned cases inventory")
+    calls = allocation["required_calls"]
+    if not isinstance(calls, list) or not calls or len(calls) > 24:
+        core._fail("complete native call inventory exceeds its cap or is missing")
+    fields = {"attempt_id", "case_id", "tier", "arm", "repetition", "purpose", "review_path", "reviewer",
+              "interaction", "managed_worker_required"}
+    for call in calls:
+        core._exact(call, fields, "native allocated call")
+        if call["purpose"] not in {"case", "control", "probe", "grader", "receiving"}:
+            core._fail("every native invocation must have an explicit supported accounting purpose")
+        core._text(call["reviewer"], "independent/operator reviewer")
+        store._absolute(call["review_path"], "selected independent/operator review")
+        if (call["interaction"] not in {"single-turn", "awaiting-user"}
+                or type(call["managed_worker_required"]) is not bool):
+            core._fail("every required call must declare interaction and managed worker requirements")
+    if calls != cases["required_calls"]:
+        core._fail("native call allocation must cover the exact independent required-call inventory")
+    projection = lambda rows: [{k: row[k] for k in ("attempt_id", "case_id", "tier", "arm", "repetition")} for row in rows]
+    if projection(calls) != projection(plan["attempts"]):
+        core._fail("native plan omits or substitutes a required case/control/probe/grader/receiving call")
+    runtime_rows = runtime.get("attempts")
+    if (not isinstance(runtime_rows, list) or len(runtime_rows) != len(calls)
+            or any(not isinstance(row, dict) for row in runtime_rows)):
+        core._fail("native runtime allocation does not cover every required call")
+    for call in calls:
+        rows = [row for row in runtime_rows if row.get("attempt_id") == call["attempt_id"]]
+        if (len(rows) != 1 or rows[0].get("interaction") != call["interaction"]
+                or call["managed_worker_required"] and rows[0].get("managed_worker") is None):
+            core._fail("native runtime omits a required interaction/managed worker lifecycle")
+    if (len(calls) + allocation["preparation_attempts"] > allocation["max_total_attempts"]
+            or plan["max_attempts"] + allocation["preparation_attempts"] > allocation["max_total_attempts"]
+            or plan["max_seconds"] != allocation["max_seconds"]
+            or any(a["max_seconds"] > allocation["per_attempt_max_seconds"] for a in plan["attempts"])):
+        core._fail("native complete allocation exceeds total calls or the original campaign/per-call limits")
+    return allocation, [("native_allocation", str(allocation_path), allocation_raw),
+                        ("native_runtime", str(runtime_path), runtime_raw)]
+
+
+def semantic_review(raw, *, task_id, attempt_id, receipt_sha256, binding, reviewer):
+    """Authenticate selected review custody/binding, never the reviewer's quality."""
+    value = core._json(raw, "independent native semantic review")
+    core._exact(value, {"schema_version", "task_id", "attempt_id", "process_receipt_sha256", "binding",
+                       "reviewer", "outcome", "reason", "evidence"}, "independent native semantic review")
+    if (value["schema_version"] != "devforge.utility-native-review/v1" or value["task_id"] != task_id
+            or value["attempt_id"] != attempt_id or value["process_receipt_sha256"] != receipt_sha256
+            or value["binding"] != binding or value["reviewer"] != reviewer or value["outcome"] not in {"PASS", "FAIL"}):
+        core._fail("native semantic review differs from selected independent/operator authority and raw process receipt")
+    core._text(value["reason"], "native review reasoning")
+    if not isinstance(value["evidence"], list) or not value["evidence"] or len(value["evidence"]) > 64:
+        core._fail("native semantic review requires bounded independent evidence")
+    return value

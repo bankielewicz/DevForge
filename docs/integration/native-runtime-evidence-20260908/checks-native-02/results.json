@@ -1,0 +1,78 @@
+{
+  "model_calls": 0,
+  "evidence_scope": "deterministic regression checks for frozen review04 bytes only",
+  "checks": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--check"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.0555952150025405,
+      "log": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/checks-native-02/fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.5072946769942064,
+      "log": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/checks-native-02/clippy.log",
+      "sha256": "c9aff60766232bbece1e9d7563de230c6a6b12668fdde3f4f0c85656da755b1e"
+    },
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.9754965620086296,
+      "log": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/checks-native-02/build.log",
+      "sha256": "ab7a6377565a9a14ea0ea85b31a38b7a2247ffe1d968f3506a2b6ded7f7c4741"
+    },
+    {
+      "name": "suite",
+      "command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-p",
+        "test_*.py"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 76.31422334400122,
+      "log": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/checks-native-02/suite.log",
+      "sha256": "857de6b3306ff46dc2bef85a6d45dcde7d2ff4e91c73f66978d02e043e6bf7af"
+    },
+    {
+      "name": "demo",
+      "command": [
+        "python3",
+        "-B",
+        "scripts/demo.py",
+        "--framework",
+        "/home/bryan/Projects/DevForge/tmp/skill-utilities-journal-integration-20260907T231223422364Z/framework-fixture-source"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 3.5307514760061167,
+      "log": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/checks-native-02/demo.log",
+      "sha256": "76705dde05da8bc4d2dd28872e9a45c5e71e3aa7c8d5d5c0ce2a9455718263b8"
+    }
+  ]
+}

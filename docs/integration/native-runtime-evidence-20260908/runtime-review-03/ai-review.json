@@ -1,0 +1,96 @@
+{
+  "schema_version": "devforge.independent-ai-review/v1",
+  "reviewer": "native_runtime_review_03",
+  "review_kind": "read-only correctness and contract review",
+  "disposition": "CHANGES_REQUIRED",
+  "scope": {
+    "packet": "/home/bryan/Projects/DevForge/tmp/skill-utilities-approved-continuation-20260908T010546709607Z/runtime-review-03",
+    "baseline_commit": "d4155426ce8019e338d45fc168bb01da1a5680f1",
+    "baseline_files": 96,
+    "candidate_files": 102,
+    "candidate_additions": [
+      "docs/integration/native-integration-requirements-20260908.md",
+      "docs/integration/native-lifecycle-contract.md",
+      "docs/integration/native-process-contract.md",
+      "runtime/delivery/native_process.py",
+      "tests/test_native_process.py",
+      "tests/test_utility_native_lifecycle.py"
+    ],
+    "changed_existing_modules": [
+      "docs/integration/utility-runtime-contract.md",
+      "runtime/delivery/controller.py",
+      "runtime/delivery/utility_evidence.py",
+      "runtime/delivery/utility_schedule.py",
+      "runtime/delivery/utility_state.py",
+      "runtime/delivery/workflow_runtime.py",
+      "src/delivery.rs"
+    ]
+  },
+  "frozen_identity": {
+    "before": {
+      "manifest_sha256": "1d6d5d8db70c2ab0ff16141e135848c3676ac54e8c595d101d5e1ed5a3eb8cfc",
+      "manifest_entries": 198,
+      "candidate_entries": 102,
+      "baseline_entries": 96,
+      "all_declared_file_hashes_matched": true
+    },
+    "after": {
+      "manifest_sha256": "1d6d5d8db70c2ab0ff16141e135848c3676ac54e8c595d101d5e1ed5a3eb8cfc",
+      "manifest_entries": 198,
+      "candidate_entries": 102,
+      "baseline_entries": 96,
+      "all_declared_file_hashes_matched": true
+    },
+    "note": "The manifest carries modes for candidate entries only; baseline identity was verified by the supplied baseline commit and every declared baseline byte hash."
+  },
+  "independence_limits": [
+    "Read only review of the supplied frozen packet.",
+    "No candidate execution, native launch, model invocation, authentication, filesystem boundary probe, or test execution.",
+    "Did not inspect author conclusions, other reviews, private authorization roots, normal credentials, source skill evaluation history, or unrelated repository files.",
+    "Component declarations and deterministic fixture tests were treated as structural evidence, not native behavior evidence."
+  ],
+  "findings": [
+    {
+      "id": "R03-001",
+      "severity": "HIGH",
+      "title": "Incomplete or over-cap coverage can be bound and reserved before the 24-call allocation gate runs",
+      "requirements": ["NI-01", "NI-12"],
+      "evidence": [
+        "runtime/delivery/utility_state.py:1124-1146 binds and reserves through _native_prerequisites without calling launch_allocation.",
+        "runtime/delivery/utility_state.py:375-390 validates the legacy plan and prerequisite gate, but not the supplemental runtime configuration or complete required_calls inventory.",
+        "runtime/delivery/utility_state.py:1212 calls utility_evidence.launch_allocation only after native-schedule-reserve has admitted an in-flight reservation.",
+        "runtime/delivery/utility_evidence.py:165-224 contains the required 24-call and exact-inventory checks.",
+        "tests/test_utility_native_lifecycle.py:171-178 deliberately binds and reserves a legacy planning plan, then expects rejection only at native_process_launch."
+      ],
+      "reproduction": [
+        "Supply a native-plan/v1 that passes native_plan and a PASS native-prerequisites gate but has no versioned runtime_configuration or a call inventory that exceeds the cap.",
+        "Run native-schedule-bind and native-schedule-reserve; both reach their normal bind/reserve transitions because their path does not call launch_allocation.",
+        "Only native-process-launch rejects the allocation, after a durable reservation has already been consumed."
+      ],
+      "impact": "NI-01 requires missing coverage or more than 24 calls to prevent campaign admission. The current entrypoint admits and accounts a campaign attempt before enforcing the complete coverage oracle. This also conflicts with the lifecycle contract statement that schedule binding retains a complete frozen plan.",
+      "expected_correction": "Run launch_allocation during native-schedule-bind, retain and replay the allocation/runtime snapshots as part of the bound schedule identity, and reject reserve when that validation has not succeeded. Add a regression test proving that legacy, missing, and over-cap allocations cannot bind or reserve."
+    }
+  ],
+  "native_requirement_assessment": {
+    "NI-01": "NOT_MET: complete allocation and cap validation occurs only at launch, not schedule admission/reservation.",
+    "NI-02": "STRUCTURAL_ONLY: selected client, hash, model, reasoning, provider, and retry restrictions are encoded; no selected-client/authentication observation was performed.",
+    "NI-03": "UNRESOLVED_NATIVE_OBSERVATION: distinct path checks and pinned effective-runtime evidence exist, but fresh sign-in and unused workspace/client-state behavior were not observed.",
+    "NI-04": "UNRESOLVED_NATIVE_OBSERVATION: empty-root Bubblewrap construction, explicit mounts, discovery inventories, and .git masking are implemented; actual allow/deny probes were not run.",
+    "NI-05": "STRUCTURAL_ONLY: claim-before-launch, locked replay, and one in-flight reservation are implemented; no crash/restart ownership observation was performed.",
+    "NI-06": "STRUCTURAL_ONLY: original-clock and per-attempt deadline checks are implemented; no live expiry/pause observation was performed.",
+    "NI-07": "STRUCTURAL_ONLY: collector retains bounded streams, verifies EOF/events, and reaps its owned group; no native process collection was observed.",
+    "NI-08": "STRUCTURAL_ONLY: receipt HMAC, exact authority path, request binding, stream hashes, and replay rejection are implemented; no protected native receipt was observed.",
+    "NI-09": "STRUCTURAL_ONLY: receipt authenticity and semantic review are separate in the importer; no independent grader or delivery observation was performed.",
+    "NI-10": "UNRESOLVED_NATIVE_OBSERVATION: broker lifecycle checks exist, while effective hooks and callback origin remain explicitly unobserved.",
+    "NI-11": "OPEN_PREREQUISITE: awaiting-user interaction is rejected during preflight; no answer transport is implemented.",
+    "NI-12": "PARTIALLY_MET_STRUCTURALLY: C/B/A import/review gate wiring is present, but NI-01 permits incomplete coverage past schedule admission and no native observations exist."
+  },
+  "test_coverage": {
+    "reviewed": [
+      "tests/test_native_process.py",
+      "tests/test_utility_native_lifecycle.py"
+    ],
+    "missing_regression": "No test requires native-schedule-bind or native-schedule-reserve to reject an incomplete, legacy, or over-cap supplemental allocation. The lifecycle test currently demonstrates the opposite ordering."
+  },
+  "acceptance_authority": "None. This review neither merges nor accepts the candidate."
+}

@@ -46,3 +46,20 @@ def protected_paths(contract):
 def start(contract, state):
     raw = phase_state._external(Path(contract), phase_state.SESSION_LIMIT, "selected session")
     return engine(delivery_core._json(raw, "selected session")).start(contract, state)
+
+
+def native_operation(action, state, *, attempt, receipt=None, review=None, reason=None):
+    selected = engine_for_state(state)
+    if selected is not utility_state:
+        delivery_core._fail("native process lifecycle requires a protected utility workflow")
+    if not isinstance(attempt, str) or not attempt.strip():
+        delivery_core._fail("native process lifecycle requires an exact reserved attempt ID")
+    if action == "native-process-launch":
+        return selected.native_process_launch(state, attempt)
+    if action == "native-process-import" and receipt is not None:
+        return selected.native_process_import(state, attempt, receipt)
+    if action == "native-result-review" and review is not None:
+        return selected.native_result_review(state, attempt, review)
+    if action == "native-result-close" and reason is not None:
+        return selected.native_result_close(state, attempt, reason)
+    delivery_core._fail("native operation is missing its selected receipt/review/closure input")
