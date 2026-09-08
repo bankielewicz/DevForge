@@ -14,12 +14,13 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from . import delivery_core as core, phase_state as store, utility_evidence, utility_schedule
+    from . import delivery_core as core, phase_state as store, utility_evidence, utility_schedule, validation_policy
 except ImportError:
     import delivery_core as core
     import phase_state as store
     import utility_evidence
     import utility_schedule
+    import validation_policy
 
 SESSION_SCHEMA = "devforge.utility-session/v1"
 DELIVERY_SCHEMA = "devforge.utility-delivery/v1"
@@ -90,9 +91,12 @@ def _load_contract(path, frozen=None):
     path = store._absolute(path, "utility delivery contract")
     contract, raw = _json_file(path, "utility delivery contract", frozen=frozen)
     core._exact(contract, {"schema_version", "task_id", "project_root", "workflow", "mode",
-                           "inputs", "outputs", "phases", "gate_inputs", "questions"}, "utility delivery contract")
-    if contract["schema_version"] != DELIVERY_SCHEMA or contract["workflow"] not in PHASES:
+                           "inputs", "outputs", "phases", "gate_inputs", "questions"}
+                | ({"validation_policy"} if contract.get("schema_version") == validation_policy.DELIVERY_SCHEMA else set()), "utility delivery contract")
+    if contract["schema_version"] not in {DELIVERY_SCHEMA, validation_policy.DELIVERY_SCHEMA} or contract["workflow"] not in PHASES:
         core._fail("unsupported utility delivery schema/workflow")
+    if contract["schema_version"] == validation_policy.DELIVERY_SCHEMA and contract["workflow"] != "skill-validator":
+        core._fail("v2 validation policy is validator-only")
     if contract["mode"] != "utility":
         core._fail("utility mode must be explicit")
     core._text(contract["task_id"], "utility task_id")
@@ -159,7 +163,7 @@ def _load_contract(path, frozen=None):
         selected.append(target)
         core._text(gate["producer"], "allocated gate producer")
         outcomes = _list(gate["allowed_outcomes"], "gate outcomes", nonempty=True)
-        if len(set(outcomes)) != len(outcomes) or not set(outcomes) <= {"PASS", "FAIL", "COULD_NOT_RUN", "NOT_RUN"}:
+        if len(set(outcomes)) != len(outcomes) or not set(outcomes) <= ({"PASS", "FAIL", "COULD_NOT_RUN", "NOT_RUN"} | ({"NOT_APPLICABLE"} if contract["schema_version"] == validation_policy.DELIVERY_SCHEMA else set())):
             core._fail("invalid gate outcome selection")
     if contract["workflow"] == "skill-validator":
         declared = {row["id"]: row["phase"] for row in contract["gate_inputs"]}
@@ -218,6 +222,12 @@ def _configuration(session_path, root, *, initial=False, frozen=None):
         core._fail("utility authority must be outside worker project")
     fixed = [("session", str(session_path), raw), ("delivery", str(contract_path), contract_raw),
              ("assignment", str(assignment), assignment_raw)]
+    policy = None
+    if contract["schema_version"] == validation_policy.DELIVERY_SCHEMA:
+        policy = validation_policy.load(contract["validation_policy"], assignment_raw, project, frozen=frozen)
+        reviewer = next(g for g in contract["gate_inputs"] if g["id"] == "independent-review")["producer"]
+        validation_policy.require(reviewer == policy.value["selection_reviewer"], "delivery producer differs from selected reviewer")
+        fixed.extend(policy.fixed())
     installed_paths = []
     for entry in _list(session["installed_inputs"], "installed inputs", nonempty=True):
         path, value = _pin(entry, "installed input", frozen)
@@ -285,10 +295,11 @@ def _configuration(session_path, root, *, initial=False, frozen=None):
         core._fail("receipt already exists before admission")
     return {"session": session, "raw": raw, "contract": contract, "contract_raw": contract_raw,
             "project": project, "receipt": receipt, "deadline": deadline, "fixed": fixed,
-            "preimages": preimages, "baselines": baselines, "outputs": outputs}
+            "preimages": preimages, "baselines": baselines, "outputs": outputs, "validation_policy": policy}
 
 
-def _structured(raw, spec):
+def _structured(raw, spec, cfg=None, state=None):
+    extra = []
     if not raw or not raw.strip():
         core._fail("required output is empty")
     if spec["format"] == "text":
@@ -307,6 +318,23 @@ def _structured(raw, spec):
         value = core._json(raw, "utility JSON artifact")
     if not isinstance(value, dict) or value.get("schema_version") != spec["schema_version"]:
         core._fail("utility output schema differs from selected format")
+    if str(value.get("schema_version", "")).startswith(("devforge.skill-validation-results/", "devforge.skill-validation-decision/")) and value["schema_version"] not in {"devforge.skill-validation-results/v1", "devforge.skill-validation-decision/v1", validation_policy.RESULTS_SCHEMA, validation_policy.DECISION_SCHEMA}:
+        core._fail("unsupported validation results schema")
+    if value.get("schema_version") in {validation_policy.RESULTS_SCHEMA, validation_policy.DECISION_SCHEMA}:
+        if cfg is None or cfg.get("validation_policy") is None or state is None:
+            core._fail("v2 result reduction requires selected external policy/review context")
+        review_gate = next(g for g in cfg["contract"]["gate_inputs"] if g["id"] == "independent-review")
+        if review_gate["path"] not in state.gates:
+            core._fail("v2 results require admitted T04 evidence")
+        review_ref = core._json(state.source(review_gate["path"], "T04 gate"), "T04 gate")["evidence"][0]
+        reducer = utility_evidence.validation_results if value["schema_version"] == validation_policy.RESULTS_SCHEMA else utility_evidence.validation_decision
+        derived = reducer(raw, cfg["validation_policy"], review_ref,
+            delivery_ref={"path": cfg["session"]["delivery_contract"], "sha256": store._hash(cfg["contract_raw"])},
+            native_receipts=state.native_imports)
+        extra = [("validation_result_evidence", path, data) for path, data in cfg["validation_policy"].sources.items()]
+        for key in ("report_completion", "validation_disposition", "routine_adoption_eligible", "lineage"):
+            if value[key] != derived[key]:
+                core._fail("v2 result claimed summary differs from original assertion reduction: " + key)
     for path in spec["required_fields"]:
         current = value
         for field in path.split("."):
@@ -329,13 +357,17 @@ def _structured(raw, spec):
             for child in node:
                 inspect(child)
     inspect(value)
+    return extra
 
 
 def _gate(raw, spec, cfg, state=None):
     value = core._json(raw, "external utility gate input")
-    core._exact(value, {"schema_version", "task_id", "phase", "producer", "inputs_sha256",
-                        "outcome", "reason", "evidence"}, "external utility gate input")
-    if (value["schema_version"] != "devforge.utility-gate-input/v1"
+    is_v2 = cfg["contract"]["schema_version"] == validation_policy.DELIVERY_SCHEMA
+    extra = validation_policy.gate(value, spec, cfg, state) if is_v2 else []
+    if not is_v2:
+        core._exact(value, {"schema_version", "task_id", "phase", "producer", "inputs_sha256",
+                            "outcome", "reason", "evidence"}, "external utility gate input")
+    if (value["schema_version"] != (validation_policy.GATE_SCHEMA if is_v2 else "devforge.utility-gate-input/v1")
             or value["task_id"] != cfg["session"]["task_id"] or value["phase"] != spec["phase"]
             or value["producer"] != spec["producer"] or value["inputs_sha256"] != store._hash(cfg["contract_raw"])):
         core._fail("gate input has wrong task/phase/producer/selected input binding")
@@ -346,7 +378,7 @@ def _gate(raw, spec, cfg, state=None):
             core._fail("native executed outcomes require an authenticated result importer")
         state.check_native_gate(spec, value)
     core._text(value["reason"], "gate scope/reason")
-    evidence = []
+    evidence = list(extra)
     for ref in _list(value["evidence"], "gate underlying evidence", nonempty=True):
         path, evidence_raw = _pin(ref, "gate underlying evidence", state.frozen if state else None)
         if str(path) == spec["path"]:
@@ -356,7 +388,11 @@ def _gate(raw, spec, cfg, state=None):
         plans = [(path, data) for _, path, data in evidence]
         if len(plans) != 1:
             core._fail("native prerequisite PASS requires exactly one complete frozen native plan")
-        _, fixed = utility_evidence.native_plan(plans[0][1], cfg["session"]["task_id"], frozen=state.frozen if state else None)
+        native, fixed = utility_evidence.native_plan(plans[0][1], cfg["session"]["task_id"], frozen=state.frozen if state else None)
+        if is_v2:
+            validation_policy.require(native["schema_version"] == "devforge.utility-native-plan/v2" and native["validation_plan"] == cfg["validation_policy"].selection["plan"], "native plan selection version/binding mismatch")
+        elif native["schema_version"] != "devforge.utility-native-plan/v1":
+            core._fail("v1 gate cannot select v2 native authority")
         evidence.extend(fixed)
     return evidence
 
@@ -821,7 +857,11 @@ class State:
             ref = by_kind.get(("output", str(target)))
             if row["path"] != str(target) or ref is None or row["sha256"] != ref["sha256"]:
                 core._fail("output evidence path/bytes differs from selected artifact")
-            _structured(self.blobs[ref["sha256"]], spec)
+            for kind, path, raw in _structured(self.blobs[ref["sha256"]], spec, self.cfg, self) or []:
+                proof = by_kind.get((kind, path))
+                if proof is None or proof["sha256"] != store._hash(raw):
+                    core._fail("validation result evidence snapshot missing or stale")
+                self.gates[path] = proof["sha256"]
             baseline = self.cfg["baselines"][spec["path"]]
             if ref["sha256"] == baseline["sha256"] and not baseline["allow_unchanged"]:
                 core._fail("unchanged output is not permitted by this allocation")
@@ -1006,7 +1046,7 @@ def advance(state_root):
                 if spec["phase"] == state.phase:
                     with core._directory(state.cfg["project"], "output project") as project_fd:
                         value = store._read_at(project_fd, spec["path"], LIMIT, "utility phase output")
-                    _structured(value, spec)
+                    sources.extend(_structured(value, spec, state.cfg, state) or [])
                     if by_id[spec["id"]] != {"id": spec["id"], "path": str(state.cfg["project"] / spec["path"]), "sha256": store._hash(value)}:
                         core._fail("checkpoint output identity differs from actual bytes")
                     sources.append(("output", str(state.cfg["project"] / spec["path"]), value))
@@ -1021,6 +1061,10 @@ def advance(state_root):
         except core._Problem as error:
             if error.result != "FAIL":
                 raise
+            if state.cfg.get("validation_policy") is not None:
+                result = state.view("FAIL")
+                result["issues"] = [error.issue]
+                return result
             # Reconstruct after a failed prospective replay; no partial state is authoritative.
             state = State(root, fd)
             state.append("correction", {"phase": state.phase, "challenge": state.challenge,

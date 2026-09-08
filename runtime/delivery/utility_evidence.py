@@ -9,10 +9,10 @@ import os
 import stat
 
 try:
-    from . import delivery_core as core, phase_state as store
+    from . import delivery_core as core, phase_state as store, validation_policy
 except ImportError:
     import delivery_core as core
-    import phase_state as store
+    import phase_state as store, validation_policy
 
 
 def _pin(value, label, frozen=None):
@@ -35,11 +35,22 @@ def native_plan(raw, task_id, *, frozen=None):
     plan = core._json(raw, "utility native experiment")
     core._exact(plan, {"schema_version", "task_id", "candidate", "baseline", "specification", "cases",
                        "runtime_configuration", "client", "model", "authentication", "repetitions",
-                       "max_attempts", "max_seconds", "observation_methods", "boundary_evidence", "attempts"},
+                       "max_attempts", "max_seconds", "observation_methods", "boundary_evidence", "attempts"}
+                | ({"validation_plan"} if plan.get("schema_version") == "devforge.utility-native-plan/v2" else set()),
                 "utility native experiment")
-    if plan["schema_version"] != "devforge.utility-native-plan/v1" or plan["task_id"] != task_id:
+    if plan["schema_version"] not in {"devforge.utility-native-plan/v1", "devforge.utility-native-plan/v2"} or plan["task_id"] != task_id:
         core._fail("native plan task/schema mismatch")
     fixed = []
+    if plan["schema_version"] == "devforge.utility-native-plan/v2":
+        path, data = _pin(plan["validation_plan"], "native validation plan", frozen)
+        selected = core._json(data, "native validation plan")
+        if selected.get("schema_version") != validation_policy.PLAN_SCHEMA:
+            core._fail("native v2 requires exact v2 validation plan")
+        calls = selected["validation_policy"]["call_graph"]
+        projection = [c["attempt_id"] for c in calls if c["attempt_id"] is not None]
+        if projection != [a["attempt_id"] for a in plan["attempts"]] or not projection:
+            core._fail("native plan differs from complete typed graph native projection")
+        fixed.append(("native_input", str(path), data))
     for name in ("candidate", "baseline", "specification", "cases", "runtime_configuration", "boundary_evidence"):
         path, data = _pin(plan[name], f"native plan {name}", frozen)
         fixed.append(("native_input", str(path), data))
@@ -169,6 +180,15 @@ def launch_allocation(plan, *, frozen=None):
     convenient plan attempts cannot itself establish coverage. Legacy opaque
     cases/runtime documents remain valid for inspection, but cannot bind or reserve.
     """
+    if plan.get("schema_version") == "devforge.utility-native-plan/v2":
+        try:
+            from . import utility_schedule
+        except ImportError:
+            import utility_schedule
+        validator = getattr(utility_schedule, "validate_allocation_v2", None)
+        if validator is None:
+            core._fail("v2 allocation consumer requires the separately integrated scheduler")
+        return validator(plan, frozen=frozen)
     runtime_path, runtime_raw = _pin(plan["runtime_configuration"], "native runtime configuration", frozen)
     runtime = core._json(runtime_raw, "native runtime configuration")
     if not isinstance(runtime, dict) or runtime.get("schema_version") != "devforge.native-runtime-configuration/v1":
@@ -245,3 +265,15 @@ def semantic_review(raw, *, task_id, attempt_id, receipt_sha256, binding, review
     if not isinstance(value["evidence"], list) or not value["evidence"] or len(value["evidence"]) > 64:
         core._fail("native semantic review requires bounded independent evidence")
     return value
+
+
+def validation_results(raw, policy, review_ref, *, delivery_ref, native_receipts=()):
+    """Protected consumer for v2 assertion reduction; no semantic/native fabrication."""
+    return validation_policy.reduce_results(raw, policy, review_ref,
+        delivery_ref=delivery_ref, native_receipts=native_receipts)
+
+
+def validation_decision(raw, policy, review_ref, *, delivery_ref, native_receipts=()):
+    """Verify helper decision claims against actual pinned v2 result records."""
+    return validation_policy.reduce_decision(raw, policy, review_ref,
+        delivery_ref=delivery_ref, native_receipts=native_receipts)

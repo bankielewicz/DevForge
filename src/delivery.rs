@@ -171,6 +171,10 @@ const SOURCES: &[(&str, &str)] = &[
         include_str!("../runtime/delivery/phase_state.py"),
     ),
     (
+        "validation_policy.py",
+        include_str!("../runtime/delivery/validation_policy.py"),
+    ),
+    (
         "utility_evidence.py",
         include_str!("../runtime/delivery/utility_evidence.py"),
     ),

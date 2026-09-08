@@ -382,5 +382,207 @@ class UtilityStateTests(unittest.TestCase):
         self.assertEqual(result["phase_applicability"]["Selection"], "OWNER_EXCLUDED_OPTIONAL")
 
 
+class ValidationPolicyReductionTests(unittest.TestCase):
+    """Additional discriminators through the actual state/evidence consumers."""
+    def setUp(self):
+        from test_validation_policy import PolicyFixture
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.f = PolicyFixture(Path(self.tmp.name))
+        self.clock = mock.patch.object(store, "utc_now", return_value=NOW)
+        self.clock.start()
+        self.addCleanup(self.clock.stop)
+
+    def policy(self):
+        import validation_policy
+        return validation_policy.load(self.f.delivery["validation_policy"],
+            (self.f.owner / "assignment.md").read_bytes(), self.f.project)
+
+    def reduce(self, value):
+        import utility_evidence
+        return utility_evidence.validation_results(encoded(value), self.policy(), self.f.pin(self.f.review_path),
+            delivery_ref=self.f.pin(self.f.delivery_path))
+
+    def test_honest_unattempted_result_has_complete_report_without_suitability(self):
+        result = self.reduce(self.f.results())
+        self.assertEqual(result["overall"], "NOT_RUN")
+        self.assertEqual(result["report_completion"], "COMPLETE")
+        self.assertEqual(result["validation_disposition"], "INSUFFICIENT_EVIDENCE")
+        self.assertFalse(result["routine_adoption_eligible"])
+        self.assertFalse(result["coverage_complete"])
+        self.assertEqual(result["lineage"], self.f.lineage)
+
+    def test_bad_native_gate_does_not_partially_write_v2_head(self):
+        self.assertEqual(self.f.start()["status"], "ACTIVE")
+        for _ in range(3):
+            self.f.checkpoint(); self.assertEqual(utility.advance(self.f.state)["status"], "PROGRESS")
+        gate = self.f.owner / "native-A.json"
+        value = json.loads(gate.read_bytes()); value["review_sha256"] = "a" * 64; gate.write_bytes(encoded(value))
+        before = (self.f.state / "HEAD.json").read_bytes()
+        self.f.checkpoint()
+        self.assertEqual(utility.advance(self.f.state)["status"], "FAIL")
+        self.assertEqual((self.f.state / "HEAD.json").read_bytes(), before, "Policy admission rejection must not partially write state")
+
+    def test_claimed_v2_decision_requires_protected_reduction_context(self):
+        spec = {"format": "json", "schema_version": "devforge.skill-validation-decision/v2", "required_fields": []}
+        with self.assertRaises(core._Problem):
+            utility._structured(encoded({"schema_version": spec["schema_version"], "overall": "PASS"}), spec)
+
+    def test_unknown_policy_result_version_cannot_be_generic_structured_output(self):
+        spec = {"format": "json", "schema_version": "devforge.skill-validation-results/v99", "required_fields": []}
+        with self.assertRaises(core._Problem):
+            utility._structured(encoded({"schema_version": spec["schema_version"]}), spec)
+
+    def test_matched_impact_rule_cannot_keep_spelling_only_selection(self):
+        from test_validation_policy import PolicyFixture
+        for rule in ("CI-02", "CI-03", "CI-04", "CI-05", "CI-06", "CI-09"):
+            with self.subTest(rule=rule), tempfile.TemporaryDirectory() as tmp:
+                f = PolicyFixture(Path(tmp))
+                f.vp["impact"]["matched_rules"].append(rule)
+                f.freeze()
+                self.assertEqual(f.start()["status"], "FAIL", "Matched impact rule requires its native tiers or Full")
+                self.assertFalse(f.state.exists())
+
+    def test_native_selection_requires_resolved_runtime_budget(self):
+        self.f.vp["task_selection"][5]["selection"] = "REQUIRED"
+        self.f.vp["assertions"][5]["selection"] = "REQUIRED"
+        self.f.freeze()
+        self.assertEqual(self.f.start()["status"], "FAIL", "Selected native work cannot retain null runtime/budget")
+        self.assertFalse(self.f.state.exists())
+
+    def test_result_summary_reduction_runs_during_phase_acceptance_and_replay(self):
+        spec = next(s for s in self.f.delivery["outputs"] if s["phase"] == "P6")
+        spec.update(schema_version="devforge.skill-validation-results/v2", required_fields=["task_results"])
+        self.f.freeze()
+        self.assertEqual(self.f.start()["status"], "ACTIVE")
+        for _ in range(5):
+            self.f.checkpoint(); self.assertEqual(utility.advance(self.f.state)["status"], "PROGRESS")
+        record = self.f.results()
+        (self.f.project / "P6.json").write_bytes(encoded(record))
+        self.f.checkpoint(content=False)
+        self.assertEqual(utility.advance(self.f.state)["status"], "READY")
+        self.assertEqual(utility.complete(self.f.state)["status"], "COMPLETED")
+        self.assertEqual(utility.context(self.f.state)["status"], "COMPLETED")
+        # All retained evidence must survive immutable snapshot replay, including cleanup.
+        with store._lock(self.f.state) as fd:
+            try:
+                replayed = utility.State(self.f.state, fd, cleanup=True).status
+            except Exception as error:
+                self.fail("Frozen result evidence must replay without live files: " + repr(error))
+            self.assertEqual(replayed, "COMPLETED")
+
+    def test_duplicate_missing_or_relabelled_original_assertion_is_rejected(self):
+        for change in (lambda r: r["assertion_results"].pop(),
+                       lambda r: r["assertion_results"].append(r["assertion_results"][0]),
+                       lambda r: r["assertion_results"][5].update(outcome="PASS", integrity="INTACT")):
+            with self.subTest(change=change):
+                record = self.f.results(); change(record)
+                with self.assertRaises(core._Problem):
+                    self.reduce(record)
+
+    def test_worker_writable_selection_and_changed_anchor_are_denied(self):
+        self.f.lineage["qualified_anchor"] = {"status": "ABSENT", "identity": None, "evidence": None}
+        self.f.freeze()
+        self.assertEqual(self.f.start()["status"], "FAIL")
+        self.assertFalse(self.f.state.exists())
+
+    def test_no_native_plan_is_invented_for_schedule_admission(self):
+        self.assertEqual(self.f.start()["status"], "ACTIVE")
+        for _ in range(3):
+            self.f.checkpoint(); self.assertEqual(utility.advance(self.f.state)["status"], "PROGRESS")
+        before = (self.f.state / "HEAD.json").read_bytes()
+        result = utility.native_admission(self.f.state, "invented-attempt")
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual((self.f.state / "HEAD.json").read_bytes(), before)
+
+
+class ValidationPolicyObservationTests(ValidationPolicyReductionTests):
+    def observed_results(self, baseline=False):
+        f = self.f
+        if baseline:
+            f.vp["catalog_assertions"][2]["arm"] = "baseline"
+            f.vp["assertions"][2]["expectation"] = "observation"
+        proof = f.put("observed-raw.txt", "Hand-authored synthetic detector output, not a native transcript")
+        observations = []
+        for a, cat in zip(f.vp["assertions"], f.vp["catalog_assertions"]):
+            if a["selection"] != "REQUIRED":
+                continue
+            oid = "OBS-" + a["assertion_id"]
+            a["observation_ids"] = [oid]
+            conditions = {"identity": f.baseline_identity if cat["arm"] == "baseline" else f.identity,
+                          "input_refs": [f.catalog_ref], "prompt_ref": proof if a["tier"] == "S" else None,
+                          "arm": cat["arm"], "variant": "normal", "repetition": 1, "invocation": "none",
+                          "visibility_ref": proof, "freshness_ref": proof, "before_task": a["task_id"]}
+            observations.append({"observation_id": oid, "evidence_kind": a["tier"], "assertion_ids": [a["assertion_id"]],
+                                 "conditions": conditions, "prerequisite_observation_ids": [], "reuse_ref": None})
+        f.vp["observations"] = observations
+        f.vp["call_graph"][0]["observation_ids"] = ["OBS-A04"]
+        f.freeze()
+        result = f.results()
+        for row in result["assertion_results"]:
+            if row["selection"] != "REQUIRED":
+                continue
+            selected = next(o for o in observations if row["assertion_id"] in o["assertion_ids"])
+            cat = next(c for c in f.vp["catalog_assertions"] if c["assertion_id"] == row["assertion_id"])
+            outcome = "FAIL" if baseline and cat["arm"] == "baseline" else "PASS"
+            run = {"schema_version": "devforge.skill-run/v2", "run_id": "UTILITY-001", "tier": selected["evidence_kind"], "provider": "codex",
+                   "client_version": "synthetic", "model_configuration": None, "installation_mode": "source-fixture",
+                   "source_files_sha256": {}, "installed_files_sha256": {}, "baseline": {"kind": "old_skill", "files_sha256": {}},
+                   "specification_files_sha256": {}, "case_files_sha256": {}, "fixture_files_sha256": {},
+                   "execution_ref": "external synthetic allocation", "context_isolation": "No native isolation claim", "sibling_availability": {},
+                   "output_directory": str(f.owner), "transcript": proof["path"], "outcome": outcome, "cause": "Synthetic observation",
+                   "metrics": {"total_tokens": None, "duration_ms": None}, "grading_evidence": [], "case_id": cat["case_id"],
+                   "attempt_id": None, "arm": cat["arm"], "transcript_sha256": proof["sha256"], "installation_path": None,
+                   "native_observations": {}, "boundary_refs": [], "authentication_observation_ref": None, "client_state_observation_ref": None,
+                   "process_ownership_ref": None, "effective_configuration_ref": None, "worker_visible_input_refs": [], "operator_only_input_refs": [],
+                   "deviations": [], "environment_setup_ref": None, "validation_plan_ref": f.pin(f.plan_path), "workspace_allocation_ref": None,
+                   "workspace_id": None, "client_state_directory": None, "observation_id": selected["observation_id"],
+                   "assertion_ids": selected["assertion_ids"], "selection": "REQUIRED", "evidence_kind": selected["evidence_kind"],
+                   "conditions": selected["conditions"], "integrity": "INTACT", "raw_output_refs": [proof]}
+            run_ref = f.put(selected["observation_id"] + ".json", run)
+            row.update(outcome=outcome, integrity="INTACT", observation_refs=[run_ref])
+            if selected["evidence_kind"] == "S":
+                grade = {"schema_version": "devforge.skill-case-grade/v2", "run_id": "UTILITY-001", "case_id": cat["case_id"], "attempt_id": None,
+                         "arm": cat["arm"], "run_manifest": run_ref, "case_definition": f.catalog_ref,
+                         "grader": {"identity": "independent-reviewer", "model": None, "independence_evidence": "Separate synthetic producer"},
+                         "dimensions": {}, "overall": outcome, "cause": "Actual synthetic independent output", "finding_ids": [], "limitations": ["Synthetic"],
+                         "assertion_judgments": [{"assertion_id": row["assertion_id"], "outcome": outcome, "reason": "Synthetic independently retained judgment", "evidence": [proof]}]}
+                row["grade_refs"] = [f.put("grade-" + row["assertion_id"] + ".json", grade)]
+        return result
+
+    def test_complete_routine_ds_is_pass_with_native_groups_not_run(self):
+        record = self.observed_results()
+        try:
+            result = self.reduce(record)
+        except Exception as error:
+            self.fail("Complete selected D/S with actual independent T04 must reduce: " + str(error))
+        self.assertEqual(result["validation_disposition"], "ROUTINE_PASS")
+        self.assertTrue(result["routine_adoption_eligible"])
+        self.assertTrue(result["coverage_complete"])
+        self.assertEqual([result["groups"][t] for t in ("C", "B", "A")], ["NOT_RUN"] * 3)
+
+    def test_intact_baseline_fail_does_not_overwrite_candidate(self):
+        record = self.observed_results(baseline=True)
+        try:
+            result = self.reduce(record)
+        except Exception as error:
+            self.fail("Intact baseline quality FAIL is valid comparison evidence: " + str(error))
+        self.assertEqual(result["validation_disposition"], "ROUTINE_PASS")
+        record["assertion_results"][2].update(outcome="NOT_RUN", integrity="NOT_OBSERVED", observation_refs=[])
+        self.assertEqual(self.reduce(record)["validation_disposition"], "INSUFFICIENT_EVIDENCE")
+        record["assertion_results"][0]["outcome"] = "FAIL"
+        self.assertEqual(self.reduce(record)["validation_disposition"], "FAIL")
+
+    def test_unknown_observation_keys_and_cross_arm_reuse_are_denied(self):
+        for mutation in (lambda r: r.update(unrecognized_authority="PASS"), lambda r: r["conditions"].update(arm="baseline")):
+            with self.subTest(mutation=mutation):
+                record = self.observed_results()
+                ref = record["assertion_results"][0]["observation_refs"][0]
+                run = json.loads(Path(ref["path"]).read_bytes()); mutation(run)
+                Path(ref["path"]).write_bytes(encoded(run)); record["assertion_results"][0]["observation_refs"][0] = fref = self.f.pin(Path(ref["path"]))
+                with self.assertRaises(core._Problem):
+                    self.reduce(record)
+
+
 if __name__ == "__main__":
     unittest.main()

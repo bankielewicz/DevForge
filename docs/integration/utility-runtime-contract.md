@@ -58,3 +58,68 @@ The [native lifecycle contract](native-lifecycle-contract.md) defines the extern
 The collector uses a separate explicit filesystem view and a selected managed worker broker when required. It does not infer effective hook, authentication, tool or credential isolation from configuration text. Those observations are mandatory before launch. Callback origin, rendered delivery and actual receiving invocation remain separate claims.
 
 This interface currently admits only supported single-turn requests. Required Q&A and later-answer cases need an additional controlled interaction transport and counted allocation; unsupported interaction fails preflight. No actual native campaign has run on this implementation, and deterministic fixture receipts cannot substitute for one. The approved 24-attempt cap does not fit the frozen required coverage, so no campaign clock has been bound. See [the integration requirements](native-integration-requirements-20260908.md) for the unfulfilled prerequisites and completion criteria.
+
+## Opt-in VPR-2 policy records
+
+Canonical schema source: DevForgeAI G1 commit
+`75bcba915fd1d5f88477318d4b27db6e6961ca81`,
+`docs/mvp/execution-contract.md`, VPR-2 record contract. This implementation
+adds validator-only `devforge.utility-delivery/v2` and typed v2 gates/results;
+all v1 session/checkpoint/journal/receipt fields and legacy semantics remain.
+The existing assignment's JSON authorization payload selects the exact
+`validation_policy` object and `selection_reviewer`; the assignment owner must
+match the plan owner. Its author cannot be its selection reviewer. No new
+approval artifact type or helper-issued acceptance is introduced.
+
+`validation_policy.load(selection, assignment_raw, project, frozen=None)`
+returns a protected Policy with the exact plan, catalog/assertion/task/observation
+and complete typed call maps. Its `fixed()` list supplies immutable snapshot
+sources. Policy, acceptance, scope, lineage, diffs, original catalogs and selected
+identity bytes must be external, current and pinned. Routine retains the owner's
+qualified or explicitly unqualified cumulative anchor independently of current
+Routine acceptance. Original assertion projection completeness and semantic
+sufficiency require actual independently selected T04 review; a digest does not
+prove those judgments. The existing JSON owner acceptance payload carries its
+candidate_identity, accepted_scope_ref and lineage when continuing a Routine
+chain; no result reducer writes a successor owner record.
+
+At P3, the exact actual `skill-ai-review/v2` binds the frozen plan and delivery
+without a circular plan-to-review pin, and retains R01–R10. At P4, a reviewed
+NOT_SELECTED native gate keeps outcome NOT_RUN and disposition
+SATISFIED_BY_REVIEWED_SELECTION. Its exact plan/review evidence permits reporting;
+it does not create a native plan, reservation or PASS. Wrong producer, stale
+review, changed selection and invalid v2 admission leave the protected HEAD
+unchanged. Legacy bounded correction behavior remains on the v1 path.
+
+`utility_evidence.validation_results` and `validation_decision` call the protected
+reducers with the selected Policy, actual review, exact delivery pin and the
+runtime's authenticated native import mapping. Results retain one judgment per
+original assertion. An intact baseline FAIL under expectation=observation can
+complete a comparison; a required candidate FAIL still produces FAIL. Complete
+honest reporting with unavailable observations remains INSUFFICIENT_EVIDENCE.
+Unselected native groups remain NOT_RUN. The reducer does not update qualification
+or grant owner acceptance. Actual receiving evidence is distinct from T12's
+prepared handoff. Evidence consumed in final reduction is snapshotted and checked
+again during replay and receipt publication.
+
+The G2 native-plan bridge accepts the explicit v2 validation_plan binding and
+native projection. V2 complete-allocation validation delegates to
+`utility_schedule.validate_allocation_v2(plan, frozen=None)`, which must return
+`(allocation, snapshot_sources)` using the existing `(kind, absolute_path, raw)`
+source tuple format. Until the separately owned G3 scheduler supplies that
+consumer, v2 campaign binding fails closed. G3 owns conditional C/B/A graph
+projection, externally funded graph accounting, original clocks and collector
+propagation. G6 owns installed/exported capability and helper-policy pins.
+Neither this bridge nor synthetic development tests establish native activation,
+qualification, receiving execution, installation readiness or human acceptance.
+
+The companion frozen helper discriminator is independently selectable:
+
+```text
+VPI_VALIDATOR_PACKAGE=/absolute/selected/skill-validator PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests python3 -m unittest test_validation_policy.HelperDiscriminator -v
+```
+
+It requires an honest unattempted v2 input to emit a v2 decision with NOT_RUN,
+INSUFFICIENT_EVIDENCE, COMPLETE reporting, no adoption/acceptance and native groups
+NOT_RUN. Run it only as the allocated external runtime/operator role. An unchanged
+v1 helper is expected to fail that assertion until the G4 canonical update.
