@@ -33,7 +33,7 @@ def main():
         policy = cli_root / "policies" / f"{slug}.json"
         state = authority / slug
         shutil.copytree(fixture / "seed", project)
-        install(framework, project, "both", include_experts=True)
+        install(framework, project, "both", include_experts=True, runtime=binary)
         events = []
 
         def call(*command, success=True):

@@ -1,0 +1,98 @@
+[
+  {
+    "original_path": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-public-suitability.json",
+    "published_path": "docs/validation/publication-20260909/cli-public-suitability.json",
+    "sha256": "3d8169beef624fb418130b013c9ec704ff638687e87c90f97f0fb1d57958f2d2",
+    "size": 78715
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-archive-results.json",
+    "published_path": "docs/validation/publication-20260909/cli-archive-results.json",
+    "sha256": "9c8dacae4ceacc1474cdaf893a7f2f3207855454461d5f8f4e0975c89d9e8cd4",
+    "size": 697
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/detached-validator-preserved.patch",
+    "published_path": "docs/validation/publication-20260909/detached-validator-preserved.patch",
+    "sha256": "8a05fbd67e1ecd001d97e23739ad8b118261b7a5be303460d0573eab03275bc5",
+    "size": 9454
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/build.log",
+    "published_path": "docs/validation/publication-20260909/checks/build.log",
+    "sha256": "7306919f694b50dc15410cf93b2f3e842ea7e8390259818772c553b0dea0cb09",
+    "size": 1195
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/clippy.log",
+    "published_path": "docs/validation/publication-20260909/checks/clippy.log",
+    "sha256": "acb674c843253a816ec72578e4417c312eea4d4d5289e9aef4ab8925ed24c479",
+    "size": 1441
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/demo-result.json",
+    "published_path": "docs/validation/publication-20260909/checks/demo-result.json",
+    "sha256": "4384233935461b7179640408d6d5085e92e16ddec43f45457c7d44b7aa7bd8b2",
+    "size": 382
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/demo.log",
+    "published_path": "docs/validation/publication-20260909/checks/demo.log",
+    "sha256": "e1fe7f229432bac21bd52881bf1ef9ee485d39128faa4cf1ae2347fbf6e5b81e",
+    "size": 1519
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/fmt.log",
+    "published_path": "docs/validation/publication-20260909/checks/fmt.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/python-tests.log",
+    "published_path": "docs/validation/publication-20260909/checks/python-tests.log",
+    "sha256": "6c7616694583cb836ad35f6356d845cf6abfb40ce491f0ba8495d4a048e0978d",
+    "size": 106050
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/results.json",
+    "published_path": "docs/validation/publication-20260909/checks/results.json",
+    "sha256": "12f4b7ae462fe3a4bcd16912220ab87c93820348fcf092c405fc92f332bf1fe5",
+    "size": 1510
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/rust-tests.log",
+    "published_path": "docs/validation/publication-20260909/checks/rust-tests.log",
+    "sha256": "eb5a2ddcdfe2ab7c0878d93303e2314797ddf89b72dc18880d10e9a2c3db97e8",
+    "size": 458
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/framework/DevForge/.poc/runtime-repairs/reference-repair-r2-20260907T145928067385Z/fixture-authoring/EXPECTED-OUTCOMES.md",
+    "published_path": "docs/validation/publication-20260909/historical-reference-repair/fixture-authoring/EXPECTED-OUTCOMES.md",
+    "sha256": "bf2d4cc0db847cd4b224c8f3b5e55bc50cdb80d19f1942300f2d9c450e3370e2",
+    "size": 3384
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/framework/DevForge/.poc/runtime-repairs/reference-repair-r2-20260907T145928067385Z/fixture-authoring/EXPECTED-OUTCOMES-SUPPLEMENT.md",
+    "published_path": "docs/validation/publication-20260909/historical-reference-repair/fixture-authoring/EXPECTED-OUTCOMES-SUPPLEMENT.md",
+    "sha256": "b40d08ed38afdd6b414eb98e7391121ad8f2d4bf2de8ce32af155ffc934edeab",
+    "size": 1411
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/framework/DevForge/.poc/runtime-repairs/reference-repair-r2-20260907T145928067385Z/review-core/REVIEW.md",
+    "published_path": "docs/validation/publication-20260909/historical-reference-repair/review-core/REVIEW.md",
+    "sha256": "d88f0dc02ab8d0a2da4c1444625eb3cd82c109484e79de600d582f47074cb5df",
+    "size": 7844
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/framework/DevForge/.poc/runtime-repairs/reference-repair-r2-20260907T145928067385Z/ROOT-CLOSEOUT.md",
+    "published_path": "docs/validation/publication-20260909/historical-reference-repair/ROOT-CLOSEOUT.md",
+    "sha256": "8106dbdacce7c0fb3542f294d55990158fcb4c94479ecda935b03518e53e94ee",
+    "size": 2866
+  },
+  {
+    "original_path": "/home/bryan/Projects/DevForge/framework/DevForge/.poc/runtime-repairs/reference-repair-r2-20260907T145928067385Z/reference-unit-check-r2/RESULT.json",
+    "published_path": "docs/validation/publication-20260909/historical-reference-repair/reference-unit-check-r2/RESULT.json",
+    "sha256": "cffa613c3f2b5cd4ddb27efc274c4faed9c0a70550269c8e466b47a1f02ad157",
+    "size": 372
+  }
+]

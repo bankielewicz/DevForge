@@ -1,0 +1,68 @@
+[
+  {
+    "name": "fmt",
+    "command": [
+      "/home/bryan/.cargo/bin/cargo",
+      "fmt",
+      "--check"
+    ],
+    "exit": 0,
+    "seconds": 0.283,
+    "log": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/fmt.log"
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "/home/bryan/.cargo/bin/cargo",
+      "clippy",
+      "--locked",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit": 0,
+    "seconds": 4.755,
+    "log": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/clippy.log"
+  },
+  {
+    "name": "build",
+    "command": [
+      "/home/bryan/.cargo/bin/cargo",
+      "build",
+      "--locked"
+    ],
+    "exit": 0,
+    "seconds": 3.374,
+    "log": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/build.log"
+  },
+  {
+    "name": "rust-tests",
+    "command": [
+      "/home/bryan/.cargo/bin/cargo",
+      "test",
+      "--locked",
+      "--all-targets"
+    ],
+    "exit": 0,
+    "seconds": 1.007,
+    "log": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/rust-tests.log"
+  },
+  {
+    "name": "python-tests",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests",
+      "-p",
+      "test_*.py",
+      "-v"
+    ],
+    "exit": 0,
+    "seconds": 90.138,
+    "log": "/home/bryan/Projects/DevForge/tmp/github-publication-execution-20260909/cli-checks/python-tests.log"
+  }
+]

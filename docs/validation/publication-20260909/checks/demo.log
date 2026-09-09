@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "/home/bryan/Projects/DevForge/worktrees/publish-devforge-cli-followups-20260909/scripts/demo.py", line 86, in <module>
+    main()
+  File "/home/bryan/Projects/DevForge/worktrees/publish-devforge-cli-followups-20260909/scripts/demo.py", line 36, in main
+    install(framework, project, "both", include_experts=True, runtime=binary)
+  File "/home/bryan/Projects/DevForge/worktrees/publish-devforge-cli-followups-20260909/scripts/install_framework.py", line 253, in install
+    adoption = manual_adoption.validate(manual_evidence, planned, project, framework)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/publish-devforge-cli-followups-20260909/scripts/manual_expert_adoption.py", line 177, in validate
+    return _validate(evidence_path, planned, project, framework)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bryan/Projects/DevForge/worktrees/publish-devforge-cli-followups-20260909/scripts/manual_expert_adoption.py", line 333, in _validate
+    require(evidence_path is not None, "manual adoption evidence is required for promoted Codex packages")
+  File "/home/bryan/Projects/DevForge/worktrees/publish-devforge-cli-followups-20260909/scripts/manual_expert_adoption.py", line 29, in require
+    raise ValueError("manual expert evidence: " + reason)
+ValueError: manual expert evidence: manual adoption evidence is required for promoted Codex packages

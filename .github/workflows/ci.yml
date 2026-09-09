@@ -20,8 +20,19 @@ jobs:
       - name: Install isolated-runner prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap apparmor-profiles
           rustup toolchain install 1.94.0 --profile minimal --component rustfmt --component clippy
+      - name: Configure Bubblewrap AppArmor permission when needed
+        run: |
+          sysctl kernel.apparmor_restrict_unprivileged_userns
+          if bwrap --ro-bind / / --unshare-pid --die-with-parent /usr/bin/true; then
+            echo "Bubblewrap already works; retaining the runner policy."
+          else
+            test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
+            profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+            test -r "$profile"
+            sudo apparmor_parser --replace "$profile"
+          fi
       - name: Verify filesystem isolation is available
         run: bwrap --ro-bind / / --unshare-pid --die-with-parent /usr/bin/true
       - name: Rust checks
@@ -29,5 +40,16 @@ jobs:
           cargo +1.94.0 fmt --check
           cargo +1.94.0 clippy --locked --all-targets -- -D warnings
           cargo +1.94.0 build --locked
+          cargo +1.94.0 test --locked --all-targets
       - name: Behavioral gate and installer tests
-        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+        run: |
+          python3 - <<'PY'
+          import sys
+          import unittest
+
+          suite = unittest.defaultTestLoader.discover("tests", pattern="test_*.py")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if result.skipped:
+              print(f"CI requires every test to execute: {result.skipped}", file=sys.stderr)
+          sys.exit(not (result.wasSuccessful() and result.testsRun > 0 and not result.skipped))
+          PY

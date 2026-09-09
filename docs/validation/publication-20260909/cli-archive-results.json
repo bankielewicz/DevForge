@@ -1,0 +1,17 @@
+[
+  {
+    "source_branch": "impl/vpi01-20260908T144631697661Z-repair-cli",
+    "sha": "bdcdd5eed28c95df70b90a95f72be11c9e9137a9",
+    "remote_ref": "refs/heads/archive/20260909/impl/vpi01-20260908T144631697661Z-repair-cli"
+  },
+  {
+    "source_branch": "impl/vpi01-20260908T144631697661Z-runtime-core",
+    "sha": "9ed3559d92da9b9ef7c5d4fb1c02f84f4d2f5dbd",
+    "remote_ref": "refs/heads/archive/20260909/impl/vpi01-20260908T144631697661Z-runtime-core"
+  },
+  {
+    "source_branch": "impl/vpi01-20260908T144631697661Z-runtime-schedule",
+    "sha": "47f4f5150b6a2b4c1690fbb8fe6bbf02dc74766f",
+    "remote_ref": "refs/heads/archive/20260909/impl/vpi01-20260908T144631697661Z-runtime-schedule"
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "exit_code": 1,
+  "status": "FAIL",
+  "selection_sha256": "b6db7cb240f2601de37b39a2c1ba94b9ea4832540dbfbd5e247472320006bdda",
+  "completed_at_utc": "2026-09-07T15:15:39.766565+00:00",
+  "log_sha256": "28a28252ed0bec172fcc798f4c4b9149ac9db38fe6d55346b4cf7bf9b2a69e86",
+  "native_evaluation": "NOT_RUN",
+  "acceptance": "NOT_GRANTED",
+  "inputs_unchanged_after": true
+}

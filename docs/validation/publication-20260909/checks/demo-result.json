@@ -1,0 +1,12 @@
+{
+  "command": [
+    "python3",
+    "scripts/demo.py",
+    "--framework",
+    "/home/bryan/Projects/DevForge/worktrees/publish-devforge-cli-followups-20260909/.poc/publication-demo-framework"
+  ],
+  "exit": 1,
+  "seconds": 0.12,
+  "framework_commit": "d29430beace67a141d4d35c2beb066981060cda4",
+  "scope": "scripted fixture execution; no model calls; no operational installation"
+}

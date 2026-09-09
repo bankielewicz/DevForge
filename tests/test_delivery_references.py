@@ -1341,5 +1341,202 @@ class DeliveryReferenceTests(unittest.TestCase):
         self.assertEqual(g.receipt_path.read_bytes(), original)
 
 
+    # R2 expectations were frozen before these source edits in
+    # reference-repair-r2-20260907T145928067385Z/fixture-authoring/EXPECTED-OUTCOMES.md.
+    # This author did not read the concurrent production repair or execute tests.
+    def test_r2_complete_envelope_references_require_sections(self):
+        for field in ("upstream", "execution_ref", "decision_ref", "evidence"):
+            with self.subTest(field=field):
+                f = self.fixture()
+                ref = copy.deepcopy(f.session if field == "execution_ref" else f.source)
+                f.envelopes["secondary"][field] = [ref] if field in ("upstream", "evidence") else ref
+                f.write("secondary")
+                self.checked(f)
+                del ref["sections"]
+                f.write("secondary")
+                self.rejected(f)
+
+    def test_r2_complete_body_references_require_sections(self):
+        for field in ("upstream", "execution_ref", "decision_ref", "evidence", "output"):
+            with self.subTest(field=field):
+                f = self.fixture()
+                ref = copy.deepcopy(f.session if field == "execution_ref" else
+                                    f.output_ref("primary") if field == "output" else f.source)
+                if field != "upstream":
+                    # The missing-key negative must not rely on a mismatched
+                    # nonempty envelope section list as its reason to refuse.
+                    ref["sections"] = []
+                if field in ("upstream", "execution_ref", "decision_ref"):
+                    f.envelopes["secondary"][field] = [copy.deepcopy(ref)] if field == "upstream" else copy.deepcopy(ref)
+                original_body = f.bodies["secondary"]
+                f.append("secondary", reference_atom(ref, field))
+                self.checked(f)
+                del ref["sections"]
+                f.bodies["secondary"] = original_body
+                f.append("secondary", reference_atom(ref, field))
+                self.rejected(f)
+
+    def test_r2_supersedes_omission_and_session_shorthand_remain_valid(self):
+        f = self.fixture()
+        old = f.historical_primary()
+        old.pop("sections")
+        f.envelopes["primary"]["supersedes"] = copy.deepcopy(old)
+        f.envelopes["primary"]["execution_ref"] = "SESSION-001@1"
+        session = {**f.session, "sections": []}
+        f.append("primary", reference_atom(old, "supersedes") + "\n" +
+                 reference_atom(session, "execution_ref"))
+        self.checked(f)
+
+    def test_r2_source_rows_accept_optional_outer_table_pipes(self):
+        for leading, trailing in (("", "|"), ("|", ""), ("", ""), ("|", "|")):
+            with self.subTest(leading=leading, trailing=trailing):
+                f = self.fixture()
+                rows = (" ID | Observation ", " --- | --- ", " I-001 | A selected observation. ")
+                table = "\n".join(leading + row + trailing for row in rows) + "\n"
+                f.rewrite_source("## SRC-001\n\nA populated source.\n\n" + table)
+                f.envelopes["primary"]["upstream"][0]["source_rows"] = ["I-001"]
+                f.write("primary")
+                self.checked(f)
+
+    def test_r2_legacy_sha_tables_refuse_each_border_form_in_code_and_comments(self):
+        for leading, trailing in (("", "|"), ("|", ""), ("", ""), ("|", "|")):
+            for label in ("SHA-256", "`sHa256`"):
+                for wrapper in ("{}", "```text\n{}\n```", "<!--\n{}\n-->"):
+                    with self.subTest(leading=leading, trailing=trailing, label=label, wrapper=wrapper):
+                        f = self.fixture()
+                        rows = (" File | " + label + " ", " --- | --- ", " unrelated | short ")
+                        table = "\n".join(leading + row + trailing for row in rows)
+                        f.append("handoff", wrapper.format(table))
+                        self.rejected(f)
+
+    def test_r2_source_rows_do_not_inherit_headers_across_blocks(self):
+        header = "| ID | Observation |\n| --- | --- |\n"
+        blocks = {
+            "fenced": "```text\nA code block ends the earlier table.\n```\n",
+            "indented": "    An indented code block ends the earlier table.\n",
+            "comment": "<!--\nA comment block ends the earlier table.\n-->\n",
+        }
+        for name, block in blocks.items():
+            for new_header in (False, True):
+                with self.subTest(block=name, new_header=new_header):
+                    f = self.fixture()
+                    tail = (header if new_header else "") + "| I-001 | A later observation. |\n"
+                    f.rewrite_source("## SRC-001\n\nA populated source.\n\n" + header + block + tail)
+                    f.envelopes["primary"]["upstream"][0]["source_rows"] = ["I-001"]
+                    f.write("primary")
+                    if new_header:
+                        self.checked(f)
+                    else:
+                        self.rejected(f)
+
+    def r2_metadata_fixture(self):
+        """Build literal free-text slots without using production for expected values."""
+        f = self.fixture()
+        disclosure = self.unsectioned(f)
+        snapshot = f.add_raw("metadata-snapshot", b"Synthetic metadata research snapshot.\n")
+        research = {"evidence_kind": "external-research", "url": "https://example.invalid/r2",
+                    "applicable_version": "synthetic-r2", "retrieved_at": "2026-09-07",
+                    "claim": "A synthetic research observation.", "snapshot": snapshot}
+        env = f.envelopes["primary"]
+        env["evidence"] = [research]
+        env["missing_inputs"].append("One ordinary unknown remains.")
+        slots = [
+            (env["producer"], "skill", "$.producer.skill"),
+            (env["producer"], "skill_revision", "$.producer.skill_revision"),
+            (disclosure, "reason", "$.missing_inputs[0].reason"),
+            (env["missing_inputs"], 1, "$.missing_inputs[1]"),
+            (research, "claim", "$.evidence[0].claim"),
+            (research, "applicable_version", "$.evidence[0].applicable_version"),
+        ]
+        f.write("primary")
+        f.write_contract()
+        return f, slots
+
+    def test_r2_free_metadata_refuses_malformed_and_wrong_target_atoms(self):
+        for position in range(6):
+            for malformed_json in (True, False):
+                with self.subTest(position=position, malformed_json=malformed_json):
+                    f, slots = self.r2_metadata_fixture()
+                    self.checked(f)
+                    container, key, _ = slots[position]
+                    container[key] = ("@df-ref({BROKEN})" if malformed_json else
+                                      reference_atom({**f.session, "sha256": "0" * 64}))
+                    f.write("primary")
+                    self.rejected(f)
+
+    def test_r2_valid_metadata_atoms_are_individually_enumerated(self):
+        f, slots = self.r2_metadata_fixture()
+        claim = reference_atom(f.session)
+        expected_strings = {}
+        expected_locations = []
+        for position, (container, key, location) in enumerate(slots):
+            value = "\u00e9 " + claim
+            expected_locations.append(location)
+            if position == 1:
+                value += " " + claim
+                expected_locations.append(location)
+            container[key] = value
+            expected_strings[location] = value
+        f.write("primary")
+        checked = self.checked(f)
+        occurrences = [item for item in checked["reference_coverage"]["occurrences"]
+                       if item["document"] == "docs/ideas.md"
+                       and item["where"].rsplit(":", 2)[0] in expected_strings]
+        self.assertEqual(len(occurrences), 7, "Every local metadata repetition needs its own observation")
+        self.assertCountEqual([item["where"].rsplit(":", 2)[0] for item in occurrences], expected_locations)
+        for item in occurrences:
+            location, start, end = item["where"].rsplit(":", 2)
+            self.assertEqual(expected_strings[location].encode("utf-8")[int(start):int(end)], claim.encode("utf-8"))
+            self.assertEqual(item["document_sha256"], digest(f.paths["primary"].read_bytes()))
+            self.assertEqual(item["field"], "evidence")
+            self.assertEqual(item["target"]["identity"]["artifact_id"], "SESSION-001")
+            self.assertEqual(item["target"]["sha256"], f.session["sha256"])
+            self.assertEqual(item["target"]["path"], f.session["path"])
+
+    def test_r2_ordinary_metadata_and_structured_tuple_strings_are_not_body_text(self):
+        f, _ = self.r2_metadata_fixture()
+        f.envelopes["primary"]["producer"]["skill_revision"] = "sha256:" + f.session["sha256"]
+        raw = f.add_raw("marker-path", b"Synthetic explicitly selected raw tuple.\n",
+                        logical="evidence/@df-ref({BROKEN}).bin")
+        f.envelopes["primary"]["evidence"].append(raw)
+        f.write("primary")
+        f.write_contract()
+        checked = self.checked(f)
+        matches = [item for item in checked["reference_coverage"]["occurrences"]
+                   if item["document"] == "docs/ideas.md" and item["field"] == "evidence"
+                   and item.get("target", {}).get("path") == raw["path"]]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["target"]["kind"], "raw-file")
+        self.assertEqual(matches[0]["target"]["sha256"], raw["sha256"])
+
+
+    # Parent-reported adjacent triggers were frozen separately in
+    # fixture-authoring/EXPECTED-OUTCOMES-SUPPLEMENT.md before these edits.
+    def test_r2_ordinary_missing_input_hash_label_is_metadata_but_atoms_are_checked(self):
+        f = self.fixture()
+        f.envelopes["secondary"]["missing_inputs"] = ["sha256:" + f.session["sha256"]]
+        f.write("secondary")
+        self.checked(f)
+        f.envelopes["secondary"]["missing_inputs"][0] += " @df-ref({BROKEN})"
+        f.write("secondary")
+        self.rejected(f)
+
+    def test_r2_atx_heading_with_pipe_is_not_a_source_table_header(self):
+        for genuine_table in (False, True):
+            with self.subTest(genuine_table=genuine_table):
+                f = self.fixture()
+                body = "# [SRC-001] Name | Value\n"
+                if genuine_table:
+                    body += "\nID | Observation\n"
+                body += "--- | ---\nI-001 | payload\n"
+                f.rewrite_source(body)
+                f.envelopes["primary"]["upstream"][0]["source_rows"] = ["I-001"]
+                f.write("primary")
+                if genuine_table:
+                    self.checked(f)
+                else:
+                    self.rejected(f)
+
+
 if __name__ == "__main__":
     unittest.main()
