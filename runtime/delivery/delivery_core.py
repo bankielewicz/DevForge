@@ -720,6 +720,30 @@ def _ledger_binding(artifacts: dict[str, tuple[dict, str]], specs: list[dict], h
     _heading_sections(artifacts[ledger["path"]][1], _sections(ref.get("sections"), "handoff upstream sections"), "handoff upstream ledger sections")
 
 
+def _pipe_cells(line: str) -> list[str] | None:
+    """Split an actual pipe row, allowing optional outside delimiters."""
+    line = line.strip()
+    delimiters = []
+    escaped = False
+    for index, char in enumerate(line):
+        if char == "|" and not escaped:
+            delimiters.append(index)
+        escaped = not escaped if char == "\\" else False
+    if not delimiters:
+        return None
+    cells = []
+    start = 0
+    for index in delimiters:
+        cells.append(line[start:index].strip())
+        start = index + 1
+    cells.append(line[start:].strip())
+    if delimiters[0] == 0:
+        cells.pop(0)
+    if delimiters[-1] == len(line) - 1:
+        cells.pop()
+    return cells or None
+
+
 def _v2_markdown(body: str, label: str) -> dict:
     """Bounded real-heading/pipe-row inventory; never promote code or comments."""
     lines = _markdown_lines(body)
@@ -766,7 +790,6 @@ def _v2_markdown(body: str, label: str) -> dict:
                 content.add(index)
             previous = None
             continue
-        visible_lines.append((index, line))
         heading = re.match(r"^ {0,3}(#{1,6})[ \t]+(.*)$", line)
         if heading:
             title = re.sub(r"[ \t]+#+[ \t]*$", "", heading[2]).strip()
@@ -780,6 +803,7 @@ def _v2_markdown(body: str, label: str) -> dict:
             content.discard(previous[0])
             previous = None
             continue
+        visible_lines.append((index, line))
         if line.strip() and not re.fullmatch(r"\s*(?:[-*_][ \t]*){3,}\s*", line):
             content.add(index)
         previous = (index, line) if line.strip() and not re.match(r"^ {0,3}(?:[>|]|[-+*][ \t]|[0-9]+[.)][ \t])", line) else None
@@ -800,11 +824,16 @@ def _v2_markdown(body: str, label: str) -> dict:
     rows: dict[str, int] = {}
     header: list[str] | None = None
     active_columns: int | None = None
+    previous_number: int | None = None
     for number, line in visible_lines:
-        if not line.strip().startswith("|") or not line.strip().endswith("|"):
+        if previous_number is not None and number != previous_number + 1:
+            # Omitted code blocks are still real table boundaries.
+            header, active_columns = None, None
+        previous_number = number
+        cells = _pipe_cells(line)
+        if cells is None:
             header, active_columns = None, None
             continue
-        cells = [cell.strip() for cell in line.strip()[1:-1].split("|")]
         separator = all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
         if separator:
             active_columns = len(cells) if header is not None and len(header) == len(cells) else None
@@ -913,6 +942,8 @@ def _reference_coverage(contract: dict, sources: list[tuple[str, str, bytes]],
         elif kind == "artifact":
             if not required <= set(ref) or not set(ref) <= required | optional:
                 _fail(f"{where}: malformed or unknown artifact reference fields")
+            if field != "supersedes" and "sections" not in ref:
+                _fail(f"{where}: complete artifact reference requires explicit sections")
             aid = _stable_id(ref["artifact_id"], where)
             if aid.rsplit("-", 1)[0] not in _ARTIFACT_TYPES:
                 _fail(f"{where}: unsupported artifact ID")
@@ -993,6 +1024,8 @@ def _reference_coverage(contract: dict, sources: list[tuple[str, str, bytes]],
         if not isinstance(ref["snapshot"], dict) or ref["snapshot"].get("evidence_kind") != "raw-file":
             _fail(f"{where}: external research requires an explicit selected raw-file snapshot")
         resolve(ref["snapshot"], "evidence", where + ".snapshot", own, missing)
+        for field in ("applicable_version", "claim"):
+            metadata_claims.append((where + "." + field, ref[field]))
 
     def same_reference(left: dict, right: dict) -> bool:
         return (all(left.get(key) == right.get(key) for key in required)
@@ -1000,7 +1033,7 @@ def _reference_coverage(contract: dict, sources: list[tuple[str, str, bytes]],
                 and left.get("source_rows", []) == right.get("source_rows", []))
 
     def body_claims(body: str, own: dict, env: dict, declared: dict[str, list[dict]],
-                    location: str = "body") -> None:
+                    location: str = "body", *, enforce_reserved: bool = True) -> None:
         marker = re.compile(r"@df-[A-Za-z-]*")
         decoder = json.JSONDecoder(object_pairs_hook=_json_pairs,
                                    parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
@@ -1062,6 +1095,11 @@ def _reference_coverage(contract: dict, sources: list[tuple[str, str, bytes]],
                                               "where": where, "field": "delivery_state", "delivery_state": value})
             spans.append((match.start(), stop))
             position = stop
+        if not enforce_reserved:
+            # Free-text standard metadata still validates every atom. The
+            # closed lexical ban on bare claims is an authored-body rule;
+            # ordinary typed metadata such as producer revision is not a body.
+            return
         remaining = list(body)
         for start, end in spans:
             remaining[start:end] = " " * (end - start)
@@ -1080,23 +1118,28 @@ def _reference_coverage(contract: dict, sources: list[tuple[str, str, bytes]],
                 _fail(f"{own['path']}: selected locator outside a complete reference/link atom")
         previous_cells = None
         for line in _markdown_lines(residual):
-            if not line.strip().startswith("|") or not line.strip().endswith("|"):
+            cells = _pipe_cells(line)
+            if cells is None:
                 previous_cells = None
                 continue
-            cells = [cell.strip().strip("`").casefold() for cell in line.strip()[1:-1].split("|")]
-            if previous_cells is not None and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+            cells = [cell.strip("`").strip().casefold() for cell in cells]
+            if (previous_cells is not None and len(previous_cells) == len(cells)
+                    and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)):
                 if any(cell in ("sha-256", "sha256") for cell in previous_cells):
                     _fail(f"{own['path']}: split-column receipt tables are unsupported; use complete reference atoms")
             previous_cells = cells
 
     for path, (env, body) in artifacts.items():
+        metadata_claims: list[tuple[str, str]] = [
+            ("$.producer." + key, value) for key, value in env["producer"].items()
+        ]
         own_target = next(target for target in targets if target["source_kind"] == "current-output" and target["path"] == path)
         own = {**own_target["identity"], "path": path, "sha256": own_target["sha256"], "node": _target_key(own_target)}
         for section in output_specs[path]["sections"]:
             observed = own_target["markdown"]["sections"].get(section)
             if observed is None or not observed["populated"]:
                 _fail(f"{path}: selected output section {section} is not one populated stable heading")
-        for item in env["missing_inputs"]:
+        for index, item in enumerate(env["missing_inputs"]):
             if isinstance(item, str):
                 _text(item, f"{path} missing_inputs")
                 continue
@@ -1108,6 +1151,7 @@ def _reference_coverage(contract: dict, sources: list[tuple[str, str, bytes]],
             _revision(item["revision"], "disclosure revision")
             _digest(item["sha256"], "disclosure SHA-256")
             _text(item["reason"], "disclosure reason")
+            metadata_claims.append((f"$.missing_inputs[{index}].reason", item["reason"]))
         declared: dict[str, list[dict]] = {key: [] for key in ("upstream", "supersedes", "execution_ref", "decision_ref")}
         for field in ("upstream", "evidence", "supersedes", "execution_ref", "decision_ref"):
             value = env[field]
@@ -1169,8 +1213,12 @@ def _reference_coverage(contract: dict, sources: list[tuple[str, str, bytes]],
                 extension(value, "$." + str(key))
         for index, value in enumerate(env["missing_inputs"]):
             if isinstance(value, str):
-                body_claims(value, own, env, declared, f"$.missing_inputs[{index}]")
+                body_claims(value, own, env, declared, f"$.missing_inputs[{index}]", enforce_reserved=False)
         body_claims(body, own, env, declared)
+        # Research atoms can contribute their own free-text fields. Process
+        # those after all declared causal/assignment/decision records exist.
+        for location, value in metadata_claims:
+            body_claims(value, own, env, declared, location, enforce_reserved=False)
         for disclosure in (item for item in env["missing_inputs"] if isinstance(item, dict)):
             if not any(exception["document"] == path and exception["disclosure"] == disclosure
                        for exception in report["exceptions"]):

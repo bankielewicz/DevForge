@@ -1,0 +1,22 @@
+[
+  {
+    "path": "AGENTS.md",
+    "sha256": "48896679eda60e72c9591d0785666e718d08183c2ede8edaea1b6e4b0c717cff"
+  },
+  {
+    "path": "docs/POC.md",
+    "sha256": "8c770a341a759b576430b335a375e09fc09ce4bd0a1c53ee4f0fbaf2da8739da"
+  },
+  {
+    "path": "runtime/delivery/delivery_core.py",
+    "sha256": "f01eda3d5e4964a527e617316df52be63f2d67c9b68a28e52f65807753b2c3ae"
+  },
+  {
+    "path": "scripts/demo.py",
+    "sha256": "84fb2fbe39f62ed2fbf7ff44908d9c5f3948f98b787e997be663e80dd4a267b6"
+  },
+  {
+    "path": "tests/test_delivery_references.py",
+    "sha256": "7aa2cc3a85412315a7a2faa8e84e6df09fb9e9bfdd483acfed2f34da597c3c43"
+  }
+]

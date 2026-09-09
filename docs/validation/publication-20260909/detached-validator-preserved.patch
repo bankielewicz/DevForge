@@ -1,0 +1,199 @@
+diff --git a/scripts/validate_framework.py b/scripts/validate_framework.py
+index 5c2ae1d..8524e61 100644
+--- a/scripts/validate_framework.py
++++ b/scripts/validate_framework.py
+@@ -12,16 +12,27 @@ def require(condition, message):
+         raise ValueError(message)
+ 
+ 
++def source_files(root):
++    pending = [root]
++    while pending:
++        for path in pending.pop().iterdir():
++            if path.name in (".git", ".poc", "__pycache__"):
++                continue
++            rel = path.relative_to(root)
++            if path.is_symlink():
++                raise ValueError(f"symlink not accepted: {rel}")
++            if path.is_dir():
++                # Only the real root operational directory is outside source scope.
++                if rel != Path(".devforge-runtime"):
++                    pending.append(path)
++            elif path.is_file():
++                yield path
++
++
+ def validate(root):
+     count = 0
+-    for path in root.rglob("*"):
++    for path in source_files(root):
+         rel = path.relative_to(root)
+-        if any(part in (".git", ".poc", "__pycache__") for part in rel.parts):
+-            continue
+-        if path.is_symlink():
+-            raise ValueError(f"symlink not accepted: {rel}")
+-        if not path.is_file():
+-            continue
+         if ".github" in rel.parts and "workflows" in rel.parts:
+             raise ValueError("GitHub workflows belong in DevForge")
+         if path.suffix == ".json":
+diff --git a/tests/test_validation.py b/tests/test_validation.py
+index 71be636..638a812 100644
+--- a/tests/test_validation.py
++++ b/tests/test_validation.py
+@@ -1,9 +1,155 @@
++import importlib.util
+ import json
+ import os
+ from pathlib import Path
++import shutil
+ import subprocess
+ import tempfile
+ import unittest
++from unittest import mock
++
++
++spec = importlib.util.spec_from_file_location("validator", Path(__file__).parents[1] / "scripts/validate_framework.py")
++validator = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(validator)
++
++
++class FrameworkTraversalTest(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.addCleanup(self.temp.cleanup)
++        self.root = Path(self.temp.name) / "framework"
++        for provider in ("codex", "claude"):
++            plugin = self.root / f"providers/{provider}/plugins/devforgeai"
++            for name in ("devforge-brainstorm", "devforge-project-expert-creator", "devforge-develop", "devforge-review"):
++                skill = plugin / "skills" / name / "SKILL.md"
++                skill.parent.mkdir(parents=True)
++                skill.write_text(f"---\nname: {name}\ndescription: Synthetic test skill.\n---\n")
++            manifest = plugin / f".{provider}-plugin/plugin.json"
++            manifest.parent.mkdir()
++            manifest.write_text(json.dumps({"name": "devforgeai"}))
++        self.expected = {"status": "PASS", "skills": 8, "scope": "structure only", "behavior": "NOT_EVALUATED"}
++
++    def test_source_only_passes(self):
++        self.assertEqual(validator.validate(self.root), self.expected)
++
++    def test_root_runtime_is_pruned_before_enumeration(self):
++        runtime = self.root / ".devforge-runtime"
++        launcher = runtime / "codex/home/tmp/arg0/synthetic/codex-execve-wrapper"
++        launcher.parent.mkdir(parents=True)
++        target = Path(self.temp.name) / "benign-target"
++        target.write_text("synthetic launcher target; never executed\n")
++        launcher.symlink_to(target)
++        (runtime / "non-source.json").write_text("{malformed runtime JSON")
++        authored = self.root / "authored/nested"
++        authored.mkdir(parents=True)
++        (authored / "valid.json").write_text("{}")
++        visited = []
++
++        def observe(original):
++            def enumerate_directory(path):
++                directory = Path(path)
++                visited.append(directory)
++                self.assertFalse(directory == runtime or runtime in directory.parents,
++                                 f"enumerated private runtime: {directory}")
++                return original(path)
++            return enumerate_directory
++
++        # Observe filesystem enumeration, including both pathlib and os traversal.
++        with mock.patch("os.scandir", side_effect=observe(os.scandir)), \
++                mock.patch("os.listdir", side_effect=observe(os.listdir)):
++            self.assertEqual(validator.validate(self.root), self.expected)
++        self.assertIn(self.root, visited)
++        self.assertIn(authored, visited)
++
++    def test_root_runtime_symlinks_are_rejected(self):
++        directory = Path(self.temp.name) / "target-directory"
++        directory.mkdir()
++        file = Path(self.temp.name) / "target-file"
++        file.write_text("synthetic target\n")
++        link = self.root / ".devforge-runtime"
++        for target in (directory, file, Path(self.temp.name) / "missing-target"):
++            with self.subTest(target=target.name):
++                link.symlink_to(target)
++                try:
++                    with self.assertRaisesRegex(ValueError, r"symlink not accepted: \.devforge-runtime$"):
++                        validator.validate(self.root)
++                finally:
++                    link.unlink()
++
++    def test_authored_symlinks_are_rejected_including_nested_runtime(self):
++        target_file = Path(self.temp.name) / "target-file"
++        target_file.write_text("synthetic target\n")
++        target_directory = Path(self.temp.name) / "target-directory"
++        target_directory.mkdir()
++        for relative, target in (("authored/link", target_file),
++                                 ("authored/directory-link", target_directory),
++                                 ("authored/.devforge-runtime/link", target_file)):
++            with self.subTest(relative=relative):
++                link = self.root / relative
++                link.parent.mkdir(parents=True, exist_ok=True)
++                link.symlink_to(target)
++                try:
++                    with self.assertRaisesRegex(ValueError, "symlink not accepted:") as raised:
++                        validator.validate(self.root)
++                    self.assertEqual(str(raised.exception), f"symlink not accepted: {relative}")
++                finally:
++                    link.unlink()
++
++    def test_authored_json_is_checked_including_nested_runtime(self):
++        for relative in ("authored/invalid.json", "authored/.devforge-runtime/invalid.json"):
++            with self.subTest(relative=relative):
++                path = self.root / relative
++                path.parent.mkdir(parents=True, exist_ok=True)
++                path.write_text("{malformed authored JSON")
++                try:
++                    with self.assertRaises(json.JSONDecodeError):
++                        validator.validate(self.root)
++                finally:
++                    path.unlink()
++
++    def test_existing_exclusions_retain_root_and_nested_scope(self):
++        for prefix in ("", "authored/"):
++            for name in (".git", ".poc", "__pycache__"):
++                ignored = self.root / prefix / name
++                ignored.mkdir(parents=True)
++                (ignored / "invalid.json").write_text("{malformed excluded JSON")
++                (ignored / "link").symlink_to(Path(self.temp.name) / "missing-target")
++        self.assertEqual(validator.validate(self.root), self.expected)
++
++    def test_existing_excluded_symlink_entries_remain_excluded(self):
++        for prefix in ("", "authored/"):
++            for name in (".git", ".poc", "__pycache__"):
++                link = self.root / prefix / name
++                link.parent.mkdir(parents=True, exist_ok=True)
++                link.symlink_to(Path(self.temp.name) / "missing-target")
++        self.assertEqual(validator.validate(self.root), self.expected)
++
++    def test_required_structure_checks_remain_active(self):
++        plugin = "providers/codex/plugins/devforgeai"
++        cases = (
++            (f"{plugin}/skills/devforge-review/SKILL.md", None, ValueError, "codex core skill missing"),
++            (f"{plugin}/.codex-plugin/plugin.json", '{"name": "wrong"}', ValueError, "plugin.json"),
++            (f"{plugin}/.codex-plugin/plugin.json", None, FileNotFoundError, "plugin.json"),
++            ("plugins/devforgeai/retired.txt", "retired", ValueError, "retired shared plugin"),
++            (f"{plugin}/skills/devforge-review/evals/evals.json",
++             '{"skill_name": "wrong", "evals": []}', ValueError, "wrong eval skill"),
++            (f"{plugin}/skills/devforge-review/evals/evals.json",
++             '{"skill_name": "devforge-review", "evals": [{"files": ["missing.txt"]}]}',
++             ValueError, "missing fixture"),
++        )
++        for index, (relative, content, error, message) in enumerate(cases):
++            with self.subTest(relative=relative, message=message):
++                root = Path(self.temp.name) / f"invalid-framework-{index}"
++                shutil.copytree(self.root, root)
++                path = root / relative
++                if content is None:
++                    path.unlink()
++                else:
++                    path.parent.mkdir(parents=True, exist_ok=True)
++                    path.write_text(content)
++                with self.assertRaisesRegex(error, message):
++                    validator.validate(root)
+ 
+ 
+ class StructuralGateTest(unittest.TestCase):
