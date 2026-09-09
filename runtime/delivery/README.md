@@ -1,5 +1,7 @@
 # Mechanical brainstorm delivery runtime
 
+**Required migration:** the Python framework runtime described here must be ported into DevForge CLI as Rust under the [development language policy](../../docs/development-language-policy.md). All phases, gates, validators, mutation brokers and acceptance decisions require protected, digest-pinned Rust binaries and source/revision. Python remains mandatory only for bound skill-evaluation JSONL runners and deterministic graders, which supply metrics and evidence without framework authority. Embedding Python inside Rust does not satisfy this boundary. Existing code/results remain legacy evidence; this documentation does not implement the migration or protection.
+
 This component is an uncommitted implementation candidate. It checks observable
 phase evidence and persisted artifact bytes. It does not certify brainstorming
 quality, human adoption, actual native hook provenance, or native turn completion.

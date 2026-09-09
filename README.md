@@ -6,6 +6,12 @@ Intended repository: https://github.com/bankielewicz/DevForge
 
 This is a new local POC, not a clone or a replacement of remote history. GitHub publication, branch protections, and hosted execution are not configured by this scaffold.
 
+## Implementation language
+
+**Framework implementation and all phase, gate, validator, mutation and acceptance authority must be compiled Rust in DevForge CLI. Python is mandatory only for the skill-evaluation JSONL runner and deterministic graders, bound as required build artifacts; all other implementation languages are forbidden.** See the [development language policy](docs/development-language-policy.md) for evidence binding and protected, digest-pinned Rust authority.
+
+Existing Python framework runtime, tooling and tests **must be ported into DevForge CLI as Rust**. The Python commands below describe current legacy implementation, not a completed migration or permission to extend Python authority. Unchanged tools remain available for authorized operation; their successful execution does not establish compliance with the new authority boundary.
+
 ## Run it
 
 Requirements: Linux/WSL2, Rust/Cargo (tested with 1.94.0), Python 3.12, and bubblewrap with usable filesystem/PID namespaces. No model API key is required.

@@ -6,6 +6,12 @@ DevForgeAI owns the project-facing skills, agent definitions, and examples. DevF
 
 Use absolute paths from the demo report in the commands below. Bracketed values are parameters to replace with those actual paths, not installed defaults.
 
+## Implementation language and legacy commands
+
+The [development language policy](development-language-policy.md) requires compiled Rust in DevForge CLI for framework implementation and every phase, gate, validator, mutation broker and acceptance decision. Python JSONL skill-evaluation runners and deterministic graders are mandatory, bound evaluation artifacts; they produce evidence and metrics, while protected, digest-pinned Rust validates and decides acceptance. All other implementation languages are forbidden.
+
+Existing Python framework logic, tooling and tests **must be ported into DevForge CLI as Rust**. The commands and examples below describe current legacy behavior and may run unchanged when authorized; Python authority results do not establish compliance with the Rust requirement. Preserve those results and gates while the migration remains outstanding. Do not substitute Python for new Rust framework behavior or silently waive an affected acceptance prerequisite. This documentation does not implement a replacement runner, evaluation artifacts, or binary protection.
+
 ## First run
 
 1. In DevForge, run `cargo build --locked` and `python3 scripts/verify_poc.py --framework ../DevForgeAI`.
