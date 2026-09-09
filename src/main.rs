@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 mod delivery;
+mod install;
 
 const RUNNER: &str = include_str!("../runners/unittest_runner.py");
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -41,6 +42,11 @@ enum Action {
     Delivery {
         #[command(subcommand)]
         action: delivery::Action,
+    },
+    /// Install framework components from owner-selected evidence; manual-only path.
+    Install {
+        #[command(subcommand)]
+        action: install::Action,
     },
     /// Prepare expertise context, inspect freshness, or bind an AI-authored skill.
     Expert {
@@ -771,6 +777,9 @@ fn execute(cli: Cli) -> Result<Value> {
             json!({"status":"COMPLETED","isolation":"filesystem","network_isolation":false,"writable_project":project}),
         );
     }
+    if let Action::Install { action } = &cli.command {
+        return install::run(action, cli.project.as_deref());
+    }
     let gate = Gate::load(&cli)?;
     let tree = read_tree(&gate.project)?;
     let current = manifest(&tree);
@@ -978,7 +987,7 @@ fn execute(cli: Cli) -> Result<Value> {
                 json!({"status":status,"candidate_sha256":tree_hash(&tree)?,"state":dir,"runner_isolation":"filesystem; network not isolated","scope":"local POC acceptance; semantic review still required"}),
             )
         }
-        Action::Isolate { .. } | Action::Delivery { .. } => unreachable!(),
+        Action::Isolate { .. } | Action::Delivery { .. } | Action::Install { .. } => unreachable!(),
     }
 }
 fn main() {

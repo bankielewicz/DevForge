@@ -44,6 +44,7 @@ Read the printed `demo-report.json` for exact project, policy, state, and prompt
 - A filesystem/PID-isolated command launcher with private per-project Codex or Claude state.
 - Provider-specific project-local installation and runtime-only plugin export, preserving local edits and excluding authoring evals.
 - Exact external hash/mode pins for immutable installed helper files outside editable application roots.
+- A compiled Rust manual-only installation path for the promoted Codex expert workflows (`devforge install manual-experts`) that validates owner-selected adoption evidence and verifies the pinned executable and embedded source identity before writing; other installation modes remain legacy Python.
 - CI definitions in this repository, including manual structural validation of an exact DevForgeAI commit.
 
 ## Limits

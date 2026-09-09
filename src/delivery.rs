@@ -314,7 +314,7 @@ pub enum Action {
 }
 
 // Reject duplicate keys before interpreting a path or forwarding a hook event.
-struct StrictJson(Value);
+pub(crate) struct StrictJson(pub(crate) Value);
 impl<'de> Deserialize<'de> for StrictJson {
     fn deserialize<D: de::Deserializer<'de>>(
         deserializer: D,

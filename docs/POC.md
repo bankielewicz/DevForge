@@ -96,6 +96,15 @@ Launch from the intended disposable consuming project. Do not also install the s
 
 The explicit --include-experts option retains the portable `experts/<skill>` fixture convention and does not synthesize separate provider-specific experts. See the sibling skill-authoring contract for new expert assignments.
 
+The compiled Rust installer covers only the manual adoption of the promoted Codex expert workflows; see [manual expert adoption](integration/manual-expert-adoption.md) for the record shapes and the owner-controlled `--authority` pin:
+
+```bash
+target/debug/devforge install identity
+target/debug/devforge install manual-experts --project <project> --framework ../DevForgeAI --evidence <adoption-record> --authority <authority-record>
+```
+
+Every other installation mode above remains legacy Python until it is ported.
+
 ## Recovery and acceptance scope
 
 State-changing commands take an exclusive `.lock`. A stale lock requires the owner to confirm the recorded process is no longer running before removing it. A leftover `state.next.json` indicates an interrupted transition; retain and inspect it, then choose whether to recover or initialize a new run. No automatic force-unlock or gate-skip option exists.

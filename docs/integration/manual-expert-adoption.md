@@ -10,6 +10,29 @@ The integration owner refreshes only the promoted Codex packages:
 python3 scripts/install_framework.py --framework FRAMEWORK --project PROJECT --provider codex --manual-experts-only --manual-evidence ADOPTION_RECORD
 ```
 
+The same manual-only path exists as compiled Rust in the DevForge CLI, which owns the evidence validation, acceptance predicates and installation writes without consulting Python:
+
+```text
+devforge install manual-experts --project PROJECT --framework FRAMEWORK --evidence ADOPTION_RECORD --authority AUTHORITY_RECORD
+```
+
+`devforge install manual-experts` implements only this mode: the recognized Codex packages present in the framework, `.agents/skills` destinations, authoring-only retirement, local-edit/collision refusal, the record shapes and refusal reasons below, and the `.devforge-install.json` inventory (`files`, `managed_hooks`, `runtime_evidence` and other existing fields are preserved; `manual_expert_adoption` is updated exactly as the legacy installer records it). Whole-framework installation, Claude, `--include-experts`, delivery runtime probes, hook merging and plugin export are not implemented in Rust; the CLI does not accept those options and makes no claim about them. Refusals print the JSON `BLOCKED` object with exit 2 before any installation write; success prints `INSTALLED` with `authority: "compiled Rust CLI; no Python consulted"`, `behavior: NOT_EVALUATED` and the verified `protected_identity`.
+
+The additional `--authority` record is the owner-controlled binding required by the [development language policy](../development-language-policy.md). It must be outside the project and the framework and has exactly:
+
+```json
+{
+  "schema_version": "devforge.manual-install-authority/v1",
+  "owner": "ACTUAL_INTEGRATION_OWNER",
+  "executable": {"path": "/protected/devforge", "sha256": "ACTUAL_SHA256"},
+  "source_sha256": "ACTUAL_SOURCE_IDENTITY"
+}
+```
+
+`devforge install identity` prints the running executable's canonical path and SHA-256 together with `source_sha256`, the content identity of `Cargo.toml`, `Cargo.lock`, `build.rs`, `src/`, `runners/` and `runtime/delivery/` that `build.rs` embeds at compile time. Before any evidence is read, and again immediately before installation writes, the CLI refuses unless its own canonical path and digest equal the pinned executable and its embedded source identity equals `source_sha256`. A rebuilt binary, a copy at another path, or a build from a changed source tree cannot satisfy an unchanged authority record even when it reports the same version. This self-check is not tamper protection on its own: the owner must launch the pinned binary from a location the evaluated agent cannot write (for example under `devforge isolate`, where only the project is writable) and keep the authority record, framework and evidence records outside that boundary. The identity binds file content only; it does not cover the Rust toolchain or a Git revision.
+
+Rust acceptance tests in `tests/manual_install.rs` drive the compiled binary with synthetic Full, Routine and local-baseline fixtures equivalent to the legacy Python cases, plus identity refusals (changed executable digest, changed source identity, a copied executable at another path, and an authority record inside the project or framework). The unchanged Python suites still exercise the legacy Python installer and are not evidence for the Rust path. The Rust tests cannot inject the mid-run evidence drift that the Python mock-based cases simulate; the final evidence recheck and pre-write executable re-verification exist but that race is not black-box tested.
+
 `--manual-experts-only` selects recognized promoted packages present in the chosen framework and preserves other skills, agents, hook settings and runtime inventories. It cannot combine with `--include-experts` or a different provider. Without this flag, ordinary installation retains its existing provider/runtime checks and also requires adoption evidence when either promoted Codex identity is included. Recognized names cannot opt out by omitting a candidate-owned profile. Claude is unchanged.
 
 The record must be selected by the actual integration owner. Its named producer strings and digests cannot authenticate people or prove model behavior. The independent reviewer and operator must examine actual retained outputs, source/history/output boundaries, native observations and real user-mediated transfer before selecting acceptance. A synthetic fixture, advisory reducer PASS, or the package author's report cannot provide that authority. Conditional installation authority already supplied by the user need not be requested again after its conditions pass.
