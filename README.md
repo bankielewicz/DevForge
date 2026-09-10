@@ -2,9 +2,9 @@
 
 External Rust gates and workflow tooling for the companion DevForgeAI framework.
 
-Intended repository: https://github.com/bankielewicz/DevForge
+Repository: https://github.com/bankielewicz/DevForge
 
-This is a new local POC, not a clone or a replacement of remote history. GitHub publication, branch protections, and hosted execution are not configured by this scaffold.
+The repository is published on GitHub with `main` as its default branch. Hosted execution is configured in `.github/workflows/`: the CLI checks workflow runs on pushes to `main` and on pull requests, and the framework-revision workflow is dispatched manually from `main` against an exact DevForgeAI commit. Nothing here describes branch protection or release readiness.
 
 ## Implementation language
 
@@ -14,9 +14,11 @@ Existing Python framework runtime, tooling and tests **must be ported into DevFo
 
 ## Run it
 
-Requirements: Linux/WSL2, Rust/Cargo (tested with 1.94.0), Python 3.12, and bubblewrap with usable filesystem/PID namespaces. No model API key is required.
+First use: follow the [WSL CLI quickstart](docs/cli-quickstart.md) to build with the CI-selected Rust toolchain (1.94.0), locate `target/debug/devforge` (it is not placed on `PATH`), and run a harmless structural check. Building does not install DevForgeAI skills into a project.
 
-From this directory:
+Requirements for the legacy full verification below: Linux/WSL2, Rust/Cargo (tested with 1.94.0), Python 3.12, and bubblewrap with usable filesystem/PID namespaces. No model API key is required.
+
+Legacy full verification and demonstration (Python; not the first-use check), from this directory:
 
 ```bash
 cargo build --locked
