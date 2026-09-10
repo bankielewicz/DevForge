@@ -1341,6 +1341,402 @@ fn routine(
     Ok(())
 }
 
+const RESULTS_V1: &str = "devforge.manual-local-acceptance-results/v1";
+const RESULTS_V2: &str = "devforge.manual-local-acceptance-results/v2";
+const OBSERVATION_V1: &str = "devforge.manual-local-observation/v1";
+const OBSERVATION_V2: &str = "devforge.manual-local-observation/v2";
+const ALLOCATION_V1: &str = "devforge.manual-local-allocation/v1";
+/// A preserved prior allocation whose recorded passing attempts may be reused.
+struct Allocation {
+    id: String,
+    start: i128,
+    deadline: i128,
+    attempts: BTreeMap<String, Value>,
+    used: bool,
+}
+
+/// The `{path, sha256}` pair of a pin-like object that may carry extra keys.
+fn pin_of(value: &Value) -> Result<Value> {
+    let map = obj(value)?;
+    require(
+        map.contains_key("path") && map.contains_key("sha256"),
+        "invalid evidence pin",
+    )?;
+    Ok(json!({"path": map["path"], "sha256": map["sha256"]}))
+}
+
+/// What a preserved closeout says about its allocation, read through one of
+/// the explicitly supported historical shapes. Raw fields stay as written;
+/// only this reader normalizes them.
+struct Closeout {
+    status: &'static str,
+    start: i128,
+    deadline: i128,
+    attempts: Value,
+    /// Per-slot states when the closeout records them (`slot_states`).
+    slots: Option<BTreeMap<String, Value>>,
+    /// Native attempt facts the closeout records, each of which must match a ledger row.
+    natives: Vec<Native>,
+}
+
+struct Native {
+    role: Option<String>,
+    actor: Option<String>,
+    start: Option<i128>,
+    end: Option<i128>,
+    passed: Option<bool>,
+    launch: Option<Value>,
+    completion: Option<Value>,
+    transcript: Option<Value>,
+}
+
+fn optional_pin(value: &Value) -> Result<Option<Value>> {
+    if value.is_null() {
+        Ok(None)
+    } else {
+        pin_of(value).map(Some)
+    }
+}
+
+fn optional_time(value: &Value) -> Result<Option<i128>> {
+    if value.is_null() {
+        Ok(None)
+    } else {
+        time(value).map(Some)
+    }
+}
+
+fn closeout_facts(closeout: &Value, original: &Value) -> Result<Closeout> {
+    let status = get(closeout, "status")?.as_str().unwrap_or_default();
+    match status {
+        "EXPIRED_WITH_PARTIAL_OBSERVATIONS" => {
+            let mut slots = None;
+            if let Some(states) = get(closeout, "slot_states")?.as_array() {
+                let mut map = BTreeMap::new();
+                for state in states {
+                    let slot = text(get(state, "slot")?, "closeout slot")?.to_string();
+                    map.insert(slot, state.clone());
+                }
+                slots = Some(map);
+            }
+            Ok(Closeout {
+                status: "EXHAUSTED",
+                start: time(get(closeout, "original_started_at_utc")?)?,
+                deadline: time(get(closeout, "original_deadline_utc")?)?,
+                attempts: get(closeout, "native_attempts")?.clone(),
+                slots,
+                natives: Vec::new(),
+            })
+        }
+        "COMPLETED_BOUNDED_EVALUATOR_RETURN" => {
+            require(
+                pin_of(get(closeout, "allocation")?)? == *original,
+                "closeout is for a different allocation",
+            )?;
+            Ok(Closeout {
+                status: "COMPLETED",
+                start: time(get(closeout, "started_at_utc")?)?,
+                deadline: time(get(closeout, "deadline_utc")?)?,
+                attempts: get(closeout, "native_turns")?.clone(),
+                slots: None,
+                natives: vec![Native {
+                    role: None,
+                    actor: Some(
+                        text(get(closeout, "native_actor")?, "closeout native actor")?.to_string(),
+                    ),
+                    start: None,
+                    end: None,
+                    passed: None,
+                    launch: Some(pin_of(get(closeout, "launch")?)?),
+                    completion: Some(pin_of(get(closeout, "completion")?)?),
+                    transcript: Some(pin_of(get(closeout, "transcript")?)?),
+                }],
+            })
+        }
+        "STOPPED_BLOCKED" => {
+            require(
+                get(closeout, "clock_restarted")? == &Value::Bool(false),
+                "preserved closeout reports a restarted clock",
+            )?;
+            let native = sub(closeout, "native")?;
+            let preserved = sub(closeout, "preserved")?;
+            require(
+                !obj(native)?.is_empty() || get(closeout, "attempts_used")? == &json!(0),
+                "stopped closeout has attempts but no native evidence",
+            )?;
+            let natives = if obj(native)?.is_empty() {
+                Vec::new()
+            } else {
+                vec![Native {
+                    role: get(native, "role")?.as_str().map(str::to_string),
+                    actor: get(native, "actor")?.as_str().map(str::to_string),
+                    start: optional_time(get(native, "started_at_utc")?)?,
+                    end: optional_time(get(native, "finished_at_utc")?)?,
+                    passed: get(native, "workflow_outcome")?
+                        .as_str()
+                        .map(|outcome| outcome == "PASS"),
+                    launch: optional_pin(get(preserved, "launch")?)?,
+                    completion: optional_pin(get(preserved, "completion")?)?,
+                    transcript: optional_pin(get(preserved, "transcript")?)?,
+                }]
+            };
+            Ok(Closeout {
+                status: "STOPPED_BLOCKED",
+                start: time(get(closeout, "started_at_utc")?)?,
+                deadline: time(get(closeout, "original_deadline_utc")?)?,
+                attempts: get(closeout, "attempts_used")?.clone(),
+                slots: None,
+                natives,
+            })
+        }
+        other => Err(refuse(&format!(
+            "unsupported preserved closeout format: status {other:?}; supported: EXPIRED_WITH_PARTIAL_OBSERVATIONS, COMPLETED_BOUNDED_EVALUATOR_RETURN, STOPPED_BLOCKED"
+        ))),
+    }
+}
+
+/// Validate one `devforge.manual-local-allocation/v1` reference against the
+/// current record's owner, frozen set and candidate identity, and against the
+/// preserved records it points at: the original allocation (window, cap, slots,
+/// set and approval linkage), each attempt's launch and completion records, and
+/// the closeout. Every attempt, including failed ones, stays in its ledger and
+/// must agree with those sources. Nothing here re-executes, re-grades or
+/// re-counts, and hashing an approval binds its bytes, not its meaning.
+fn allocation(
+    reference: &Value,
+    record: &Value,
+    owner: &str,
+    frozen: i128,
+    identities: &Value,
+    evidence: &mut Evidence,
+) -> Result<Allocation> {
+    let doc = evidence.document(reference, true)?;
+    exact(
+        &doc,
+        &[
+            "schema_version",
+            "allocation_id",
+            "owner",
+            "authorization",
+            "acceptance_set",
+            "packages",
+            "started_at_utc",
+            "deadline_utc",
+            "max_attempts",
+            "attempts",
+            "status",
+            "original_allocation",
+            "closeout",
+        ],
+        "allocation record",
+    )?;
+    require(
+        is(&doc["schema_version"], ALLOCATION_V1),
+        "unsupported allocation record",
+    )?;
+    let id = text(&doc["allocation_id"], "allocation ID")?.to_string();
+    require(is(&doc["owner"], owner), "allocation owner differs")?;
+    evidence.pin(&doc["authorization"], true)?;
+    require(
+        doc["acceptance_set"] == record["acceptance_set"],
+        "allocation bound to a different acceptance set",
+    )?;
+    require(
+        doc["packages"] == *identities,
+        "allocation candidate identity differs",
+    )?;
+    let start = time(&doc["started_at_utc"])?;
+    let deadline = time(&doc["deadline_utc"])?;
+    require(
+        frozen < start && start < deadline,
+        "allocation window must follow the frozen acceptance set",
+    )?;
+    let max_attempts = doc["max_attempts"].as_i64().unwrap_or_default();
+    require(
+        is_int(&doc["max_attempts"]) && max_attempts > 0,
+        "unbounded allocation",
+    )?;
+    // The preserved original allocation supplies the window, cap and slots the
+    // reference claims, and links the approval and frozen set.
+    let original = evidence.document(&doc["original_allocation"], false)?;
+    require(
+        time(get(&original, "started_at_utc")?)? == start
+            && time(get(&original, "deadline_utc")?)? == deadline,
+        "reference window differs from the preserved allocation",
+    )?;
+    require(
+        get(&original, "child_turns")? == &doc["max_attempts"],
+        "reference attempt limit differs from the preserved allocation",
+    )?;
+    let mut slot_ids = BTreeSet::new();
+    for slot in list(get(&original, "slots")?)? {
+        slot_ids.insert(text(get(slot, "id")?, "preserved slot ID")?.to_string());
+    }
+    let linked_set = match get(&original, "acceptance_set")? {
+        Value::Null => {
+            let prior = get(&original, "prior_allocation")?;
+            require(
+                !prior.is_null(),
+                "preserved allocation records no acceptance set; supply its acceptance_set or prior_allocation pin",
+            )?;
+            let prior = evidence.document(&pin_of(prior)?, false)?;
+            get(&prior, "acceptance_set")?.clone()
+        }
+        set => set.clone(),
+    };
+    require(
+        !linked_set.is_null() && pin_of(&linked_set)? == doc["acceptance_set"],
+        "preserved allocation is bound to a different acceptance set",
+    )?;
+    match get(&original, "authorization")? {
+        Value::String(_) => require(
+            doc["authorization"] == doc["original_allocation"],
+            "text authorization must be pinned through the preserved allocation record",
+        )?,
+        Value::Object(_) => require(
+            pin_of(get(&original, "authorization")?)? == doc["authorization"],
+            "reference authorization differs from the preserved allocation",
+        )?,
+        _ => return Err(refuse("preserved allocation records no authorization")),
+    }
+    evidence.walk(&original)?;
+    let rows = list(&doc["attempts"])?;
+    require(
+        i64::try_from(rows.len()).is_ok_and(|n| n <= max_attempts),
+        "allocation attempt limit exceeded",
+    )?;
+    let closeout = evidence.document(&doc["closeout"], false)?;
+    let facts = closeout_facts(&closeout, &doc["original_allocation"])?;
+    require(
+        is(&doc["status"], facts.status),
+        "reference status differs from the preserved closeout",
+    )?;
+    require(
+        facts.start == start && facts.deadline == deadline,
+        "preserved closeout window differs from the reference",
+    )?;
+    require(
+        facts.attempts == json!(rows.len()),
+        "allocation closeout differs from its ledger",
+    )?;
+    evidence.walk(&closeout)?;
+    let mut matched = vec![false; facts.natives.len()];
+    let mut attempts = BTreeMap::new();
+    for row in rows {
+        exact(
+            row,
+            &[
+                "attempt_id",
+                "actor",
+                "started_at_utc",
+                "finished_at_utc",
+                "outcome",
+                "launch",
+                "completion",
+                "evidence",
+            ],
+            "allocation attempt",
+        )?;
+        let attempt_id = text(&row["attempt_id"], "attempt ID")?.to_string();
+        require(
+            slot_ids.contains(&attempt_id),
+            "attempt is not a slot of the preserved allocation",
+        )?;
+        text(&row["actor"], "attempt actor")?;
+        let passed = is(&row["outcome"], "PASS");
+        text(&row["outcome"], "attempt outcome")?;
+        let from = time(&row["started_at_utc"])?;
+        let to = time(&row["finished_at_utc"])?;
+        require(
+            start <= from && from <= to && to <= deadline,
+            "allocation attempt outside its approved window",
+        )?;
+        evidence.refs(&row["evidence"])?;
+        let launch = evidence.document(&row["launch"], false)?;
+        require(
+            is(get(sub(&launch, "slot")?, "id")?, &attempt_id)
+                && time(get(&launch, "started_at_utc")?)? == from,
+            "launch record differs from the attempt",
+        )?;
+        let completion = evidence.document(&row["completion"], false)?;
+        require(
+            time(get(&completion, "finished_at_utc")?)? == to,
+            "completion record differs from the attempt",
+        )?;
+        let completed = get(&completion, "returncode")? == &json!(0)
+            && get(&completion, "timed_out")? == &Value::Bool(false);
+        require(
+            !passed || completed,
+            "completion record contradicts the PASS outcome",
+        )?;
+        if let Some(slots) = &facts.slots {
+            let state = slots
+                .get(&attempt_id)
+                .ok_or_else(|| refuse("closeout lists no state for the attempt's slot"))?;
+            let recorded = get(state, "completion")?;
+            require(
+                get(state, "launched")? == &Value::Bool(true)
+                    && recorded.is_object()
+                    && get(recorded, "returncode")? == get(&completion, "returncode")?
+                    && get(recorded, "timed_out")? == get(&completion, "timed_out")?
+                    && time(get(recorded, "finished_at_utc")?)? == to,
+                "closeout slot state differs from the attempt",
+            )?;
+        }
+        for (native, seen) in facts.natives.iter().zip(matched.iter_mut()) {
+            let named = native.role.as_deref() == Some(attempt_id.as_str())
+                || native.launch.as_ref() == Some(&row["launch"])
+                || (native.role.is_none()
+                    && native.launch.is_none()
+                    && native.actor.as_deref() == row["actor"].as_str()
+                    && native.start == Some(from)
+                    && native.end == Some(to));
+            if !named {
+                continue;
+            }
+            require(
+                native
+                    .actor
+                    .as_deref()
+                    .is_none_or(|actor| is(&row["actor"], actor))
+                    && native.start.is_none_or(|s| s == from)
+                    && native.end.is_none_or(|e| e == to)
+                    && native
+                        .completion
+                        .as_ref()
+                        .is_none_or(|c| *c == row["completion"]),
+                "closeout native record differs from the attempt",
+            )?;
+            require(
+                native.passed.is_none_or(|p| p || !passed),
+                "preserved closeout records the attempt as not passed",
+            )?;
+            if let Some(transcript) = &native.transcript {
+                require(
+                    list(&row["evidence"])?.contains(transcript),
+                    "closeout transcript is not among the attempt evidence",
+                )?;
+            }
+            *seen = true;
+        }
+        require(
+            attempts.insert(attempt_id, row.clone()).is_none(),
+            "duplicate allocation attempt",
+        )?;
+    }
+    require(
+        matched.iter().all(|seen| *seen),
+        "closeout native record does not match any ledger attempt",
+    )?;
+    Ok(Allocation {
+        id,
+        start,
+        deadline,
+        attempts,
+        used: false,
+    })
+}
+
 /// A separately authorized local claim; never a Routine or Full decision.
 fn local_baseline(
     record: &Value,
@@ -1518,25 +1914,25 @@ fn local_baseline(
         "unbounded local set",
     )?;
     let results = evidence.document(&record["results"], false)?;
-    exact(
-        &results,
-        &[
-            "schema_version",
-            "acceptance_set",
-            "qualification_status",
-            "checks",
-            "qualification_cases",
-            "started_at_utc",
-            "finished_at_utc",
-            "native_turns",
-        ],
-        "local results",
-    )?;
+    // v2 results may reuse observations preserved from earlier approved allocations.
+    let reuse = is(&results["schema_version"], RESULTS_V2);
+    let mut fields = vec![
+        "schema_version",
+        "acceptance_set",
+        "qualification_status",
+        "checks",
+        "qualification_cases",
+        "started_at_utc",
+        "finished_at_utc",
+        "native_turns",
+    ];
+    if reuse {
+        fields.extend(["allocations", "reused_observations"]);
+    }
+    exact(&results, &fields, "local results")?;
     require(
-        is(
-            &results["schema_version"],
-            "devforge.manual-local-acceptance-results/v1",
-        ) && results["acceptance_set"] == record["acceptance_set"]
+        (reuse || is(&results["schema_version"], RESULTS_V1))
+            && results["acceptance_set"] == record["acceptance_set"]
             && is(&results["qualification_status"], "UNQUALIFIED"),
         "local result/claim mismatch",
     )?;
@@ -1546,8 +1942,9 @@ fn local_baseline(
     )?;
     let start = time(&results["started_at_utc"])?;
     let end = time(&results["finished_at_utc"])?;
+    let frozen = time(&plan["frozen_at_utc"])?;
     require(
-        time(&plan["frozen_at_utc"])? < start && start <= end,
+        frozen < start && start <= end,
         "acceptance set must be predefined",
     )?;
     require(
@@ -1569,6 +1966,7 @@ fn local_baseline(
         "local acceptance check coverage differs",
     )?;
     let mut observations = BTreeSet::new();
+    let mut reused = BTreeSet::new();
     let mut actors = BTreeSet::new();
     let mut identities = Map::new();
     for package in list(&record["packages"])? {
@@ -1578,6 +1976,24 @@ fn local_baseline(
         );
     }
     let identities = Value::Object(identities);
+    let mut allocations: BTreeMap<String, Allocation> = BTreeMap::new();
+    if reuse {
+        for reference in list(&results["allocations"])? {
+            let key = text(index(reference, "path")?, "allocation path")?.to_string();
+            let loaded = allocation(
+                reference,
+                record,
+                &owner,
+                frozen,
+                &identities,
+                &mut evidence,
+            )?;
+            require(
+                allocations.insert(key, loaded).is_none(),
+                "duplicate allocation reference",
+            )?;
+        }
+    }
     for (key, kind) in LOCAL_CHECKS {
         let result = exact(
             &results["checks"][key],
@@ -1603,31 +2019,30 @@ fn local_baseline(
             "native observation not bound to check",
         )?;
         let observation = evidence.document(&result["native_observation"], false)?;
-        exact(
-            &observation,
-            &[
-                "schema_version",
-                "acceptance_set",
-                "outcome",
-                "packages",
-                "actor",
-                "native_client",
-                "model",
-                "reasoning_effort",
-                "state_isolation",
-                "transcript",
-                "artifacts",
-                "started_at_utc",
-                "finished_at_utc",
-                "manual_transfer",
-            ],
-            "native local observation",
-        )?;
+        let prior = is(&observation["schema_version"], OBSERVATION_V2);
+        let mut fields = vec![
+            "schema_version",
+            "acceptance_set",
+            "outcome",
+            "packages",
+            "actor",
+            "native_client",
+            "model",
+            "reasoning_effort",
+            "state_isolation",
+            "transcript",
+            "artifacts",
+            "started_at_utc",
+            "finished_at_utc",
+            "manual_transfer",
+        ];
+        if prior {
+            fields.extend(["allocation", "attempt_id"]);
+        }
+        exact(&observation, &fields, "native local observation")?;
         require(
-            is(
-                &observation["schema_version"],
-                "devforge.manual-local-observation/v1",
-            ) && observation["acceptance_set"] == record["acceptance_set"]
+            (prior || is(&observation["schema_version"], OBSERVATION_V1))
+                && observation["acceptance_set"] == record["acceptance_set"]
                 && observation["packages"] == identities
                 && is(&observation["outcome"], "PASS")
                 && is(&observation["native_client"], "codex"),
@@ -1641,10 +2056,56 @@ fn local_baseline(
         )?;
         let observed_start = time(&observation["started_at_utc"])?;
         let observed_end = time(&observation["finished_at_utc"])?;
-        require(
-            start <= observed_start && observed_start <= observed_end && observed_end <= end,
-            "observation outside predefined set interval",
-        )?;
+        let path = index(&result["native_observation"], "path")?
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if prior {
+            // A preserved observation is validated against the allocation that
+            // produced it and is never counted as a turn of this interval.
+            require(reuse, "reused observation requires reuse results")?;
+            let allocation_path = text(
+                index(&observation["allocation"], "path")?,
+                "allocation path",
+            )?;
+            let allocation = allocations
+                .get_mut(allocation_path)
+                .ok_or_else(|| refuse("reused observation references an unlisted allocation"))?;
+            require(
+                allocation.start <= observed_start
+                    && observed_start <= observed_end
+                    && observed_end <= allocation.deadline,
+                "reused observation outside its allocation window",
+            )?;
+            let attempt_id = text(&observation["attempt_id"], "attempt ID")?;
+            let attempt = allocation.attempts.get(attempt_id).ok_or_else(|| {
+                refuse("reused observation is not a recorded attempt of its allocation")
+            })?;
+            require(
+                is(&attempt["outcome"], "PASS"),
+                "reused attempt did not pass",
+            )?;
+            require(
+                attempt["actor"] == observation["actor"]
+                    && time(&attempt["started_at_utc"])? == observed_start
+                    && time(&attempt["finished_at_utc"])? == observed_end,
+                "reused observation differs from its recorded attempt",
+            )?;
+            require(
+                attempt["evidence"]
+                    .as_array()
+                    .is_some_and(|e| e.contains(&observation["transcript"])),
+                "reused observation transcript is not the attempt's recorded evidence",
+            )?;
+            allocation.used = true;
+            reused.insert(path);
+        } else {
+            require(
+                start <= observed_start && observed_start <= observed_end && observed_end <= end,
+                "observation outside predefined set interval",
+            )?;
+            observations.insert(path);
+        }
         evidence.pin(&observation["state_isolation"], false)?;
         evidence.pin(&observation["transcript"], false)?;
         evidence.refs(&observation["artifacts"])?;
@@ -1676,17 +2137,21 @@ fn local_baseline(
             }
         }
         evidence.walk(&observation)?;
-        observations.insert(
-            index(&result["native_observation"], "path")?
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-        );
     }
     require(
         i64::try_from(observations.len()).is_ok_and(|n| n <= turns.as_i64().unwrap_or_default()),
         "native turn count omits observations",
     )?;
+    if reuse {
+        require(
+            results["reused_observations"] == json!(reused.len()),
+            "reused observation count differs",
+        )?;
+        require(
+            allocations.values().all(|a| a.used),
+            "listed allocation supplied no reused observation",
+        )?;
+    }
     let review = evidence.document(&record["review"], true)?;
     exact(
         &review,
@@ -1764,17 +2229,24 @@ fn local_baseline(
         "missing exact local owner acceptance",
     )?;
     evidence.recheck()?;
-    Ok(Validated {
-        summary: json!({
-            "record": root_pin,
-            "owner": owner,
-            "packages": packages.keys().collect::<Vec<_>>(),
-            "predicate": "manual-local-baseline/v1",
-            "qualification_status": "UNQUALIFIED",
-            "acceptance_status": "LOCAL_ACCEPTANCE_SET_PASS",
-        }),
-        evidence,
-    })
+    let mut summary = json!({
+        "record": root_pin,
+        "owner": owner,
+        "packages": packages.keys().collect::<Vec<_>>(),
+        "predicate": "manual-local-baseline/v1",
+        "qualification_status": "UNQUALIFIED",
+        "acceptance_status": "LOCAL_ACCEPTANCE_SET_PASS",
+    });
+    if reuse {
+        summary["reused_allocations"] = json!(
+            allocations
+                .values()
+                .map(|a| a.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        summary["reused_observations"] = json!(reused.len());
+    }
+    Ok(Validated { summary, evidence })
 }
 
 // ---- protected executable identity ---------------------------------------
