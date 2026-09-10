@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 mod delivery;
 mod install;
+mod validate_mvp;
 
 const RUNNER: &str = include_str!("../runners/unittest_runner.py");
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -47,6 +48,11 @@ enum Action {
     Install {
         #[command(subcommand)]
         action: install::Action,
+    },
+    /// Structural document validation; reports only, never behavioral acceptance.
+    Validate {
+        #[command(subcommand)]
+        action: validate_mvp::Action,
     },
     /// Prepare expertise context, inspect freshness, or bind an AI-authored skill.
     Expert {
@@ -987,13 +993,20 @@ fn execute(cli: Cli) -> Result<Value> {
                 json!({"status":status,"candidate_sha256":tree_hash(&tree)?,"state":dir,"runner_isolation":"filesystem; network not isolated","scope":"local POC acceptance; semantic review still required"}),
             )
         }
-        Action::Isolate { .. } | Action::Delivery { .. } | Action::Install { .. } => unreachable!(),
+        Action::Isolate { .. }
+        | Action::Delivery { .. }
+        | Action::Install { .. }
+        | Action::Validate { .. } => unreachable!(),
     }
 }
 fn main() {
     let cli = Cli::parse();
     if let Action::Delivery { action } = &cli.command {
         delivery::main(action, cli.state.as_deref());
+        return;
+    }
+    if let Action::Validate { action } = &cli.command {
+        validate_mvp::main(action);
         return;
     }
     match execute(cli) {
