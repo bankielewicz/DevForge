@@ -982,3 +982,27 @@ fn json_object_key_order(raw: &str) -> Vec<String> {
         })
         .collect()
 }
+
+#[test]
+fn symlinked_research_directory_preserves_collected_fail_report() {
+    // Reviewer reproduction (PR #4 review, 2026-09-10): the research directory
+    // itself is a symlink. The legacy validator resolves the containment root
+    // and collects "symlink document: research"; the report must not be lost.
+    let fixture = Fixture::new();
+    fs::rename(fixture.path("research"), fixture.path("real-research")).unwrap();
+    symlink("real-research", fixture.path("research")).unwrap();
+    let legacy_path = fixture.report_path("symlink-research-legacy.json");
+    let rust_path = fixture.report_path("symlink-research-rust.json");
+    let legacy = run_legacy(&fixture.mvp, Some(&legacy_path));
+    let expected = assert_fail(&legacy, &["symlink document: research"]);
+    assert!(legacy_path.is_file());
+    let rust = fixture.run(Some(&rust_path));
+    assert!(
+        rust_path.is_file(),
+        "legacy emitted a FAIL report, but Rust emitted no report: stderr={:?}, stdout={:?}",
+        text(&rust.stderr),
+        text(&rust.stdout)
+    );
+    let actual = assert_fail(&rust, &["symlink document: research"]);
+    assert_eq!(without_timestamp(actual), without_timestamp(expected));
+}

@@ -448,11 +448,13 @@ fn valid_skill_name(name: &str) -> bool {
         })
 }
 
-/// Resolve a document path inside `root` (already resolved). Absolute paths,
-/// escapes through `..` or symlinks, and a symlinked final entry are refused.
+/// Resolve a document path inside `root`. Containment compares resolved paths on
+/// both sides, as the legacy `root.resolve()` did, so a symlinked root such as
+/// `research` still contains its own entries. Absolute paths, escapes through
+/// `..` or symlinks, and a symlinked final entry are refused.
 fn local(root: &Path, relative: &str) -> Result<PathBuf> {
     let path = root.join(relative);
-    if Path::new(relative).is_absolute() || !realpath(&path).starts_with(root) {
+    if Path::new(relative).is_absolute() || !realpath(&path).starts_with(realpath(root)) {
         bail!("path outside selected document root: {relative}");
     }
     if is_symlink(&path) {

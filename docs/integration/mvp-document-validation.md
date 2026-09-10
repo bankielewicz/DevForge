@@ -40,7 +40,9 @@ absolute or escaping path, or a symlinked indexed document refuses execution.
   `SKILL.md` exists under the framework root.
 - Local-path containment and symlink refusal for indexed paths; symlinks found
   during traversal are errors before the `validation/` and `validation.json`
-  inventory exclusions apply.
+  inventory exclusions apply. Containment compares resolved paths on both
+  sides, so a symlinked directory such as `research` is collected as
+  `symlink document: research` rather than refusing its own entries.
 - Every `.json` document parses; every `.md` document has balanced code fences,
   no trailing whitespace and no broken local links (`://`, `#...` and `{{`
   targets are skipped; fragments are stripped).
