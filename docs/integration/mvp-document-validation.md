@@ -69,8 +69,24 @@ Report fields: `schema_version` 2, `created_at_utc`, `status`, `errors`,
 
 ## Status
 
-`scripts/validate_mvp.py`, the Python test suites, CI workflows, installers and
-operational skills are unchanged and still use the legacy validator. Switching
-them is a separate integration decision. Regression coverage lives in
-`tests/validate_mvp.rs`, which also compares the compiled command with the
-unchanged legacy script on synthetic trees.
+Partial migration. The manual `.github/workflows/validate-framework.yml`
+workflow (`workflow_dispatch`, main-only authority guard, exact 40-character
+candidate SHA) now builds DevForge from its trusted `authority` checkout with
+Rust 1.94.0 and `cargo build --locked`, then runs
+`authority/target/debug/devforge validate mvp --mvp candidate/docs/mvp` for
+the MVP-document check. The build finishes before the candidate is checked out,
+only authority source is compiled, and candidate code, scripts, Cargo files,
+tests and hooks are never executed. A `FAIL` or `BLOCKED` exit fails that
+workflow step; there is no Python fallback. The separate framework-structure
+step still runs the legacy `scripts/validate_framework.py`.
+
+`scripts/verify_poc.py` remains a legacy caller of `scripts/validate_mvp.py`.
+The Python script itself is unchanged and stays the regression baseline:
+`tests/validate_mvp.rs` compares the compiled command with it on synthetic
+trees. Installers and operational skills are unchanged.
+
+This is structural checking only. It is not native skill acceptance, MVP
+completion, qualification or owner acceptance. The workflow change was
+verified locally with equivalent commands and normal PR CI; hosted execution of
+the changed manual workflow is `NOT_RUN` until an owner dispatches it from
+`main` after merge.

@@ -27,6 +27,11 @@ jobs:
         with:
           persist-credentials: false
           path: authority
+      - name: Select the pinned Rust toolchain
+        run: rustup toolchain install 1.94.0 --profile minimal
+      - name: Build the authority CLI before the candidate exists on disk
+        working-directory: authority
+        run: cargo +1.94.0 build --locked
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: bankielewicz/DevForgeAI
@@ -36,6 +41,6 @@ jobs:
       - name: Validate without executing candidate code
         run: python3 authority/scripts/validate_framework.py --framework candidate
       - name: Validate authoring document references
-        run: python3 authority/scripts/validate_mvp.py --mvp candidate/docs/mvp
+        run: authority/target/debug/devforge validate mvp --mvp candidate/docs/mvp
       - name: Record check scope
         run: echo 'Structural validation only. No semantic acceptance, merge protection, or deployment is implied.' >> "$GITHUB_STEP_SUMMARY"
