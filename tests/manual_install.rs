@@ -793,11 +793,43 @@ fn missing_evidence_record_refuses_before_writes() {
 
 /// Owner-approved unqualified local baseline fixture for the exact package pair.
 /// A preserved prior allocation whose passing attempts are reused as observations.
+/// `original`, `prior` and `closeout` are templates of the preserved records; freeze()
+/// materializes them with the frozen set's pin, then the reference record points at them.
 struct Allocation {
     id: String,
     record: Value,
+    original: Value,
+    prior: Option<Value>,
+    closeout: Value,
+    /// Point the reference's authorization at the preserved allocation record (text approval).
+    bind_text_authorization: bool,
+    /// Point the closeout's `allocation` pin at the materialized original record.
+    closeout_binds_original: bool,
     keys: Vec<String>,
     pin: Value,
+}
+
+/// One preserved attempt: its launch and completion records in the historical shape.
+fn attempt_row(
+    ws: &Workspace,
+    slot: &str,
+    from: &str,
+    to: &str,
+    returncode: i64,
+    outcome: &str,
+    evidence: &Value,
+) -> Value {
+    let launch = ws.put(
+        &format!("{slot}-launch.json"),
+        &json!({"slot": {"id": slot, "seconds": 1200, "parent": null}, "started_at_utc": from,
+            "seconds_cap": 1200, "pid": 4242, "client": "/opt/codex/codex"}),
+    );
+    let completion = ws.put(
+        &format!("{slot}-completion.json"),
+        &json!({"returncode": returncode, "timed_out": false, "finished_at_utc": to}),
+    );
+    json!({"attempt_id": slot, "actor": "fixture-worker", "started_at_utc": from, "finished_at_utc": to,
+        "outcome": outcome, "launch": launch, "completion": completion, "evidence": [evidence]})
 }
 
 struct Local {
@@ -947,43 +979,134 @@ impl Local {
     }
 
     /// Move the named checks' observations into a preserved prior allocation `id`
-    /// whose ledger also retains one failed attempt, and switch results to v2.
+    /// closed out in the `STOPPED_BLOCKED` shape, whose ledger retains one failed attempt.
     fn reuse(&mut self, id: &str, keys: &[&str]) {
+        self.reuse_format(id, keys, "stopped");
+    }
+
+    /// Synthetic copies of the preserved historical shapes: `stopped` (a
+    /// STOPPED_BLOCKED closeout with a `native` block), `expired` (an
+    /// EXPIRED_WITH_PARTIAL_OBSERVATIONS closeout with `slot_states`) and
+    /// `evaluator-return` (a COMPLETED_BOUNDED_EVALUATOR_RETURN closeout whose
+    /// original allocation chains to a prior allocation and carries a text approval).
+    fn reuse_format(&mut self, id: &str, keys: &[&str], format: &str) {
         self.plan["frozen_at_utc"] = json!("2026-09-07T09:00:00Z");
-        let mut attempts = vec![
-            json!({"attempt_id": format!("{id}-a0"), "actor": "fixture-worker",
-            "started_at_utc": "2026-09-07T10:00:00Z", "finished_at_utc": "2026-09-07T10:00:00.5Z",
-            "outcome": "COULD_NOT_RUN", "evidence": [self.history]}),
-        ];
+        let (start, deadline) = ("2026-09-07T10:00:00Z", "2026-09-07T13:00:00Z");
+        let mut attempts = Vec::new();
+        if format != "evaluator-return" {
+            attempts.push(attempt_row(
+                &self.ws,
+                &format!("{id}-a0"),
+                start,
+                "2026-09-07T10:00:00.5Z",
+                -15,
+                "COULD_NOT_RUN",
+                &self.history,
+            ));
+        }
         for key in keys {
             let observation = self.observations.get_mut(*key).unwrap();
             observation["schema_version"] = json!("devforge.manual-local-observation/v2");
             observation["started_at_utc"] = json!("2026-09-07T10:00:01Z");
             observation["finished_at_utc"] = json!("2026-09-07T10:00:02Z");
             observation["attempt_id"] = json!(format!("{id}-{key}"));
-            attempts.push(
-                json!({"attempt_id": format!("{id}-{key}"), "actor": "fixture-worker",
-                "started_at_utc": "2026-09-07T10:00:01Z", "finished_at_utc": "2026-09-07T10:00:02Z",
-                "outcome": "PASS", "evidence": [self.raw]}),
-            );
+            attempts.push(attempt_row(
+                &self.ws,
+                &format!("{id}-{key}"),
+                "2026-09-07T10:00:01Z",
+                "2026-09-07T10:00:02Z",
+                0,
+                "PASS",
+                &self.raw,
+            ));
         }
-        let original = self.ws.put(
-            &format!("{id}-original-allocation.json"),
-            &json!({"slots": keys, "max_seconds": 10800, "status": "STOPPED_BLOCKED"}),
-        );
-        let closeout = self.ws.put(
-            &format!("{id}-closeout.json"),
-            &json!({"status": "STOPPED_BLOCKED", "attempts_used": attempts.len(),
-                "clock_restarted": false, "reason": "Synthetic preserved failure; never rewritten"}),
-        );
+        let mut slots: Vec<Value> = attempts
+            .iter()
+            .map(|a| json!({"id": a["attempt_id"], "seconds": 1200, "parent": null}))
+            .collect();
+        slots.push(json!({"id": format!("{id}-unused"), "seconds": 1200, "parent": null}));
+        let mut original = json!({"started_at_utc": start, "deadline_utc": deadline, "max_seconds": 10800,
+            "child_turns": 5, "operator_returns": 5, "concurrency": 1, "retries": 0,
+            "unlisted_continuations": 0, "client": "/home/fixture/.local/bin/codex",
+            "model": "gpt-6-astra", "reasoning_effort": "medium", "authorization": self.raw,
+            "slots": slots, "native_work_authorized": true});
+        let mut prior = None;
+        let (status, closeout) = match format {
+            "stopped" => {
+                let failed = &attempts[0];
+                (
+                    "STOPPED_BLOCKED",
+                    json!({"status": "STOPPED_BLOCKED", "reason": "Synthetic preserved failure; never rewritten",
+                        "started_at_utc": start, "original_deadline_utc": deadline,
+                        "closed_at_utc": "2026-09-07T10:09:37+00:00", "clock_restarted": false,
+                        "attempts_used": attempts.len(), "operator_returns_used": 1, "retries": 0,
+                        "native": {"actor": "fixture-worker", "role": failed["attempt_id"],
+                            "started_at_utc": failed["started_at_utc"], "finished_at_utc": failed["finished_at_utc"],
+                            "process_exit": -15, "workflow_outcome": "COULD_NOT_RUN", "source_edits": 0, "timed_out": false},
+                        "preserved": {"transcript": self.history, "launch": failed["launch"],
+                            "completion": failed["completion"], "old_failures_unchanged": true},
+                        "installation": "NOT_PERFORMED", "acceptance": "NOT_GRANTED"}),
+                )
+            }
+            "expired" => {
+                let mut states: Vec<Value> = attempts
+                    .iter()
+                    .map(|a| {
+                        json!({"slot": a["attempt_id"], "launched": true,
+                            "completion": {"returncode": if a["outcome"] == "PASS" { 0 } else { -15 },
+                                "timed_out": false, "finished_at_utc": a["finished_at_utc"]}})
+                    })
+                    .collect();
+                states.push(
+                    json!({"slot": format!("{id}-unused"), "launched": false, "completion": null}),
+                );
+                (
+                    "EXHAUSTED",
+                    json!({"recorded_at_utc": "2026-09-07T13:03:16.8707712+00:00",
+                        "status": "EXPIRED_WITH_PARTIAL_OBSERVATIONS",
+                        "original_started_at_utc": "2026-09-07T06:00:00-04:00",
+                        "original_deadline_utc": "2026-09-07T09:00:00-04:00",
+                        "post_deadline_action": "Bookkeeping and exact-byte readback only; no native execution, test, source mutation, installation or budget reset",
+                        "slot_states": states, "native_attempts": attempts.len(), "operator_returns": attempts.len(),
+                        "unused_slots": [format!("{id}-unused")], "installation_status": "NOT_PERFORMED"}),
+                )
+            }
+            "evaluator-return" => {
+                assert_eq!(keys.len(), 1, "one bounded evaluator return");
+                let row = &attempts[0];
+                original.as_object_mut().unwrap().remove("authorization");
+                original["authorization"] = json!(
+                    "User said proceed to the proposed new window for one evaluator return, no retries or installation"
+                );
+                prior = Some(
+                    json!({"started_at_utc": "2026-09-07T05:00:00Z", "deadline_utc": "2026-09-07T09:30:00Z",
+                    "max_seconds": 14400, "child_turns": 13, "slots": []}),
+                );
+                (
+                    "COMPLETED",
+                    json!({"status": "COMPLETED_BOUNDED_EVALUATOR_RETURN", "closed_at_utc": "2026-09-07T10:20:05+00:00",
+                        "started_at_utc": start, "deadline_utc": deadline, "elapsed_seconds": 959.1,
+                        "native_turns": 1, "operator_returns": 1, "retries": 0, "native_actor": "fixture-worker",
+                        "launch": row["launch"], "completion": row["completion"], "transcript": self.raw,
+                        "evaluation": {"overall": "FAIL", "qualification_status": "UNQUALIFIED", "external_acceptance": "NOT_GRANTED"},
+                        "installation": "NOT_PERFORMED"}),
+                )
+            }
+            other => panic!("unknown fixture format {other}"),
+        };
         let record = json!({"schema_version": "devforge.manual-local-allocation/v1", "allocation_id": id,
             "owner": "fixture-owner", "authorization": self.raw, "packages": self.identities(),
-            "started_at_utc": "2026-09-07T10:00:00Z", "deadline_utc": "2026-09-07T13:00:00Z",
-            "max_attempts": 5, "attempts": attempts, "status": "STOPPED_BLOCKED",
-            "original_allocation": original, "closeout": closeout});
+            "started_at_utc": start, "deadline_utc": deadline, "max_attempts": 5,
+            "attempts": attempts, "status": status, "original_allocation": null, "closeout": null});
+        let evaluator_return = format == "evaluator-return";
         self.allocations.push(Allocation {
             id: id.to_string(),
             record,
+            original,
+            prior,
+            closeout,
+            bind_text_authorization: evaluator_return,
+            closeout_binds_original: evaluator_return,
             keys: keys.iter().map(|k| k.to_string()).collect(),
             pin: Value::Null,
         });
@@ -992,20 +1115,62 @@ impl Local {
         self.results["reused_observations"] = json!(reused);
     }
 
-    fn allocation(&mut self, id: &str) -> &mut Value {
-        &mut self
-            .allocations
-            .iter_mut()
-            .find(|a| a.id == id)
-            .unwrap()
-            .record
+    fn entry(&mut self, id: &str) -> &mut Allocation {
+        self.allocations.iter_mut().find(|a| a.id == id).unwrap()
     }
 
+    fn allocation(&mut self, id: &str) -> &mut Value {
+        &mut self.entry(id).record
+    }
+
+    fn original(&mut self, id: &str) -> &mut Value {
+        &mut self.entry(id).original
+    }
+
+    fn closeout(&mut self, id: &str) -> &mut Value {
+        &mut self.entry(id).closeout
+    }
+
+    /// Bind the preserved-record templates to the frozen set, then materialize everything.
     fn freeze(&mut self) {
+        let plan = self.ws.put("set.json", &self.plan);
+        for allocation in &mut self.allocations {
+            if let Some(prior) = &mut allocation.prior {
+                prior["acceptance_set"] = plan.clone();
+                let mut pin = self
+                    .ws
+                    .put(&format!("{}-prior-allocation.json", allocation.id), prior);
+                pin["status"] = json!("Expired; not extended or rewritten");
+                allocation.original["prior_allocation"] = pin;
+            } else {
+                allocation.original["acceptance_set"] = plan.clone();
+            }
+        }
+        self.materialize();
+    }
+
+    /// Write the preserved records, references, observations, results, review and
+    /// acceptance from the current templates without re-binding them to the set.
+    fn materialize(&mut self) {
         let plan = self.ws.put("set.json", &self.plan);
         let mut listed = Vec::new();
         for allocation in &mut self.allocations {
             allocation.record["acceptance_set"] = plan.clone();
+            let original = self.ws.put(
+                &format!("{}-original-allocation.json", allocation.id),
+                &allocation.original,
+            );
+            if allocation.closeout_binds_original {
+                allocation.closeout["allocation"] = original.clone();
+            }
+            if allocation.bind_text_authorization {
+                allocation.record["authorization"] = original.clone();
+            }
+            allocation.record["original_allocation"] = original;
+            allocation.record["closeout"] = self.ws.put(
+                &format!("{}-closeout.json", allocation.id),
+                &allocation.closeout,
+            );
             allocation.pin = self.ws.put(
                 &format!("allocation-{}.json", allocation.id),
                 &allocation.record,
@@ -1751,18 +1916,25 @@ fn concealed_failed_or_exhausted_attempts_are_refused() {
         .remove(0);
     fixture.freeze();
     fixture.refused(&["closeout differs from its ledger"]);
-    // Claiming more attempts than were approved.
+    // Claiming more attempts than the preserved allocation approved.
     let mut fixture = Local::new();
     fixture.reuse("alloc-01", &["grounded_creation"]);
     fixture.allocation("alloc-01")["max_attempts"] = json!(1);
+    fixture.original("alloc-01")["child_turns"] = json!(1);
     fixture.freeze();
     fixture.refused(&["allocation attempt limit exceeded"]);
+    // A reference cap that differs from the preserved allocation's own cap.
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.allocation("alloc-01")["max_attempts"] = json!(9);
+    fixture.freeze();
+    fixture.refused(&["reference attempt limit differs from the preserved allocation"]);
     // Relabelling the allocation status without its closeout.
     let mut fixture = Local::new();
     fixture.reuse("alloc-01", &["grounded_creation"]);
     fixture.allocation("alloc-01")["status"] = json!("COMPLETED");
     fixture.freeze();
-    fixture.refused(&["closeout differs from its ledger"]);
+    fixture.refused(&["reference status differs from the preserved closeout"]);
     // Reusing the attempt that did not pass.
     let mut fixture = Local::new();
     fixture.reuse("alloc-01", &["grounded_creation"]);
@@ -1822,6 +1994,146 @@ fn compatible_reuse_across_checks_still_needs_separate_judgments() {
         .remove("bounded_enhancement");
     fixture.publish();
     fixture.refused(&["local semantic review coverage incomplete"]);
+}
+
+// PR 5 review regressions (2026-09-10): the reference must agree with the preserved sources.
+
+#[test]
+fn original_window_cannot_be_extended_by_reference() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    // The preserved allocation ended at 10:00:01; the reference claims 13:00:00 and reuses
+    // an attempt finishing at 10:00:02.
+    fixture.original("alloc-01")["deadline_utc"] = json!("2026-09-07T10:00:01Z");
+    fixture.freeze();
+    fixture.refused(&["reference window differs from the preserved allocation"]);
+}
+
+#[test]
+fn closeout_failed_outcome_cannot_be_relabelled_pass() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    // Same actor, instants and count, but the preserved native result did not complete.
+    let row = fixture.allocation("alloc-01")["attempts"][1].clone();
+    let native = &mut fixture.closeout("alloc-01")["native"];
+    native["role"] = row["attempt_id"].clone();
+    native["started_at_utc"] = row["started_at_utc"].clone();
+    native["finished_at_utc"] = row["finished_at_utc"].clone();
+    native["workflow_outcome"] = json!("COULD_NOT_RUN");
+    fixture.closeout("alloc-01")["preserved"]["launch"] = row["launch"].clone();
+    fixture.closeout("alloc-01")["preserved"]["completion"] = row["completion"].clone();
+    fixture.closeout("alloc-01")["preserved"]["transcript"] = fixture.raw.clone();
+    fixture.freeze();
+    fixture.refused(&["preserved closeout records the attempt as not passed"]);
+    // The attempt's own completion record contradicts a PASS label.
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    let failed = fixture.ws.put(
+        "alloc-01-grounded_creation-completion.json",
+        &json!({"returncode": -15, "timed_out": false, "finished_at_utc": "2026-09-07T10:00:02Z"}),
+    );
+    fixture.allocation("alloc-01")["attempts"][1]["completion"] = failed;
+    fixture.freeze();
+    fixture.refused(&["completion record contradicts the PASS outcome"]);
+    // A launch record for a different slot or instant.
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    let other = fixture.allocation("alloc-01")["attempts"][0]["launch"].clone();
+    fixture.allocation("alloc-01")["attempts"][1]["launch"] = other;
+    fixture.freeze();
+    fixture.refused(&["launch record differs from the attempt"]);
+}
+
+#[test]
+fn historical_expiry_closeout_format_is_supported_without_rewriting() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-01", &["grounded_creation", "reuse"], "expired");
+    fixture.results["native_turns"] = json!(4);
+    fixture.freeze();
+    let before = fs::read(pin_path(&fixture.allocation("alloc-01")["closeout"])).unwrap();
+    let result = fixture.installed();
+    assert_eq!(
+        fixture.ws.inventory()["manual_expert_adoption"]["reused_observations"],
+        2
+    );
+    assert_eq!(result["acceptance_status"], "LOCAL_ACCEPTANCE_SET_PASS");
+    // The historical bytes and raw status are untouched; normalization lives in the reference.
+    let after = fs::read(pin_path(&fixture.allocation("alloc-01")["closeout"])).unwrap();
+    assert_eq!(after, before);
+    assert!(String::from_utf8_lossy(&after).contains("EXPIRED_WITH_PARTIAL_OBSERVATIONS"));
+    // A ledger attempt the closeout recorded as unlaunched, or a slot the allocation never had.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-01", &["grounded_creation"], "expired");
+    fixture.closeout("alloc-01")["slot_states"][1]["launched"] = json!(false);
+    fixture.closeout("alloc-01")["slot_states"][1]["completion"] = Value::Null;
+    fixture.freeze();
+    fixture.refused(&["closeout slot state differs from the attempt"]);
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-01", &["grounded_creation"], "expired");
+    fixture.allocation("alloc-01")["attempts"][1]["attempt_id"] = json!("alloc-01-elsewhere");
+    fixture.observations.get_mut("grounded_creation").unwrap()["attempt_id"] =
+        json!("alloc-01-elsewhere");
+    fixture.freeze();
+    fixture.refused(&["not a slot of the preserved allocation"]);
+}
+
+#[test]
+fn historical_evaluator_return_closeout_format_is_supported() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-b", &["missing_evidence_refusal"], "evaluator-return");
+    fixture.results["native_turns"] = json!(5);
+    fixture.freeze();
+    fixture.installed();
+    let adoption = fixture.ws.inventory()["manual_expert_adoption"].clone();
+    assert_eq!(adoption["reused_allocations"], json!(["alloc-b"]));
+    // The text approval is bound through the preserved allocation record; another pin is refused.
+    let raw = fixture.raw.clone();
+    fixture.entry("alloc-b").bind_text_authorization = false;
+    fixture.allocation("alloc-b")["authorization"] = raw;
+    fixture.materialize();
+    fixture.refused(&["text authorization must be pinned through the preserved allocation record"]);
+    // A closeout written for another allocation, or naming a different actor.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-b", &["missing_evidence_refusal"], "evaluator-return");
+    fixture.closeout("alloc-b")["native_actor"] = json!("someone-else");
+    fixture.freeze();
+    fixture.refused(&["closeout native record differs from the attempt"]);
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-b", &["missing_evidence_refusal"], "evaluator-return");
+    fixture.freeze();
+    let elsewhere = fixture
+        .ws
+        .put("elsewhere-allocation.json", &json!({"other": true}));
+    fixture.entry("alloc-b").closeout_binds_original = false;
+    fixture.closeout("alloc-b")["allocation"] = elsewhere;
+    fixture.materialize();
+    fixture.refused(&["closeout is for a different allocation"]);
+}
+
+#[test]
+fn preserved_allocation_without_linkage_or_unknown_closeout_is_refused() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-b", &["missing_evidence_refusal"], "evaluator-return");
+    fixture.entry("alloc-b").prior = None;
+    fixture.freeze();
+    // freeze() then puts acceptance_set directly; drop it to expose the missing linkage.
+    fixture
+        .original("alloc-b")
+        .as_object_mut()
+        .unwrap()
+        .remove("acceptance_set");
+    fixture.materialize();
+    fixture.refused(&["preserved allocation records no acceptance set"]);
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.closeout("alloc-01")["status"] = json!("SOMETHING_NEW");
+    fixture.freeze();
+    fixture.refused(&["unsupported preserved closeout format"]);
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.closeout("alloc-01")["clock_restarted"] = json!(true);
+    fixture.freeze();
+    fixture.refused(&["preserved closeout reports a restarted clock"]);
 }
 
 #[test]
