@@ -256,6 +256,29 @@ impl Workspace {
         serde_json::from_slice(&fs::read(self.project.join(".devforge-install.json")).unwrap())
             .unwrap()
     }
+
+    /// Run the evidence preflight against `packet` with this workspace's framework and authority.
+    fn preflight_with(&self, framework: &Path, packet: &Path) -> Run {
+        run(
+            BIN,
+            &[
+                "install",
+                "check-local-evidence",
+                "--project",
+                self.project.to_str().unwrap(),
+                "--framework",
+                framework.to_str().unwrap(),
+                "--packet",
+                packet.to_str().unwrap(),
+                "--authority",
+                self.authority.to_str().unwrap(),
+            ],
+        )
+    }
+
+    fn preflight(&self, packet: &Path) -> Run {
+        self.preflight_with(&self.framework, packet)
+    }
 }
 
 /// Full/Routine adoption fixture mirroring the legacy synthetic evaluation records.
@@ -805,6 +828,10 @@ struct Allocation {
     bind_text_authorization: bool,
     /// Point the closeout's `allocation` pin at the materialized original record.
     closeout_binds_original: bool,
+    /// Omit the preserved allocation's `authorization`; the closeout pins the approval instead.
+    closeout_carries_authorization: bool,
+    /// Record the preserved allocation's approval under `approval_ref` instead of `authorization`.
+    approval_ref: bool,
     keys: Vec<String>,
     pin: Value,
 }
@@ -986,9 +1013,12 @@ impl Local {
 
     /// Synthetic copies of the preserved historical shapes: `stopped` (a
     /// STOPPED_BLOCKED closeout with a `native` block), `expired` (an
-    /// EXPIRED_WITH_PARTIAL_OBSERVATIONS closeout with `slot_states`) and
+    /// EXPIRED_WITH_PARTIAL_OBSERVATIONS closeout with `slot_states`),
     /// `evaluator-return` (a COMPLETED_BOUNDED_EVALUATOR_RETURN closeout whose
-    /// original allocation chains to a prior allocation and carries a text approval).
+    /// original allocation chains to a prior allocation and carries a text approval)
+    /// and `stopped-multi` (a STOPPED_BLOCKED closeout recording one `native` entry
+    /// per attempt, pinning its approval and its allocation, with an inline
+    /// `native_completion` and a workflow judgment only where one was made).
     fn reuse_format(&mut self, id: &str, keys: &[&str], format: &str) {
         self.plan["frozen_at_utc"] = json!("2026-09-07T09:00:00Z");
         let (start, deadline) = ("2026-09-07T10:00:00Z", "2026-09-07T13:00:00Z");
@@ -1002,6 +1032,18 @@ impl Local {
                 -15,
                 "COULD_NOT_RUN",
                 &self.history,
+            ));
+        }
+        if format == "stopped-multi" {
+            // Completed with exit 0, but no workflow judgment was ever recorded for it.
+            attempts.push(attempt_row(
+                &self.ws,
+                &format!("{id}-a1"),
+                "2026-09-07T10:00:00.6Z",
+                "2026-09-07T10:00:00.9Z",
+                0,
+                "NOT_EVALUATED",
+                &self.raw,
             ));
         }
         for key in keys {
@@ -1071,6 +1113,36 @@ impl Local {
                         "unused_slots": [format!("{id}-unused")], "installation_status": "NOT_PERFORMED"}),
                 )
             }
+            "stopped-multi" => {
+                let natives: Vec<Value> = attempts
+                    .iter()
+                    .map(|a| {
+                        let failed = a["outcome"] == "COULD_NOT_RUN";
+                        let mut entry = json!({"role": a["attempt_id"], "actor": "fixture-worker",
+                            "started_at_utc": a["started_at_utc"], "finished_at_utc": a["finished_at_utc"],
+                            "launch": a["launch"], "completion": a["completion"], "transcript": a["evidence"][0],
+                            "packet": self.raw, "elapsed_seconds": 1.0,
+                            "native_completion": {"returncode": if failed { -15 } else { 0 }, "timed_out": false,
+                                "finished_at_utc": a["finished_at_utc"]}});
+                        if a["outcome"] == "PASS" {
+                            entry["workflow_outcome"] = json!("PASS");
+                        } else if failed {
+                            entry["workflow_outcome"] = json!("COULD_NOT_RUN");
+                        }
+                        entry
+                    })
+                    .collect();
+                (
+                    "STOPPED_BLOCKED",
+                    json!({"status": "STOPPED_BLOCKED", "started_at_utc": start, "original_deadline_utc": deadline,
+                        "finished_at_utc": "2026-09-07T10:39:37+00:00", "clock_restarted": false,
+                        "attempts_used": attempts.len(), "max_attempts": 5, "operator_returns_used": attempts.len(),
+                        "retries_after_stop": 0, "separately_authorized_replacement_clock": true,
+                        "native": natives, "blocker": self.history, "installation": "NOT_PERFORMED",
+                        "acceptance": "NOT_GRANTED", "final_review": "NOT_RUN",
+                        "requirements": "All original nine unchanged; no final judgment or local acceptance result synthesized"}),
+                )
+            }
             "evaluator-return" => {
                 assert_eq!(keys.len(), 1, "one bounded evaluator return");
                 let row = &attempts[0];
@@ -1099,6 +1171,7 @@ impl Local {
             "started_at_utc": start, "deadline_utc": deadline, "max_attempts": 5,
             "attempts": attempts, "status": status, "original_allocation": null, "closeout": null});
         let evaluator_return = format == "evaluator-return";
+        let multi = format == "stopped-multi";
         self.allocations.push(Allocation {
             id: id.to_string(),
             record,
@@ -1106,7 +1179,9 @@ impl Local {
             prior,
             closeout,
             bind_text_authorization: evaluator_return,
-            closeout_binds_original: evaluator_return,
+            closeout_binds_original: evaluator_return || multi,
+            closeout_carries_authorization: multi,
+            approval_ref: false,
             keys: keys.iter().map(|k| k.to_string()).collect(),
             pin: Value::Null,
         });
@@ -1156,6 +1231,22 @@ impl Local {
         let mut listed = Vec::new();
         for allocation in &mut self.allocations {
             allocation.record["acceptance_set"] = plan.clone();
+            if allocation.closeout_carries_authorization {
+                allocation
+                    .original
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("authorization");
+                allocation.closeout["authorization"] = self.raw.clone();
+            }
+            if allocation.approval_ref {
+                allocation
+                    .original
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("authorization");
+                allocation.original["approval_ref"] = self.raw.clone();
+            }
             let original = self.ws.put(
                 &format!("{}-original-allocation.json", allocation.id),
                 &allocation.original,
@@ -1251,6 +1342,47 @@ impl Local {
             .skills()
             .join(self.packages[index]["name"].as_str().unwrap())
     }
+
+    /// The preflight packet for the currently materialized set, packages, allocation
+    /// references and the observations those allocations supplied.
+    fn packet_record(&self) -> Value {
+        let mut observations = Vec::new();
+        for allocation in &self.allocations {
+            for key in &allocation.keys {
+                observations.push(json!({"check": key,
+                    "observation": self.results["checks"][key]["native_observation"]}));
+            }
+        }
+        json!({"schema_version": "devforge.manual-local-evidence-preflight/v1",
+            "project_root": self.ws.project.to_str().unwrap(), "owner": "fixture-owner",
+            "authorization": self.raw, "packages": self.packages,
+            "acceptance_set": self.results["acceptance_set"], "historical_evidence": [self.history],
+            "allocations": self.results.get("allocations").cloned().unwrap_or_else(|| json!([])),
+            "observations": observations})
+    }
+
+    fn packet(&self) -> PathBuf {
+        pin_path(&self.ws.put("preflight-packet.json", &self.packet_record()))
+    }
+}
+
+/// The report entry for the named preflight check.
+fn check<'a>(report: &'a Value, name: &str) -> &'a Value {
+    report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["check"] == name)
+        .unwrap_or_else(|| panic!("no check {name} in {report}"))
+}
+
+fn allocation_entry<'a>(report: &'a Value, id: &str) -> &'a Value {
+    report["allocations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["allocation_id"] == id)
+        .unwrap_or_else(|| panic!("no allocation {id} in {report}"))
 }
 
 #[test]
@@ -2163,4 +2295,605 @@ fn stopped_closeout_with_attempts_requires_native_evidence() {
     fixture.closeout("alloc-01")["native"] = json!({});
     fixture.freeze();
     fixture.refused(&["stopped closeout has attempts but no native evidence"]);
+}
+
+// Local evidence preflight (2026-09-10): the recorded multi-attempt stopped closeout,
+// its approval linkage, and a check-only command built on the installer's own readers.
+
+fn ledger_index(fixture: &mut Local, id: &str, attempt: &str) -> usize {
+    fixture.allocation(id)["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|a| a["attempt_id"] == attempt)
+        .unwrap()
+}
+
+fn native_entry<'a>(closeout: &'a mut Value, role: &str) -> &'a mut Value {
+    closeout["native"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|e| e["role"] == role)
+        .unwrap()
+}
+
+#[test]
+fn multi_attempt_stopped_closeout_is_supported_without_rewriting() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation", "reuse"], "stopped-multi");
+    fixture.results["native_turns"] = json!(4);
+    fixture.freeze();
+    let closeout_path = pin_path(&fixture.allocation("alloc-m")["closeout"]);
+    let before = fs::read(&closeout_path).unwrap();
+    let result = fixture.installed();
+    assert_eq!(result["acceptance_status"], "LOCAL_ACCEPTANCE_SET_PASS");
+    let adoption = fixture.ws.inventory()["manual_expert_adoption"].clone();
+    assert_eq!(adoption["reused_allocations"], json!(["alloc-m"]));
+    assert_eq!(adoption["reused_observations"], 2);
+    // The preserved closeout keeps its recorded array shape, count and facts.
+    assert_eq!(fs::read(&closeout_path).unwrap(), before);
+    let closeout: Value = serde_json::from_slice(&before).unwrap();
+    assert_eq!(closeout["native"].as_array().unwrap().len(), 4);
+    assert_eq!(closeout["attempts_used"], 4);
+    assert!(closeout.get("preserved").is_none());
+    let ledger = fixture.allocation("alloc-m")["attempts"].clone();
+    let outcomes: Vec<&str> = ledger
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["outcome"].as_str().unwrap())
+        .collect();
+    assert!(outcomes.contains(&"COULD_NOT_RUN") && outcomes.contains(&"NOT_EVALUATED"));
+    // Every previously accepted closeout shape still installs alongside it.
+    fixture.reuse_format("alloc-s", &["bounded_enhancement"], "stopped");
+    fixture.reuse_format("alloc-x", &["missing_evidence_refusal"], "expired");
+    fixture.reuse_format("alloc-b", &["creator_to_evaluator"], "evaluator-return");
+    fixture.results["native_turns"] = json!(1);
+    fixture.freeze();
+    fixture.installed();
+}
+
+#[test]
+fn multi_attempt_closeout_without_workflow_judgment_cannot_supply_pass() {
+    // The unjudged attempt completed with exit 0; a PASS label for it is refused.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    let index = ledger_index(&mut fixture, "alloc-m", "alloc-m-a1");
+    fixture.allocation("alloc-m")["attempts"][index]["outcome"] = json!("PASS");
+    fixture.freeze();
+    fixture.refused(&["no workflow judgment"]);
+    // Removing the recorded judgment from the reused passing attempt refuses the same way.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    native_entry(fixture.closeout("alloc-m"), "alloc-m-grounded_creation")
+        .as_object_mut()
+        .unwrap()
+        .remove("workflow_outcome");
+    fixture.freeze();
+    fixture.refused(&["no workflow judgment"]);
+}
+
+#[test]
+fn multi_attempt_closeout_must_account_for_every_attempt_exactly_once() {
+    // An entry dropped while its count and ledger row remain.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.closeout("alloc-m")["native"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    fixture.freeze();
+    fixture.refused(&["native records differ from its attempt count"]);
+    // The entry and count dropped together still disagree with the complete ledger.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.closeout("alloc-m")["native"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    fixture.closeout("alloc-m")["attempts_used"] = json!(2);
+    fixture.freeze();
+    fixture.refused(&["closeout differs from its ledger"]);
+    // Two entries for one attempt.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    let first = fixture.closeout("alloc-m")["native"][0]["role"].clone();
+    fixture.closeout("alloc-m")["native"][1]["role"] = first;
+    fixture.freeze();
+    fixture.refused(&["duplicate closeout native record"]);
+    // An entry re-pointed at another attempt's launch names that attempt twice and
+    // leaves its own ledger row unaccounted for.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    let first_launch = fixture.closeout("alloc-m")["native"][0]["launch"].clone();
+    fixture.closeout("alloc-m")["native"][1]["role"] = json!("alloc-m-elsewhere");
+    fixture.closeout("alloc-m")["native"][1]["launch"] = first_launch;
+    fixture.freeze();
+    fixture.refused(&[
+        "must name the attempt exactly once",
+        "closeout native record differs from the attempt",
+    ]);
+    // A ledger row omitted while the closeout still records the attempt.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.allocation("alloc-m")["attempts"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    fixture.freeze();
+    fixture.refused(&["closeout differs from its ledger"]);
+}
+
+#[test]
+fn multi_attempt_closeout_contradictions_are_refused() {
+    // Inline completion facts that differ from the pinned completion record.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    native_entry(fixture.closeout("alloc-m"), "alloc-m-grounded_creation")["native_completion"]["returncode"] =
+        json!(1);
+    fixture.freeze();
+    fixture.refused(&["closeout native record differs from the attempt"]);
+    // A different actor for the same attempt.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    native_entry(fixture.closeout("alloc-m"), "alloc-m-grounded_creation")["actor"] =
+        json!("someone-else");
+    fixture.freeze();
+    fixture.refused(&["closeout native record differs from the attempt"]);
+    // A recorded failure relabelled PASS in the ledger, even with a clean process exit.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    let clean = fixture.ws.put(
+        "alloc-m-a0-completion.json",
+        &json!({"returncode": 0, "timed_out": false, "finished_at_utc": "2026-09-07T10:00:00.5Z"}),
+    );
+    let index = ledger_index(&mut fixture, "alloc-m", "alloc-m-a0");
+    fixture.allocation("alloc-m")["attempts"][index]["completion"] = clean.clone();
+    fixture.allocation("alloc-m")["attempts"][index]["outcome"] = json!("PASS");
+    let entry = native_entry(fixture.closeout("alloc-m"), "alloc-m-a0");
+    entry["completion"] = clean;
+    entry["native_completion"]["returncode"] = json!(0);
+    fixture.freeze();
+    fixture.refused(&["preserved closeout records the attempt as not passed"]);
+    // A closeout written for another allocation.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.freeze();
+    let elsewhere = fixture
+        .ws
+        .put("elsewhere-allocation.json", &json!({"other": true}));
+    fixture.entry("alloc-m").closeout_binds_original = false;
+    fixture.closeout("alloc-m")["allocation"] = elsewhere;
+    fixture.materialize();
+    fixture.refused(&["closeout is for a different allocation"]);
+}
+
+#[test]
+fn preserved_approval_may_be_recorded_as_approval_ref_or_pinned_by_the_closeout() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.entry("alloc-01").approval_ref = true;
+    fixture.results["native_turns"] = json!(5);
+    fixture.freeze();
+    fixture.installed();
+    // A reference approval that differs from the recorded approval_ref.
+    let history = fixture.history.clone();
+    fixture.allocation("alloc-01")["authorization"] = history.clone();
+    fixture.materialize();
+    fixture.refused(&["reference authorization differs from the preserved allocation"]);
+    // The multi-attempt closeout pins the approval; a different reference pin is refused.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.allocation("alloc-m")["authorization"] = history;
+    fixture.freeze();
+    fixture.refused(&["reference authorization differs from the preserved closeout"]);
+    // Without either linkage the preserved allocation records no authorization.
+    let raw = fixture.raw.clone();
+    fixture.allocation("alloc-m")["authorization"] = raw;
+    fixture.entry("alloc-m").closeout_carries_authorization = false;
+    fixture
+        .closeout("alloc-m")
+        .as_object_mut()
+        .unwrap()
+        .remove("authorization");
+    fixture.materialize();
+    fixture.refused(&["preserved allocation records no authorization"]);
+}
+
+#[test]
+fn preflight_reports_compatible_synthetic_evidence_without_writing() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation", "reuse"], "stopped-multi");
+    fixture.reuse_format("alloc-x", &["bounded_enhancement"], "expired");
+    fixture.results["native_turns"] = json!(3);
+    fixture.freeze();
+    let packet = fixture.packet();
+    let before = snapshot(&fixture.ws.root);
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 0, "{}", result.text);
+    let report = &result.output;
+    assert_eq!(report["status"], "COMPATIBLE", "{}", result.text);
+    assert_eq!(
+        snapshot(&fixture.ws.root),
+        before,
+        "preflight must not write"
+    );
+    assert!(!fixture.ws.project.join(".agents").exists());
+    for name in [
+        "protected_authority",
+        "destination_separation",
+        "packet_record",
+        "package_identities",
+        "acceptance_set",
+        "allocations",
+        "observations",
+        "freshness",
+    ] {
+        assert_eq!(check(report, name)["status"], "PASS", "{name}: {report}");
+    }
+    assert_eq!(report["blockers"], json!([]));
+    assert_eq!(report["behavior"], "NOT_EVALUATED");
+    assert_eq!(
+        report["protected_identity"]["source_sha256"],
+        identity()["source_sha256"]
+    );
+    let multi = allocation_entry(report, "alloc-m");
+    assert_eq!(multi["status"], "COMPATIBLE");
+    assert_eq!(multi["closeout_status"], "STOPPED_BLOCKED");
+    assert_eq!(multi["attempts"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        multi["earliest_attempt_started_at_utc"],
+        "2026-09-07T10:00:00Z"
+    );
+    assert_eq!(allocation_entry(report, "alloc-x")["status"], "COMPATIBLE");
+    let observations = report["observations"].as_array().unwrap();
+    assert_eq!(observations.len(), 3);
+    assert!(observations.iter().all(|o| o["status"] == "PASS"));
+    // Unperformed obligations are listed, never implied by the compatible result.
+    let pending = serde_json::to_string(&report["pending"]).unwrap();
+    for needle in [
+        "independent",
+        "owner acceptance",
+        "results",
+        "installation destination",
+        "native observation for missing_evidence_refusal: NOT_PRESENT",
+        "native observation for creator_to_evaluator: NOT_PRESENT",
+    ] {
+        assert!(pending.contains(needle), "{needle}: {pending}");
+    }
+    assert!(
+        report["meaning"]
+            .as_str()
+            .unwrap()
+            .contains("not acceptance")
+    );
+    // The same bytes still install through the production path.
+    fixture.installed();
+}
+
+#[test]
+fn preflight_reports_unchanged_freeze_rule_with_first_attempt_time() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.reuse_format("alloc-x", &["reuse"], "expired");
+    fixture.results["native_turns"] = json!(4);
+    // Move alloc-m's window to open before the freeze while its first attempt follows it.
+    fixture.plan["frozen_at_utc"] = json!("2026-09-07T09:59:59.5Z");
+    fixture.allocation("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:59Z");
+    fixture.original("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:59Z");
+    fixture.closeout("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:59Z");
+    fixture.freeze();
+    let packet = fixture.packet();
+    let before = snapshot(&fixture.ws.root);
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    let report = &result.output;
+    assert_eq!(report["status"], "BLOCKED");
+    assert_eq!(
+        snapshot(&fixture.ws.root),
+        before,
+        "preflight must not write"
+    );
+    let blocked = allocation_entry(report, "alloc-m");
+    assert_eq!(blocked["status"], "BLOCKED", "{report}");
+    let blockers = serde_json::to_string(&blocked["blockers"]).unwrap();
+    assert!(
+        blockers.contains("allocation window must follow the frozen acceptance set"),
+        "{blockers}"
+    );
+    // The binding itself completed, so the owner sees the real first-attempt instant.
+    assert_eq!(blocked["attempts"].as_array().unwrap().len(), 3);
+    assert_eq!(blocked["frozen_at_utc"], "2026-09-07T09:59:59.5Z");
+    assert_eq!(blocked["started_at_utc"], "2026-09-07T09:59:59Z");
+    assert_eq!(
+        blocked["earliest_attempt_started_at_utc"],
+        "2026-09-07T10:00:00Z"
+    );
+    assert!(blocked["rule"].as_str().unwrap().contains("unchanged"));
+    assert_eq!(allocation_entry(report, "alloc-x")["status"], "COMPATIBLE");
+    let observations = report["observations"].as_array().unwrap();
+    let grounded = observations
+        .iter()
+        .find(|o| o["check"] == "grounded_creation")
+        .unwrap();
+    assert_eq!(grounded["status"], "NOT_PERFORMED", "{report}");
+    let reuse = observations.iter().find(|o| o["check"] == "reuse").unwrap();
+    assert_eq!(reuse["status"], "PASS", "{report}");
+    assert!(!report["pending"].as_array().unwrap().is_empty());
+    // The installer applies the same unchanged rule.
+    fixture.refused(&["allocation window must follow the frozen acceptance set"]);
+}
+
+#[test]
+fn preflight_surfaces_each_blocker_and_marks_dependent_checks_not_performed() {
+    // A stale acceptance-set pin blocks the set and everything bound to it.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.freeze();
+    let packet = fixture.packet();
+    let set_path = pin_path(&fixture.results["acceptance_set"]);
+    let set_bytes = fs::read(&set_path).unwrap();
+    fs::write(&set_path, b"{}").unwrap();
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    let report = &result.output;
+    assert_eq!(report["status"], "BLOCKED");
+    assert_eq!(check(report, "packet_record")["status"], "PASS", "{report}");
+    assert_eq!(check(report, "package_identities")["status"], "PASS");
+    assert_eq!(check(report, "acceptance_set")["status"], "BLOCKED");
+    assert!(
+        check(report, "acceptance_set")["reason"]
+            .as_str()
+            .unwrap()
+            .contains("stale evidence")
+    );
+    assert_eq!(check(report, "allocations")["status"], "NOT_PERFORMED");
+    assert_eq!(check(report, "observations")["status"], "NOT_PERFORMED");
+    fs::write(&set_path, set_bytes).unwrap();
+    // A framework inside the project is an incompatible destination; the rest still runs.
+    let nested = fixture.ws.project.join("framework-copy");
+    for (relative, bytes) in snapshot(&fixture.ws.framework) {
+        write(&nested.join(relative), &bytes);
+    }
+    let result = fixture.ws.preflight_with(&nested, &packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    let report = &result.output;
+    assert_eq!(check(report, "destination_separation")["status"], "BLOCKED");
+    assert!(
+        check(report, "destination_separation")["reason"]
+            .as_str()
+            .unwrap()
+            .contains("separate")
+    );
+    assert_eq!(check(report, "packet_record")["status"], "PASS", "{report}");
+    assert_eq!(
+        check(report, "acceptance_set")["status"],
+        "PASS",
+        "{report}"
+    );
+    assert_eq!(check(report, "package_identities")["status"], "BLOCKED");
+    assert_eq!(check(report, "allocations")["status"], "NOT_PERFORMED");
+    fs::remove_dir_all(&nested).unwrap();
+    // A packet missing a required field blocks before any selection is read.
+    let mut record = fixture.packet_record();
+    record.as_object_mut().unwrap().remove("observations");
+    let partial = pin_path(&fixture.ws.put("partial-packet.json", &record));
+    let result = fixture.ws.preflight(&partial);
+    assert_eq!(result.code, 2, "{}", result.text);
+    let report = &result.output;
+    assert_eq!(check(report, "packet_record")["status"], "BLOCKED");
+    for name in [
+        "package_identities",
+        "acceptance_set",
+        "allocations",
+        "observations",
+        "freshness",
+    ] {
+        assert_eq!(
+            check(report, name)["status"],
+            "NOT_PERFORMED",
+            "{name}: {report}"
+        );
+    }
+    assert!(!report["pending"].as_array().unwrap().is_empty());
+    // An omitted ledger attempt blocks only its allocation; a second allocation stays
+    // compatible and the observation bound to the blocked one is not performed.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.reuse_format("alloc-x", &["reuse"], "expired");
+    fixture.results["native_turns"] = json!(4);
+    fixture.allocation("alloc-m")["attempts"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    fixture.freeze();
+    let packet = fixture.packet();
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    let report = &result.output;
+    let blocked = allocation_entry(report, "alloc-m");
+    assert_eq!(blocked["status"], "BLOCKED");
+    assert!(
+        serde_json::to_string(&blocked["blockers"])
+            .unwrap()
+            .contains("closeout differs from its ledger")
+    );
+    assert_eq!(allocation_entry(report, "alloc-x")["status"], "COMPATIBLE");
+    let observations = report["observations"].as_array().unwrap();
+    assert_eq!(
+        observations
+            .iter()
+            .find(|o| o["check"] == "grounded_creation")
+            .unwrap()["status"],
+        "NOT_PERFORMED"
+    );
+    assert_eq!(
+        observations.iter().find(|o| o["check"] == "reuse").unwrap()["status"],
+        "PASS"
+    );
+    // A duplicate ledger attempt and a contradicted outcome are each reported.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    let row = fixture.allocation("alloc-m")["attempts"][0].clone();
+    fixture.allocation("alloc-m")["attempts"]
+        .as_array_mut()
+        .unwrap()
+        .push(row);
+    fixture.closeout("alloc-m")["attempts_used"] = json!(5);
+    fixture.freeze();
+    let result = fixture.ws.preflight(&fixture.packet());
+    assert_eq!(result.code, 2, "{}", result.text);
+    let text = serde_json::to_string(&result.output["blockers"]).unwrap();
+    assert!(
+        text.contains("duplicate allocation attempt")
+            || text.contains("native records differ from its attempt count"),
+        "{text}"
+    );
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    let index = ledger_index(&mut fixture, "alloc-m", "alloc-m-a0");
+    fixture.allocation("alloc-m")["attempts"][index]["outcome"] = json!("PASS");
+    fixture.freeze();
+    let result = fixture.ws.preflight(&fixture.packet());
+    assert_eq!(result.code, 2, "{}", result.text);
+    assert!(
+        serde_json::to_string(&result.output["blockers"])
+            .unwrap()
+            .contains("completion record contradicts the PASS outcome"),
+        "{}",
+        result.text
+    );
+}
+
+#[test]
+fn preflight_observation_needs_a_recorded_passing_attempt() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.freeze();
+    // An observation claiming PASS for the attempt nobody judged.
+    let mut invented = fixture.observations["missing_evidence_refusal"].clone();
+    invented["schema_version"] = json!("devforge.manual-local-observation/v2");
+    invented["acceptance_set"] = fixture.results["acceptance_set"].clone();
+    invented["allocation"] = fixture.entry("alloc-m").pin.clone();
+    invented["attempt_id"] = json!("alloc-m-a1");
+    invented["started_at_utc"] = json!("2026-09-07T10:00:00.6Z");
+    invented["finished_at_utc"] = json!("2026-09-07T10:00:00.9Z");
+    let invented = fixture.ws.put("invented-observation.json", &invented);
+    let mut record = fixture.packet_record();
+    record["observations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"check": "missing_evidence_refusal", "observation": invented}));
+    // A current-interval (v1) observation has no interval to check in a preflight.
+    record["observations"].as_array_mut().unwrap().push(
+        json!({"check": "bounded_enhancement",
+            "observation": fixture.results["checks"]["bounded_enhancement"]["native_observation"]}),
+    );
+    let packet = pin_path(&fixture.ws.put("invented-packet.json", &record));
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    let report = &result.output;
+    let observations = report["observations"].as_array().unwrap();
+    let judged = observations
+        .iter()
+        .find(|o| o["check"] == "grounded_creation")
+        .unwrap();
+    assert_eq!(judged["status"], "PASS", "{report}");
+    let invented = observations
+        .iter()
+        .find(|o| o["check"] == "missing_evidence_refusal")
+        .unwrap();
+    assert_eq!(invented["status"], "BLOCKED");
+    assert!(
+        invented["reason"]
+            .as_str()
+            .unwrap()
+            .contains("reused attempt did not pass"),
+        "{report}"
+    );
+    let current = observations
+        .iter()
+        .find(|o| o["check"] == "bounded_enhancement")
+        .unwrap();
+    assert_eq!(current["status"], "BLOCKED");
+    assert!(
+        current["reason"]
+            .as_str()
+            .unwrap()
+            .contains("results interval"),
+        "{report}"
+    );
+}
+
+#[test]
+fn preflight_requires_the_pinned_authority_and_never_installs() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.freeze();
+    let packet = fixture.packet();
+    let id = identity();
+    let mut executable = id["executable"].clone();
+    executable["sha256"] = json!("0".repeat(64));
+    write_authority(
+        &fixture.ws.authority,
+        &authority_record(&executable, &id["source_sha256"]),
+    );
+    let before = snapshot(&fixture.ws.root);
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    assert_eq!(result.output["status"], "BLOCKED");
+    let reason = result.output["reason"].as_str().unwrap();
+    assert!(reason.contains("protected authority"), "{reason}");
+    assert!(reason.contains("executable identity"), "{reason}");
+    assert!(result.output.get("checks").is_none(), "{}", result.text);
+    assert_eq!(snapshot(&fixture.ws.root), before);
+    // A copy of the executable at another path is not the pinned authority either.
+    write_authority(
+        &fixture.ws.authority,
+        &authority_record(&id["executable"], &id["source_sha256"]),
+    );
+    let copy = fixture.ws.root.join("devforge-copy");
+    fs::copy(BIN, &copy).unwrap();
+    fs::set_permissions(&copy, fs::Permissions::from_mode(0o755)).unwrap();
+    let args = [
+        "install",
+        "check-local-evidence",
+        "--project",
+        fixture.ws.project.to_str().unwrap(),
+        "--framework",
+        fixture.ws.framework.to_str().unwrap(),
+        "--packet",
+        packet.to_str().unwrap(),
+        "--authority",
+        fixture.ws.authority.to_str().unwrap(),
+    ];
+    let result = run(copy.to_str().unwrap(), &args);
+    assert_eq!(result.code, 2, "{}", result.text);
+    assert!(
+        result.output["reason"]
+            .as_str()
+            .unwrap()
+            .contains("executable identity"),
+        "{}",
+        result.text
+    );
+    assert!(!fixture.ws.project.join(".agents").exists());
 }

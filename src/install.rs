@@ -70,6 +70,19 @@ pub enum Action {
         #[arg(long)]
         authority: PathBuf,
     },
+    /// Check whether preserved local-adoption evidence is mechanically consumable by
+    /// `manual-experts`, through the same readers, without installing or mutating anything.
+    CheckLocalEvidence {
+        /// DevForgeAI checkout containing providers/codex/plugins/devforgeai.
+        #[arg(long)]
+        framework: PathBuf,
+        /// Preflight packet naming the selected set, packages, allocations and observations.
+        #[arg(long)]
+        packet: PathBuf,
+        /// Owner-controlled record pinning this executable and its source identity.
+        #[arg(long)]
+        authority: PathBuf,
+    },
 }
 
 pub fn run(action: &Action, project: Option<&Path>) -> Result<Value> {
@@ -83,6 +96,16 @@ pub fn run(action: &Action, project: Option<&Path>) -> Result<Value> {
             project.context("--project is required")?,
             framework,
             evidence,
+            authority,
+        ),
+        Action::CheckLocalEvidence {
+            framework,
+            packet,
+            authority,
+        } => check_local_evidence(
+            project.context("--project is required")?,
+            framework,
+            packet,
             authority,
         ),
     }
@@ -1349,8 +1372,16 @@ const ALLOCATION_V1: &str = "devforge.manual-local-allocation/v1";
 /// A preserved prior allocation whose recorded passing attempts may be reused.
 struct Allocation {
     id: String,
+    /// The reference's normalized status, equal to the closeout's normalized status.
+    status: String,
+    /// The preserved closeout's raw status, as written.
+    closeout_status: String,
     start: i128,
     deadline: i128,
+    /// The window as the reference wrote it, for reporting.
+    started_at_utc: Value,
+    deadline_utc: Value,
+    max_attempts: i64,
     attempts: BTreeMap<String, Value>,
     used: bool,
 }
@@ -1377,6 +1408,10 @@ struct Closeout {
     slots: Option<BTreeMap<String, Value>>,
     /// Native attempt facts the closeout records, each of which must match a ledger row.
     natives: Vec<Native>,
+    /// The natives enumerate every attempt, so every ledger row must be named by exactly one.
+    complete: bool,
+    /// The approval the closeout pins when the preserved allocation records none.
+    authorization: Option<Value>,
 }
 
 struct Native {
@@ -1384,10 +1419,17 @@ struct Native {
     actor: Option<String>,
     start: Option<i128>,
     end: Option<i128>,
+    /// `Some(true)` for a recorded passing workflow judgment, `Some(false)` for any
+    /// other recorded judgment, `None` when the closeout records no judgment.
     passed: Option<bool>,
+    /// A `PASS` ledger outcome needs a recorded passing judgment; a process exit is not one.
+    judgment_required: bool,
     launch: Option<Value>,
     completion: Option<Value>,
     transcript: Option<Value>,
+    /// Completion facts the closeout records inline, compared with the pinned completion.
+    returncode: Option<Value>,
+    timed_out: Option<Value>,
 }
 
 fn optional_pin(value: &Value) -> Result<Option<Value>> {
@@ -1426,6 +1468,8 @@ fn closeout_facts(closeout: &Value, original: &Value) -> Result<Closeout> {
                 attempts: get(closeout, "native_attempts")?.clone(),
                 slots,
                 natives: Vec::new(),
+                complete: false,
+                authorization: None,
             })
         }
         "COMPLETED_BOUNDED_EVALUATOR_RETURN" => {
@@ -1447,10 +1491,15 @@ fn closeout_facts(closeout: &Value, original: &Value) -> Result<Closeout> {
                     start: None,
                     end: None,
                     passed: None,
+                    judgment_required: false,
                     launch: Some(pin_of(get(closeout, "launch")?)?),
                     completion: Some(pin_of(get(closeout, "completion")?)?),
                     transcript: Some(pin_of(get(closeout, "transcript")?)?),
+                    returncode: None,
+                    timed_out: None,
                 }],
+                complete: false,
+                authorization: None,
             })
         }
         "STOPPED_BLOCKED" => {
@@ -1458,10 +1507,76 @@ fn closeout_facts(closeout: &Value, original: &Value) -> Result<Closeout> {
                 get(closeout, "clock_restarted")? == &Value::Bool(false),
                 "preserved closeout reports a restarted clock",
             )?;
+            let attempts = get(closeout, "attempts_used")?.clone();
+            let start = time(get(closeout, "started_at_utc")?)?;
+            let deadline = time(get(closeout, "original_deadline_utc")?)?;
+            if let Some(entries) = get(closeout, "native")?.as_array() {
+                // The multi-attempt recording (2026-09-10 replacement closeout): one
+                // native record per attempt with its own pins and an inline completion,
+                // the allocation and approval pinned by the closeout, no `preserved` block,
+                // and a workflow judgment only where one was actually made.
+                require(
+                    !entries.is_empty() || attempts == json!(0),
+                    "stopped closeout has attempts but no native evidence",
+                )?;
+                require(
+                    attempts == json!(entries.len()),
+                    "stopped closeout native records differ from its attempt count",
+                )?;
+                require(
+                    pin_of(get(closeout, "allocation")?)? == *original,
+                    "closeout is for a different allocation",
+                )?;
+                let mut natives = Vec::new();
+                let mut roles = BTreeSet::new();
+                for entry in entries {
+                    let role = text(get(entry, "role")?, "closeout native role")?;
+                    require(
+                        roles.insert(role.to_string()),
+                        "duplicate closeout native record",
+                    )?;
+                    let end = optional_time(get(entry, "finished_at_utc")?)?;
+                    let inline = get(entry, "native_completion")?;
+                    let (mut returncode, mut timed_out) = (None, None);
+                    if !inline.is_null() {
+                        require(
+                            optional_time(get(inline, "finished_at_utc")?)? == end,
+                            "closeout native completion differs from its record",
+                        )?;
+                        returncode = Some(get(inline, "returncode")?.clone());
+                        timed_out = Some(get(inline, "timed_out")?.clone());
+                    }
+                    natives.push(Native {
+                        role: Some(role.to_string()),
+                        actor: get(entry, "actor")?.as_str().map(str::to_string),
+                        start: optional_time(get(entry, "started_at_utc")?)?,
+                        end,
+                        passed: get(entry, "workflow_outcome")?
+                            .as_str()
+                            .map(|outcome| outcome == "PASS"),
+                        judgment_required: true,
+                        launch: optional_pin(get(entry, "launch")?)?,
+                        completion: optional_pin(get(entry, "completion")?)?,
+                        transcript: optional_pin(get(entry, "transcript")?)?,
+                        returncode,
+                        timed_out,
+                    });
+                }
+                return Ok(Closeout {
+                    status: "STOPPED_BLOCKED",
+                    start,
+                    deadline,
+                    attempts,
+                    slots: None,
+                    natives,
+                    complete: true,
+                    authorization: optional_pin(get(closeout, "authorization")?)?,
+                });
+            }
             let native = sub(closeout, "native")?;
             let preserved = sub(closeout, "preserved")?;
             require(
-                !obj(native)?.is_empty() || get(closeout, "attempts_used")? == &json!(0),
+                !obj(native)?.is_empty() || attempts == json!(0),
                 "stopped closeout has attempts but no native evidence",
             )?;
             let natives = if obj(native)?.is_empty() {
@@ -1475,18 +1590,23 @@ fn closeout_facts(closeout: &Value, original: &Value) -> Result<Closeout> {
                     passed: get(native, "workflow_outcome")?
                         .as_str()
                         .map(|outcome| outcome == "PASS"),
+                    judgment_required: false,
                     launch: optional_pin(get(preserved, "launch")?)?,
                     completion: optional_pin(get(preserved, "completion")?)?,
                     transcript: optional_pin(get(preserved, "transcript")?)?,
+                    returncode: None,
+                    timed_out: None,
                 }]
             };
             Ok(Closeout {
                 status: "STOPPED_BLOCKED",
-                start: time(get(closeout, "started_at_utc")?)?,
-                deadline: time(get(closeout, "original_deadline_utc")?)?,
-                attempts: get(closeout, "attempts_used")?.clone(),
+                start,
+                deadline,
+                attempts,
                 slots: None,
                 natives,
+                complete: false,
+                authorization: None,
             })
         }
         other => Err(refuse(&format!(
@@ -1507,6 +1627,25 @@ fn allocation(
     record: &Value,
     owner: &str,
     frozen: i128,
+    identities: &Value,
+    evidence: &mut Evidence,
+) -> Result<Allocation> {
+    let loaded = bind_allocation(reference, record, owner, identities, evidence)?;
+    require(
+        frozen < loaded.start,
+        "allocation window must follow the frozen acceptance set",
+    )?;
+    Ok(loaded)
+}
+
+/// Bind one allocation reference to its preserved sources: everything
+/// `allocation` checks except the frozen-set chronology, which the caller
+/// applies. The preflight uses this to report the binding and that rule
+/// separately without weakening either.
+fn bind_allocation(
+    reference: &Value,
+    record: &Value,
+    owner: &str,
     identities: &Value,
     evidence: &mut Evidence,
 ) -> Result<Allocation> {
@@ -1547,10 +1686,7 @@ fn allocation(
     )?;
     let start = time(&doc["started_at_utc"])?;
     let deadline = time(&doc["deadline_utc"])?;
-    require(
-        frozen < start && start < deadline,
-        "allocation window must follow the frozen acceptance set",
-    )?;
+    require(start < deadline, "inverted allocation window")?;
     let max_attempts = doc["max_attempts"].as_i64().unwrap_or_default();
     require(
         is_int(&doc["max_attempts"]) && max_attempts > 0,
@@ -1588,6 +1724,18 @@ fn allocation(
         !linked_set.is_null() && pin_of(&linked_set)? == doc["acceptance_set"],
         "preserved allocation is bound to a different acceptance set",
     )?;
+    evidence.walk(&original)?;
+    let rows = list(&doc["attempts"])?;
+    require(
+        i64::try_from(rows.len()).is_ok_and(|n| n <= max_attempts),
+        "allocation attempt limit exceeded",
+    )?;
+    let closeout = evidence.document(&doc["closeout"], false)?;
+    let facts = closeout_facts(&closeout, &doc["original_allocation"])?;
+    // The approval is linked through whichever recorded form the preserved
+    // allocation used: an `authorization` pin, an `authorization` text (then the
+    // reference pins the allocation record itself), an `approval_ref` pin, or a
+    // pin carried by its closeout.
     match get(&original, "authorization")? {
         Value::String(_) => require(
             doc["authorization"] == doc["original_allocation"],
@@ -1597,16 +1745,16 @@ fn allocation(
             pin_of(get(&original, "authorization")?)? == doc["authorization"],
             "reference authorization differs from the preserved allocation",
         )?,
+        Value::Null if get(&original, "approval_ref")?.is_object() => require(
+            pin_of(get(&original, "approval_ref")?)? == doc["authorization"],
+            "reference authorization differs from the preserved allocation",
+        )?,
+        Value::Null if facts.authorization.is_some() => require(
+            facts.authorization.as_ref() == Some(&doc["authorization"]),
+            "reference authorization differs from the preserved closeout",
+        )?,
         _ => return Err(refuse("preserved allocation records no authorization")),
     }
-    evidence.walk(&original)?;
-    let rows = list(&doc["attempts"])?;
-    require(
-        i64::try_from(rows.len()).is_ok_and(|n| n <= max_attempts),
-        "allocation attempt limit exceeded",
-    )?;
-    let closeout = evidence.document(&doc["closeout"], false)?;
-    let facts = closeout_facts(&closeout, &doc["original_allocation"])?;
     require(
         is(&doc["status"], facts.status),
         "reference status differs from the preserved closeout",
@@ -1683,6 +1831,7 @@ fn allocation(
                 "closeout slot state differs from the attempt",
             )?;
         }
+        let mut named_by = 0;
         for (native, seen) in facts.natives.iter().zip(matched.iter_mut()) {
             let named = native.role.as_deref() == Some(attempt_id.as_str())
                 || native.launch.as_ref() == Some(&row["launch"])
@@ -1704,12 +1853,24 @@ fn allocation(
                     && native
                         .completion
                         .as_ref()
-                        .is_none_or(|c| *c == row["completion"]),
+                        .is_none_or(|c| *c == row["completion"])
+                    && native
+                        .returncode
+                        .as_ref()
+                        .is_none_or(|r| r == &completion["returncode"])
+                    && native
+                        .timed_out
+                        .as_ref()
+                        .is_none_or(|t| t == &completion["timed_out"]),
                 "closeout native record differs from the attempt",
             )?;
             require(
                 native.passed.is_none_or(|p| p || !passed),
                 "preserved closeout records the attempt as not passed",
+            )?;
+            require(
+                !(native.judgment_required && passed && native.passed.is_none()),
+                "preserved closeout records no workflow judgment for the attempt; a PASS outcome cannot be inferred from its process exit",
             )?;
             if let Some(transcript) = &native.transcript {
                 require(
@@ -1718,7 +1879,12 @@ fn allocation(
                 )?;
             }
             *seen = true;
+            named_by += 1;
         }
+        require(
+            !facts.complete || named_by == 1,
+            "closeout native records must name the attempt exactly once",
+        )?;
         require(
             attempts.insert(attempt_id, row.clone()).is_none(),
             "duplicate allocation attempt",
@@ -1730,8 +1896,16 @@ fn allocation(
     )?;
     Ok(Allocation {
         id,
+        status: facts.status.to_string(),
+        closeout_status: get(&closeout, "status")?
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
         start,
         deadline,
+        started_at_utc: doc["started_at_utc"].clone(),
+        deadline_utc: doc["deadline_utc"].clone(),
+        max_attempts,
         attempts,
         used: false,
     })
@@ -1760,159 +1934,19 @@ fn local_baseline(
         ],
         "local baseline record",
     )?;
-    let project = evidence.project.clone();
-    let framework = evidence.framework.clone();
     require(
-        record["project_root"] == json!(project),
+        record["project_root"] == json!(evidence.project),
         "wrong local installation destination",
     )?;
     let owner = text(&record["owner"], "local owner")?.to_string();
     evidence.pin(&record["authorization"], true)?;
     evidence.refs(&record["historical_evidence"])?;
-    let rows = record["packages"].as_array();
-    let mut names = Vec::new();
-    for row in rows.into_iter().flatten() {
-        names.push(get(row, "name")?);
-    }
-    let expected_names: Vec<Value> = NAMES.iter().map(|n| json!(n)).collect();
-    require(
-        rows.is_some_and(|r| r.len() == NAMES.len())
-            && set_eq(&names, &expected_names.iter().collect::<Vec<_>>())
-            && packages.keys().eq(NAMES.iter()),
-        "local baseline requires both exact manual packages",
-    )?;
-    let mut authors = BTreeSet::new();
-    let mut catalogs = Map::new();
-    for package in list(&record["packages"])? {
-        exact(
-            package,
-            &[
-                "name",
-                "manifest",
-                "source_manifest",
-                "specification",
-                "cases",
-                "author",
-            ],
-            "local package",
-        )?;
-        let name = package["name"].as_str().unwrap_or_default();
-        authors.insert(text(&package["author"], "package author")?.to_string());
-        let runtime = evidence.document(&package["manifest"], false)?;
-        require(
-            runtime
-                == json!({"schema_version": "devforge.expert-runtime-manifest/v1", "name": name,
-                          "files_sha256": packages[name]}),
-            "local runtime manifest differs from planned bytes",
-        )?;
-        let source = evidence.document(&package["source_manifest"], false)?;
-        let root = framework
-            .join("providers/codex/plugins/devforgeai/skills")
-            .join(name);
-        exact(&source, &["source_root", "files_sha256"], "source manifest")?;
-        let actual = source_files(&root)?;
-        require(
-            source == json!({"source_root": root, "files_sha256": actual}),
-            "source identity changed",
-        )?;
-        for (relative, digest) in &actual {
-            evidence.pin(
-                &json!({"path": root.join(relative), "sha256": digest}),
-                false,
-            )?;
-        }
-        evidence.source_trees.insert(root.clone(), actual);
-        require(
-            index(&package["cases"], "path")? == &json!(root.join("evals/evals.json")),
-            "wrong source case catalog",
-        )?;
-        let catalog = evidence.document(&package["cases"], false)?;
-        let cases = match obj(&catalog)?.get("cases") {
-            Some(cases) => cases,
-            None => get(&catalog, "evals")?,
-        };
-        require(
-            cases.as_array().is_some_and(|c| !c.is_empty()),
-            "missing qualification cases",
-        )?;
-        let mut ids = Map::new();
-        let mut count = 0;
-        for case in list(cases)? {
-            ids.insert(
-                text(get(case, "id")?, "case ID")?.to_string(),
-                json!("NOT_RUN"),
-            );
-            count += 1;
-        }
-        require(ids.len() == count, "duplicate qualification cases")?;
-        catalogs.insert(name.to_string(), Value::Object(ids));
-        evidence.pin(&package["specification"], false)?;
-    }
-    let plan = evidence.document(&record["acceptance_set"], true)?;
-    exact(
-        &plan,
-        &[
-            "schema_version",
-            "project_root",
-            "owner",
-            "authorization",
-            "packages",
-            "checks",
-            "frozen_at_utc",
-            "max_seconds",
-            "max_native_turns",
-            "historical_evidence",
-        ],
-        "local acceptance set",
-    )?;
-    require(
-        is(
-            &plan["schema_version"],
-            "devforge.manual-local-acceptance-set/v1",
-        ),
-        "unsupported local set",
-    )?;
-    require(
-        [
-            "owner",
-            "project_root",
-            "authorization",
-            "packages",
-            "historical_evidence",
-        ]
-        .iter()
-        .all(|key| plan[*key] == record[*key]),
-        "local set authority/identity differs",
-    )?;
-    require(
-        plan["checks"].as_object().is_some_and(|c| {
-            c.len() == LOCAL_CHECKS.len() && LOCAL_CHECKS.iter().all(|(k, _)| c.contains_key(*k))
-        }),
-        "local acceptance check coverage differs",
-    )?;
-    for (key, kind) in LOCAL_CHECKS {
-        let check = exact(
-            &plan["checks"][key],
-            &["kind", "expectations"],
-            "predefined check",
-        )?;
-        require(
-            is(&check["kind"], kind)
-                && check["expectations"]
-                    .as_array()
-                    .is_some_and(|e| !e.is_empty()),
-            "acceptance check weakened",
-        )?;
-        for expectation in list(&check["expectations"])? {
-            text(expectation, "predefined expectation")?;
-        }
-    }
-    require(
-        ["max_seconds", "max_native_turns"]
-            .iter()
-            .all(|key| is_int(&plan[*key]) && plan[*key].as_i64().is_some_and(|v| v > 0)),
-        "unbounded local set",
-    )?;
+    let LocalPackages {
+        authors,
+        catalogs,
+        identities,
+    } = local_packages(&record["packages"], packages, &mut evidence)?;
+    let (plan, frozen) = local_set(record, &mut evidence)?;
     let results = evidence.document(&record["results"], false)?;
     // v2 results may reuse observations preserved from earlier approved allocations.
     let reuse = is(&results["schema_version"], RESULTS_V2);
@@ -1942,7 +1976,6 @@ fn local_baseline(
     )?;
     let start = time(&results["started_at_utc"])?;
     let end = time(&results["finished_at_utc"])?;
-    let frozen = time(&plan["frozen_at_utc"])?;
     require(
         frozen < start && start <= end,
         "acceptance set must be predefined",
@@ -1968,14 +2001,6 @@ fn local_baseline(
     let mut observations = BTreeSet::new();
     let mut reused = BTreeSet::new();
     let mut actors = BTreeSet::new();
-    let mut identities = Map::new();
-    for package in list(&record["packages"])? {
-        identities.insert(
-            package["name"].as_str().unwrap_or_default().to_string(),
-            package["manifest"].clone(),
-        );
-    }
-    let identities = Value::Object(identities);
     let mut allocations: BTreeMap<String, Allocation> = BTreeMap::new();
     if reuse {
         for reference in list(&results["allocations"])? {
@@ -2018,125 +2043,26 @@ fn local_baseline(
                 .is_some_and(|e| e.contains(&result["native_observation"])),
             "native observation not bound to check",
         )?;
-        let observation = evidence.document(&result["native_observation"], false)?;
-        let prior = is(&observation["schema_version"], OBSERVATION_V2);
-        let mut fields = vec![
-            "schema_version",
-            "acceptance_set",
-            "outcome",
-            "packages",
-            "actor",
-            "native_client",
-            "model",
-            "reasoning_effort",
-            "state_isolation",
-            "transcript",
-            "artifacts",
-            "started_at_utc",
-            "finished_at_utc",
-            "manual_transfer",
-        ];
-        if prior {
-            fields.extend(["allocation", "attempt_id"]);
-        }
-        exact(&observation, &fields, "native local observation")?;
-        require(
-            (prior || is(&observation["schema_version"], OBSERVATION_V1))
-                && observation["acceptance_set"] == record["acceptance_set"]
-                && observation["packages"] == identities
-                && is(&observation["outcome"], "PASS")
-                && is(&observation["native_client"], "codex"),
-            "native observation identity/result differs",
-        )?;
-        text(&observation["model"], "observed native model")?;
-        actors.insert(text(&observation["actor"], "observed native actor")?.to_string());
-        text(
-            &observation["reasoning_effort"],
-            "observed reasoning effort",
-        )?;
-        let observed_start = time(&observation["started_at_utc"])?;
-        let observed_end = time(&observation["finished_at_utc"])?;
         let path = index(&result["native_observation"], "path")?
             .as_str()
             .unwrap_or_default()
             .to_string();
-        if prior {
-            // A preserved observation is validated against the allocation that
-            // produced it and is never counted as a turn of this interval.
-            require(reuse, "reused observation requires reuse results")?;
-            let allocation_path = text(
-                index(&observation["allocation"], "path")?,
-                "allocation path",
-            )?;
-            let allocation = allocations
-                .get_mut(allocation_path)
-                .ok_or_else(|| refuse("reused observation references an unlisted allocation"))?;
-            require(
-                allocation.start <= observed_start
-                    && observed_start <= observed_end
-                    && observed_end <= allocation.deadline,
-                "reused observation outside its allocation window",
-            )?;
-            let attempt_id = text(&observation["attempt_id"], "attempt ID")?;
-            let attempt = allocation.attempts.get(attempt_id).ok_or_else(|| {
-                refuse("reused observation is not a recorded attempt of its allocation")
-            })?;
-            require(
-                is(&attempt["outcome"], "PASS"),
-                "reused attempt did not pass",
-            )?;
-            require(
-                attempt["actor"] == observation["actor"]
-                    && time(&attempt["started_at_utc"])? == observed_start
-                    && time(&attempt["finished_at_utc"])? == observed_end,
-                "reused observation differs from its recorded attempt",
-            )?;
-            require(
-                attempt["evidence"]
-                    .as_array()
-                    .is_some_and(|e| e.contains(&observation["transcript"])),
-                "reused observation transcript is not the attempt's recorded evidence",
-            )?;
-            allocation.used = true;
+        let observed = local_observation(
+            key,
+            &result["native_observation"],
+            record,
+            &identities,
+            reuse,
+            Some((start, end)),
+            &mut allocations,
+            &mut evidence,
+        )?;
+        actors.insert(observed.actor);
+        if observed.prior {
             reused.insert(path);
         } else {
-            require(
-                start <= observed_start && observed_start <= observed_end && observed_end <= end,
-                "observation outside predefined set interval",
-            )?;
             observations.insert(path);
         }
-        evidence.pin(&observation["state_isolation"], false)?;
-        evidence.pin(&observation["transcript"], false)?;
-        evidence.refs(&observation["artifacts"])?;
-        if RECEIVING.contains(&key) {
-            let transfer = exact(
-                &observation["manual_transfer"],
-                &[
-                    "direction",
-                    "user",
-                    "user_request",
-                    "producer_output",
-                    "receiver_observation",
-                    "completed_action",
-                ],
-                "manual transfer",
-            )?;
-            require(
-                is(&transfer["direction"], key),
-                "wrong manual transfer direction",
-            )?;
-            text(&transfer["user"], "actual receiving user")?;
-            for field in [
-                "user_request",
-                "producer_output",
-                "receiver_observation",
-                "completed_action",
-            ] {
-                evidence.pin(&transfer[field], false)?;
-            }
-        }
-        evidence.walk(&observation)?;
     }
     require(
         i64::try_from(observations.len()).is_ok_and(|n| n <= turns.as_i64().unwrap_or_default()),
@@ -2247,6 +2173,748 @@ fn local_baseline(
         summary["reused_observations"] = json!(reused.len());
     }
     Ok(Validated { summary, evidence })
+}
+
+struct LocalPackages {
+    authors: BTreeSet<String>,
+    catalogs: Map<String, Value>,
+    /// Package name to runtime manifest pin: the candidate identity every observation binds.
+    identities: Value,
+}
+
+/// Bind the local package rows to the planned installation bytes and the current
+/// canonical source, exactly as installation does.
+fn local_packages(
+    rows: &Value,
+    packages: &BTreeMap<String, BTreeMap<String, String>>,
+    evidence: &mut Evidence,
+) -> Result<LocalPackages> {
+    let framework = evidence.framework.clone();
+    let listed = rows.as_array();
+    let mut names = Vec::new();
+    for row in listed.into_iter().flatten() {
+        names.push(get(row, "name")?);
+    }
+    let expected_names: Vec<Value> = NAMES.iter().map(|n| json!(n)).collect();
+    require(
+        listed.is_some_and(|r| r.len() == NAMES.len())
+            && set_eq(&names, &expected_names.iter().collect::<Vec<_>>())
+            && packages.keys().eq(NAMES.iter()),
+        "local baseline requires both exact manual packages",
+    )?;
+    let mut authors = BTreeSet::new();
+    let mut catalogs = Map::new();
+    let mut identities = Map::new();
+    for package in list(rows)? {
+        exact(
+            package,
+            &[
+                "name",
+                "manifest",
+                "source_manifest",
+                "specification",
+                "cases",
+                "author",
+            ],
+            "local package",
+        )?;
+        let name = package["name"].as_str().unwrap_or_default();
+        authors.insert(text(&package["author"], "package author")?.to_string());
+        let runtime = evidence.document(&package["manifest"], false)?;
+        require(
+            runtime
+                == json!({"schema_version": "devforge.expert-runtime-manifest/v1", "name": name,
+                          "files_sha256": packages[name]}),
+            "local runtime manifest differs from planned bytes",
+        )?;
+        let source = evidence.document(&package["source_manifest"], false)?;
+        let root = framework
+            .join("providers/codex/plugins/devforgeai/skills")
+            .join(name);
+        exact(&source, &["source_root", "files_sha256"], "source manifest")?;
+        let actual = source_files(&root)?;
+        require(
+            source == json!({"source_root": root, "files_sha256": actual}),
+            "source identity changed",
+        )?;
+        for (relative, digest) in &actual {
+            evidence.pin(
+                &json!({"path": root.join(relative), "sha256": digest}),
+                false,
+            )?;
+        }
+        evidence.source_trees.insert(root.clone(), actual);
+        require(
+            index(&package["cases"], "path")? == &json!(root.join("evals/evals.json")),
+            "wrong source case catalog",
+        )?;
+        let catalog = evidence.document(&package["cases"], false)?;
+        let cases = match obj(&catalog)?.get("cases") {
+            Some(cases) => cases,
+            None => get(&catalog, "evals")?,
+        };
+        require(
+            cases.as_array().is_some_and(|c| !c.is_empty()),
+            "missing qualification cases",
+        )?;
+        let mut ids = Map::new();
+        let mut count = 0;
+        for case in list(cases)? {
+            ids.insert(
+                text(get(case, "id")?, "case ID")?.to_string(),
+                json!("NOT_RUN"),
+            );
+            count += 1;
+        }
+        require(ids.len() == count, "duplicate qualification cases")?;
+        catalogs.insert(name.to_string(), Value::Object(ids));
+        evidence.pin(&package["specification"], false)?;
+        identities.insert(name.to_string(), package["manifest"].clone());
+    }
+    Ok(LocalPackages {
+        authors,
+        catalogs,
+        identities: Value::Object(identities),
+    })
+}
+
+/// Read the frozen local acceptance set a record pins and check it against the
+/// record's identity fields, the nine fixed checks and its limits. Returns the
+/// set and its frozen instant.
+fn local_set(record: &Value, evidence: &mut Evidence) -> Result<(Value, i128)> {
+    let plan = evidence.document(&record["acceptance_set"], true)?;
+    exact(
+        &plan,
+        &[
+            "schema_version",
+            "project_root",
+            "owner",
+            "authorization",
+            "packages",
+            "checks",
+            "frozen_at_utc",
+            "max_seconds",
+            "max_native_turns",
+            "historical_evidence",
+        ],
+        "local acceptance set",
+    )?;
+    require(
+        is(
+            &plan["schema_version"],
+            "devforge.manual-local-acceptance-set/v1",
+        ),
+        "unsupported local set",
+    )?;
+    require(
+        [
+            "owner",
+            "project_root",
+            "authorization",
+            "packages",
+            "historical_evidence",
+        ]
+        .iter()
+        .all(|key| plan[*key] == record[*key]),
+        "local set authority/identity differs",
+    )?;
+    require(
+        plan["checks"].as_object().is_some_and(|c| {
+            c.len() == LOCAL_CHECKS.len() && LOCAL_CHECKS.iter().all(|(k, _)| c.contains_key(*k))
+        }),
+        "local acceptance check coverage differs",
+    )?;
+    for (key, kind) in LOCAL_CHECKS {
+        let check = exact(
+            &plan["checks"][key],
+            &["kind", "expectations"],
+            "predefined check",
+        )?;
+        require(
+            is(&check["kind"], kind)
+                && check["expectations"]
+                    .as_array()
+                    .is_some_and(|e| !e.is_empty()),
+            "acceptance check weakened",
+        )?;
+        for expectation in list(&check["expectations"])? {
+            text(expectation, "predefined expectation")?;
+        }
+    }
+    require(
+        ["max_seconds", "max_native_turns"]
+            .iter()
+            .all(|key| is_int(&plan[*key]) && plan[*key].as_i64().is_some_and(|v| v > 0)),
+        "unbounded local set",
+    )?;
+    let frozen = time(&plan["frozen_at_utc"])?;
+    Ok((plan, frozen))
+}
+
+struct Observed {
+    actor: String,
+    /// The observation reuses a preserved allocation attempt (`v2`), not the current interval.
+    prior: bool,
+}
+
+/// Validate one native observation for check `key` exactly as installation does:
+/// candidate identity, PASS outcome, native client, model, actor, state isolation,
+/// transcript, artifacts, the receiving transfer, and either the current results
+/// `interval` or the preserved allocation attempt a `v2` observation reuses.
+#[allow(clippy::too_many_arguments)]
+fn local_observation(
+    key: &str,
+    reference: &Value,
+    record: &Value,
+    identities: &Value,
+    reuse: bool,
+    interval: Option<(i128, i128)>,
+    allocations: &mut BTreeMap<String, Allocation>,
+    evidence: &mut Evidence,
+) -> Result<Observed> {
+    let observation = evidence.document(reference, false)?;
+    let prior = is(&observation["schema_version"], OBSERVATION_V2);
+    let mut fields = vec![
+        "schema_version",
+        "acceptance_set",
+        "outcome",
+        "packages",
+        "actor",
+        "native_client",
+        "model",
+        "reasoning_effort",
+        "state_isolation",
+        "transcript",
+        "artifacts",
+        "started_at_utc",
+        "finished_at_utc",
+        "manual_transfer",
+    ];
+    if prior {
+        fields.extend(["allocation", "attempt_id"]);
+    }
+    exact(&observation, &fields, "native local observation")?;
+    require(
+        (prior || is(&observation["schema_version"], OBSERVATION_V1))
+            && observation["acceptance_set"] == record["acceptance_set"]
+            && observation["packages"] == *identities
+            && is(&observation["outcome"], "PASS")
+            && is(&observation["native_client"], "codex"),
+        "native observation identity/result differs",
+    )?;
+    text(&observation["model"], "observed native model")?;
+    let actor = text(&observation["actor"], "observed native actor")?.to_string();
+    text(
+        &observation["reasoning_effort"],
+        "observed reasoning effort",
+    )?;
+    let observed_start = time(&observation["started_at_utc"])?;
+    let observed_end = time(&observation["finished_at_utc"])?;
+    if prior {
+        // A preserved observation is validated against the allocation that
+        // produced it and is never counted as a turn of this interval.
+        require(reuse, "reused observation requires reuse results")?;
+        let allocation_path = text(
+            index(&observation["allocation"], "path")?,
+            "allocation path",
+        )?;
+        let allocation = allocations
+            .get_mut(allocation_path)
+            .ok_or_else(|| refuse("reused observation references an unlisted allocation"))?;
+        require(
+            allocation.start <= observed_start
+                && observed_start <= observed_end
+                && observed_end <= allocation.deadline,
+            "reused observation outside its allocation window",
+        )?;
+        let attempt_id = text(&observation["attempt_id"], "attempt ID")?;
+        let attempt = allocation.attempts.get(attempt_id).ok_or_else(|| {
+            refuse("reused observation is not a recorded attempt of its allocation")
+        })?;
+        require(
+            is(&attempt["outcome"], "PASS"),
+            "reused attempt did not pass",
+        )?;
+        require(
+            attempt["actor"] == observation["actor"]
+                && time(&attempt["started_at_utc"])? == observed_start
+                && time(&attempt["finished_at_utc"])? == observed_end,
+            "reused observation differs from its recorded attempt",
+        )?;
+        require(
+            attempt["evidence"]
+                .as_array()
+                .is_some_and(|e| e.contains(&observation["transcript"])),
+            "reused observation transcript is not the attempt's recorded evidence",
+        )?;
+        allocation.used = true;
+    } else {
+        let (start, end) = interval.ok_or_else(|| {
+            refuse("current-interval observation has no results interval to check")
+        })?;
+        require(
+            start <= observed_start && observed_start <= observed_end && observed_end <= end,
+            "observation outside predefined set interval",
+        )?;
+    }
+    evidence.pin(&observation["state_isolation"], false)?;
+    evidence.pin(&observation["transcript"], false)?;
+    evidence.refs(&observation["artifacts"])?;
+    if RECEIVING.contains(&key) {
+        let transfer = exact(
+            &observation["manual_transfer"],
+            &[
+                "direction",
+                "user",
+                "user_request",
+                "producer_output",
+                "receiver_observation",
+                "completed_action",
+            ],
+            "manual transfer",
+        )?;
+        require(
+            is(&transfer["direction"], key),
+            "wrong manual transfer direction",
+        )?;
+        text(&transfer["user"], "actual receiving user")?;
+        for field in [
+            "user_request",
+            "producer_output",
+            "receiver_observation",
+            "completed_action",
+        ] {
+            evidence.pin(&transfer[field], false)?;
+        }
+    }
+    evidence.walk(&observation)?;
+    Ok(Observed { actor, prior })
+}
+
+// ---- evidence preflight -----------------------------------------------------
+
+const PREFLIGHT_SCHEMA: &str = "devforge.manual-local-evidence-preflight/v1";
+const PREFLIGHT_MEANING: &str = "COMPATIBLE means only that every mechanical check within this preflight's documented scope passed for the selected bytes; it is not acceptance, qualification, an installation receipt or permission to run a model";
+const FREEZE_RULE: &str = "unchanged: the acceptance set must be frozen before the allocation window starts; a later first attempt does not satisfy it, and the recorded instants are preserved here for the owner's separate decision";
+
+/// Accumulates the preflight report: every independently detectable blocker is
+/// recorded, and a check whose prerequisite failed is marked NOT_PERFORMED
+/// rather than claimed.
+#[derive(Default)]
+struct Preflight {
+    checks: Vec<Value>,
+    blockers: Vec<String>,
+}
+
+impl Preflight {
+    fn pass(&mut self, check: &str, detail: Value) {
+        self.checks
+            .push(json!({"check": check, "status": "PASS", "detail": detail}));
+    }
+    fn block(&mut self, check: &str, reason: &str) {
+        self.blockers.push(format!("{check}: {reason}"));
+        self.checks
+            .push(json!({"check": check, "status": "BLOCKED", "reason": reason}));
+    }
+    fn skip(&mut self, check: &str, prerequisite: &str) {
+        self.checks
+            .push(json!({"check": check, "status": "NOT_PERFORMED",
+            "reason": format!("prerequisite not satisfied: {prerequisite}")}));
+    }
+    fn record<T>(
+        &mut self,
+        check: &str,
+        result: Result<T>,
+        detail: impl FnOnce(&T) -> Value,
+    ) -> Option<T> {
+        match result {
+            Ok(value) => {
+                self.pass(check, detail(&value));
+                Some(value)
+            }
+            Err(error) => {
+                self.block(check, &format!("{error:#}"));
+                None
+            }
+        }
+    }
+}
+
+/// Read the preflight packet: the adoption record's identity fields plus the
+/// selected allocation references and observation rows. No results, review or
+/// acceptance record is expected; their absence is reported as pending.
+fn read_packet(root_pin: &Value, evidence: &mut Evidence) -> Result<Value> {
+    let packet = evidence.document(root_pin, true)?;
+    exact(
+        &packet,
+        &[
+            "schema_version",
+            "project_root",
+            "owner",
+            "authorization",
+            "packages",
+            "acceptance_set",
+            "historical_evidence",
+            "allocations",
+            "observations",
+        ],
+        "preflight packet",
+    )?;
+    require(
+        is(&packet["schema_version"], PREFLIGHT_SCHEMA),
+        "unsupported preflight packet",
+    )?;
+    require(
+        packet["project_root"] == json!(evidence.project),
+        "wrong local installation destination",
+    )?;
+    text(&packet["owner"], "local owner")?;
+    evidence.pin(&packet["authorization"], true)?;
+    evidence.refs(&packet["historical_evidence"])?;
+    require(
+        packet["allocations"].is_array() && packet["observations"].is_array(),
+        "invalid preflight selection lists",
+    )?;
+    for row in list(&packet["observations"])? {
+        let row = exact(row, &["check", "observation"], "observation selection")?;
+        require(
+            LOCAL_CHECKS
+                .iter()
+                .any(|(id, kind)| *kind == "N" && is(&row["check"], id)),
+            "observation selection names no native check",
+        )?;
+        pin_of(&row["observation"])?;
+    }
+    Ok(packet)
+}
+
+/// Check-only preflight over preserved local-adoption evidence. It reuses the
+/// installer's readers (`local_packages`, `local_set`, `bind_allocation`,
+/// `local_observation`, `Evidence`) so its rules cannot drift from installation,
+/// applies the unchanged frozen-set chronology separately so the owner sees the
+/// preserved instants, and never installs, retires, mutates evidence, runs
+/// candidate code, executes hooks or calls a model.
+fn check_local_evidence(
+    project: &Path,
+    framework: &Path,
+    packet_path: &Path,
+    authority: &Path,
+) -> Result<Value> {
+    let project = crate::resolved(project)?;
+    ensure!(project.is_dir(), "project must already exist");
+    let framework = crate::resolved(framework)?;
+    // As for installation, the authority check precedes any evidence read; its
+    // failure is a refusal rather than a report.
+    let protected = verify_authority(authority, &project, &framework)?;
+    let mut report = Preflight::default();
+    report.pass(
+        "protected_authority",
+        json!({"executable": protected["executable"], "source_sha256": protected["source_sha256"]}),
+    );
+    if crate::separate(&project, &framework) {
+        report.pass(
+            "destination_separation",
+            json!({"project": project, "framework": framework}),
+        );
+    } else {
+        report.block(
+            "destination_separation",
+            &format!(
+                "project and framework must be separate directories; manual-experts refuses project {} with framework {}",
+                project.display(),
+                framework.display()
+            ),
+        );
+    }
+    let mut evidence = Evidence {
+        project: project.clone(),
+        framework: framework.clone(),
+        pins: BTreeMap::new(),
+        source_trees: BTreeMap::new(),
+    };
+    let packet_path = crate::resolved(packet_path)?;
+    let raw = fs::read(&packet_path).with_context(|| {
+        format!(
+            "manual expert evidence: cannot read {}",
+            packet_path.display()
+        )
+    })?;
+    let root_pin = json!({"path": packet_path, "sha256": crate::hash(&raw)});
+    let packet = report.record(
+        "packet_record",
+        read_packet(&root_pin, &mut evidence),
+        |p| {
+            json!({"owner": p["owner"],
+                "allocations": p["allocations"].as_array().map(Vec::len).unwrap_or_default(),
+                "observations": p["observations"].as_array().map(Vec::len).unwrap_or_default()})
+        },
+    );
+    let mut allocation_rows = Vec::new();
+    let mut observation_rows = Vec::new();
+    let mut observed_checks = BTreeSet::new();
+    let mut owner = String::new();
+    match &packet {
+        Some(packet) => {
+            owner = packet["owner"].as_str().unwrap_or_default().to_string();
+            let local = match planned_bytes(&framework).and_then(|p| selected_packages(&p)) {
+                Ok(planned) => report.record(
+                    "package_identities",
+                    local_packages(&packet["packages"], &planned, &mut evidence),
+                    |l| json!({"identities": l.identities, "authors": l.authors}),
+                ),
+                Err(error) => {
+                    report.block("package_identities", &format!("{error:#}"));
+                    None
+                }
+            };
+            let set = report.record(
+                "acceptance_set",
+                local_set(packet, &mut evidence),
+                |set| {
+                    json!({"pin": packet["acceptance_set"], "frozen_at_utc": set.0["frozen_at_utc"],
+                        "max_seconds": set.0["max_seconds"], "max_native_turns": set.0["max_native_turns"]})
+                },
+            );
+            if let (Some(local), Some((plan, frozen))) = (&local, &set) {
+                let mut allocations: BTreeMap<String, Allocation> = BTreeMap::new();
+                let mut blocked_allocations = BTreeSet::new();
+                let mut failures = 0;
+                for reference in list(&packet["allocations"])? {
+                    let mut entry =
+                        json!({"reference": reference, "status": "COMPATIBLE", "blockers": []});
+                    let key = pin_of(reference)
+                        .and_then(|p| text(&p["path"], "allocation path").map(str::to_string));
+                    let key = match key {
+                        Ok(key) => key,
+                        Err(error) => {
+                            let reason = format!("{error:#}");
+                            entry["status"] = json!("BLOCKED");
+                            entry["blockers"] = json!([reason]);
+                            report.block("allocation", &reason);
+                            failures += 1;
+                            allocation_rows.push(entry);
+                            continue;
+                        }
+                    };
+                    // Name the allocation even when its binding fails, so the owner can
+                    // find the blocked reference; the id is re-read from the pinned bytes.
+                    entry["allocation_id"] = evidence
+                        .document(reference, true)
+                        .ok()
+                        .and_then(|doc| doc.get("allocation_id").cloned())
+                        .unwrap_or(Value::Null);
+                    let mut blockers: Vec<String> = Vec::new();
+                    match bind_allocation(
+                        reference,
+                        packet,
+                        &owner,
+                        &local.identities,
+                        &mut evidence,
+                    ) {
+                        Ok(loaded) => {
+                            let mut rows: Vec<&Value> = loaded.attempts.values().collect();
+                            rows.sort_by_key(|a| time(&a["started_at_utc"]).unwrap_or_default());
+                            let ledger: Vec<Value> = rows
+                                .iter()
+                                .map(|a| {
+                                    json!({"attempt_id": a["attempt_id"], "actor": a["actor"],
+                                        "started_at_utc": a["started_at_utc"],
+                                        "finished_at_utc": a["finished_at_utc"], "outcome": a["outcome"]})
+                                })
+                                .collect();
+                            entry["allocation_id"] = json!(loaded.id);
+                            entry["allocation_status"] = json!(loaded.status);
+                            entry["closeout_status"] = json!(loaded.closeout_status);
+                            entry["started_at_utc"] = loaded.started_at_utc.clone();
+                            entry["deadline_utc"] = loaded.deadline_utc.clone();
+                            entry["max_attempts"] = json!(loaded.max_attempts);
+                            entry["earliest_attempt_started_at_utc"] = rows
+                                .first()
+                                .map(|a| a["started_at_utc"].clone())
+                                .unwrap_or(Value::Null);
+                            entry["attempts"] = json!(ledger);
+                            if *frozen >= loaded.start {
+                                blockers.push(
+                                    "allocation window must follow the frozen acceptance set"
+                                        .to_string(),
+                                );
+                                entry["frozen_at_utc"] = plan["frozen_at_utc"].clone();
+                                entry["rule"] = json!(FREEZE_RULE);
+                            } else if allocations.contains_key(&key) {
+                                blockers.push("duplicate allocation reference".to_string());
+                            } else {
+                                allocations.insert(key.clone(), loaded);
+                            }
+                        }
+                        Err(error) => blockers.push(format!("{error:#}")),
+                    }
+                    if !blockers.is_empty() {
+                        entry["status"] = json!("BLOCKED");
+                        for blocker in &blockers {
+                            report.block(&format!("allocation {key}"), blocker);
+                        }
+                        entry["blockers"] = json!(blockers);
+                        failures += 1;
+                        blocked_allocations.insert(key);
+                    }
+                    allocation_rows.push(entry);
+                }
+                if failures == 0 {
+                    report.pass("allocations", json!({"count": allocation_rows.len()}));
+                } else {
+                    report.block(
+                        "allocations",
+                        &format!(
+                            "{failures} of {} allocation references blocked",
+                            allocation_rows.len()
+                        ),
+                    );
+                }
+                let mut observation_failures = 0;
+                let mut not_performed = 0;
+                for row in list(&packet["observations"])? {
+                    let key = row["check"].as_str().unwrap_or_default().to_string();
+                    let mut entry = json!({"check": key, "observation": row["observation"]});
+                    // An observation bound to a blocked allocation cannot be checked against it.
+                    let bound_to = evidence
+                        .document(&row["observation"], false)
+                        .ok()
+                        .and_then(|o| o["allocation"]["path"].as_str().map(str::to_string));
+                    if bound_to
+                        .as_ref()
+                        .is_some_and(|p| blocked_allocations.contains(p))
+                    {
+                        entry["status"] = json!("NOT_PERFORMED");
+                        entry["reason"] = json!(
+                            "prerequisite not satisfied: its allocation reference is blocked"
+                        );
+                        not_performed += 1;
+                    } else {
+                        match local_observation(
+                            &key,
+                            &row["observation"],
+                            packet,
+                            &local.identities,
+                            true,
+                            None,
+                            &mut allocations,
+                            &mut evidence,
+                        ) {
+                            Ok(observed) => {
+                                entry["status"] = json!("PASS");
+                                entry["actor"] = json!(observed.actor);
+                                observed_checks.insert(key);
+                            }
+                            Err(error) => {
+                                let reason = format!("{error:#}");
+                                entry["status"] = json!("BLOCKED");
+                                entry["reason"] = json!(reason);
+                                report.block(&format!("observation {key}"), &reason);
+                                observation_failures += 1;
+                            }
+                        }
+                    }
+                    observation_rows.push(entry);
+                }
+                if observation_failures > 0 {
+                    report.block(
+                        "observations",
+                        &format!(
+                            "{observation_failures} of {} observation rows blocked",
+                            observation_rows.len()
+                        ),
+                    );
+                } else if not_performed > 0 {
+                    report.skip(
+                        "observations",
+                        "one or more allocation references are blocked",
+                    );
+                } else {
+                    report.pass("observations", json!({"count": observation_rows.len()}));
+                }
+            } else {
+                let missing = if local.is_none() {
+                    "package_identities"
+                } else {
+                    "acceptance_set"
+                };
+                report.skip("allocations", missing);
+                report.skip("observations", missing);
+            }
+            // Final freshness: every pinned byte and source tree exactly as first read,
+            // and the running executable still the selected authority.
+            let recheck = evidence.recheck();
+            report.record("freshness", recheck, |()| {
+                json!({"pins": evidence.pins.len(), "source_trees": evidence.source_trees.len()})
+            });
+            match verify_authority(authority, &project, &framework) {
+                Ok(again) if again == protected => {}
+                Ok(_) => report.block(
+                    "protected_authority",
+                    "authority record or executable identity changed during the preflight",
+                ),
+                Err(error) => report.block("protected_authority", &format!("{error:#}")),
+            }
+        }
+        None => {
+            for check in [
+                "package_identities",
+                "acceptance_set",
+                "allocations",
+                "observations",
+                "freshness",
+            ] {
+                report.skip(check, "packet_record");
+            }
+        }
+    }
+    let mut pending = vec![
+        json!(
+            "acceptance results record (devforge.manual-local-acceptance-results/v2) with nine PASS check rows and a bounded current interval: NOT_PRESENT in preflight scope"
+        ),
+        json!(
+            "independent nine-check semantic review (devforge.manual-local-review/v1): NOT_PRESENT in preflight scope"
+        ),
+        json!(
+            "owner acceptance (devforge.manual-local-owner-acceptance/v1): NOT_PRESENT in preflight scope"
+        ),
+        json!(
+            "installation destination checks (inventory, local edits, aliases, project quiescence) and installation writes: NOT_PERFORMED"
+        ),
+    ];
+    for (key, kind) in LOCAL_CHECKS {
+        if kind == "N" && !observed_checks.contains(key) {
+            pending.push(json!(format!("native observation for {key}: NOT_PRESENT")));
+        }
+    }
+    if !observed_checks.is_empty() {
+        pending.push(json!(
+            "semantic judgment of each observation against the frozen expectations: NOT_EVALUATED"
+        ));
+    }
+    let status = if report.blockers.is_empty() {
+        "COMPATIBLE"
+    } else {
+        "BLOCKED"
+    };
+    Ok(json!({
+        "status": status,
+        "predicate": "manual-local-evidence-preflight/v1",
+        "packet": root_pin,
+        "owner": owner,
+        "project": project,
+        "framework": framework,
+        "protected_identity": protected,
+        "checks": report.checks,
+        "allocations": allocation_rows,
+        "observations": observation_rows,
+        "blockers": report.blockers,
+        "pending": pending,
+        "not_performed": "installation, retirement, evidence mutation, candidate execution, hooks, model calls, PATH or client authentication changes",
+        "meaning": PREFLIGHT_MEANING,
+        "authority": "compiled Rust CLI; no Python consulted",
+        "behavior": "NOT_EVALUATED",
+    }))
 }
 
 // ---- protected executable identity ---------------------------------------
@@ -2487,21 +3155,10 @@ fn read_inventory(path: &Path) -> Result<Value> {
     Ok(previous)
 }
 
-fn manual_experts(
-    project: &Path,
-    framework: &Path,
-    evidence: &Path,
-    authority: &Path,
-) -> Result<Value> {
-    let project = crate::resolved(project)?;
-    ensure!(project.is_dir(), "project must already exist");
-    let framework = crate::resolved(framework)?;
-    ensure!(
-        crate::separate(&project, &framework),
-        "project and framework must be separate directories"
-    );
-    let protected = verify_authority(authority, &project, &framework)?;
-    let plugin = provider_plugin(&framework)?;
+/// The runtime bytes `manual-experts` would install for every promoted package
+/// present in the framework, keyed by project-relative destination.
+fn planned_bytes(framework: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
+    let plugin = provider_plugin(framework)?;
     let mut skills = Vec::new();
     for entry in fs::read_dir(plugin.join("skills"))? {
         let path = entry?.path();
@@ -2529,6 +3186,24 @@ fn manual_experts(
             planned.insert(key, fs::read(&path)?);
         }
     }
+    Ok(planned)
+}
+
+fn manual_experts(
+    project: &Path,
+    framework: &Path,
+    evidence: &Path,
+    authority: &Path,
+) -> Result<Value> {
+    let project = crate::resolved(project)?;
+    ensure!(project.is_dir(), "project must already exist");
+    let framework = crate::resolved(framework)?;
+    ensure!(
+        crate::separate(&project, &framework),
+        "project and framework must be separate directories"
+    );
+    let protected = verify_authority(authority, &project, &framework)?;
+    let planned = planned_bytes(&framework)?;
     let evidence_path = crate::resolved(evidence)?;
     let mut adoption = validate(&evidence_path, &planned, &project, &framework)?;
     let record_path = safe_destination(&project, INVENTORY)?;

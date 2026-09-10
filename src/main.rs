@@ -1010,10 +1010,16 @@ fn main() {
         return;
     }
     match execute(cli) {
-        Ok(value) => println!(
-            "{}",
-            serde_json::to_string_pretty(&value).expect("JSON output")
-        ),
+        Ok(value) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value).expect("JSON output")
+            );
+            // A structured BLOCKED report (the evidence preflight) exits like a refusal.
+            if value["status"] == "BLOCKED" {
+                std::process::exit(2);
+            }
+        }
         Err(error) => {
             let message = format!("{error:#}");
             let status = if message.contains("COULD_NOT_RUN:") {
