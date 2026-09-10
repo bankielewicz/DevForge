@@ -1383,6 +1383,11 @@ struct Allocation {
     closeout_status: String,
     start: i128,
     deadline: i128,
+    /// The earliest `started_at_utc` across every ledger row, failed, timed-out,
+    /// unjudged and unselected ones included; `None` when the ledger is empty.
+    /// It is a minimum over the complete attempt record, never the ledger's first
+    /// element or its first passing row.
+    first_attempt: Option<i128>,
     /// The window as the reference wrote it, for reporting.
     started_at_utc: Value,
     deadline_utc: Value,
@@ -1637,11 +1642,32 @@ fn allocation(
     evidence: &mut Evidence,
 ) -> Result<Allocation> {
     let loaded = bind_allocation(reference, record, owner, identities, authors, evidence)?;
-    require(
-        frozen < loaded.start,
-        "allocation window must follow the frozen acceptance set",
-    )?;
+    frozen_before_first_attempt(frozen, &loaded)?;
     Ok(loaded)
+}
+
+/// The owner-approved local MVP timing rule of 2026-09-10: "Preparation may begin
+/// before freezing. Requirements, cases and selected skill files must be fixed
+/// before the first native attempt in each allocation." The first native attempt is
+/// the earliest recorded start across the allocation's complete ledger, so a failed,
+/// timed-out or unjudged attempt fixes the instant just as a selected passing one
+/// does. The comparison is strict and by normalized instant: a set frozen at the
+/// same instant as the first attempt did not precede it. An allocation with no
+/// recorded attempt has no instant to compare, so no timing verdict is produced;
+/// it also supplies no native observation, because an observation must name a
+/// recorded attempt. This applies only to the local, explicitly UNQUALIFIED path;
+/// the original start, deadline, cap, counters and recorded failures are unchanged,
+/// and Full/Routine qualification policy is untouched. Both `allocation` (the
+/// installer) and the evidence preflight apply this one function so they cannot
+/// drift.
+fn frozen_before_first_attempt(frozen: i128, allocation: &Allocation) -> Result<()> {
+    match allocation.first_attempt {
+        Some(first) => require(
+            frozen < first,
+            "acceptance set must be frozen before the allocation's first native attempt",
+        ),
+        None => Ok(()),
+    }
 }
 
 /// Bind one allocation reference to its preserved sources: everything
@@ -1782,6 +1808,10 @@ fn bind_allocation(
     let mut matched = vec![false; facts.natives.len()];
     let mut attempts = BTreeMap::new();
     let mut judged = 0;
+    // The earliest start over the whole ledger, accumulated as each row is read so
+    // that no row can be skipped: failed, timed-out, unjudged and unselected rows
+    // all contribute.
+    let mut first_attempt: Option<i128> = None;
     let mut row_fields = vec![
         "attempt_id",
         "actor",
@@ -1811,6 +1841,7 @@ fn bind_allocation(
             start <= from && from <= to && to <= deadline,
             "allocation attempt outside its approved window",
         )?;
+        first_attempt = Some(first_attempt.map_or(from, |earliest: i128| earliest.min(from)));
         evidence.refs(&row["evidence"])?;
         let launch = evidence.document(&row["launch"], false)?;
         require(
@@ -1933,6 +1964,7 @@ fn bind_allocation(
             .to_string(),
         start,
         deadline,
+        first_attempt,
         started_at_utc: doc["started_at_utc"].clone(),
         deadline_utc: doc["deadline_utc"].clone(),
         max_attempts,
@@ -2677,7 +2709,14 @@ const PREFLIGHT_SCHEMA: &str = "devforge.manual-local-evidence-preflight/v1";
 /// The `v1` packet plus the same `test_destination` selection a `v2` record carries.
 const PREFLIGHT_V2: &str = "devforge.manual-local-evidence-preflight/v2";
 const PREFLIGHT_MEANING: &str = "COMPATIBLE means only that every mechanical check within this preflight's documented scope passed for the selected bytes; it is not acceptance, qualification, an installation receipt or permission to run a model";
-const FREEZE_RULE: &str = "unchanged: the acceptance set must be frozen before the allocation window starts; a later first attempt does not satisfy it, and the recorded instants are preserved here for the owner's separate decision";
+/// The timing rule the preflight reports for every allocation entry, quoted from the
+/// owner's approval of 2026-09-10 and applied by `frozen_before_first_attempt`.
+const FREEZE_RULE: &str = "owner-approved 2026-09-10: preparation may begin before freezing; requirements, cases and selected skill files must be fixed before the first native attempt in each allocation; the first attempt is the earliest start across every recorded attempt, failed ones included; the allocation's original start, deadline and cap are unchanged";
+const TIMING_COMPATIBLE: &str =
+    "the acceptance set was frozen before the allocation's first recorded native attempt";
+const TIMING_NO_ATTEMPT: &str = "no native attempt is recorded under this allocation, so it has no first-attempt instant to compare and it supplies no native observation";
+const TIMING_UNBOUND: &str =
+    "prerequisite not satisfied: the reference did not bind, so its attempt ledger was not read";
 
 /// Accumulates the preflight report: every independently detectable blocker is
 /// recorded, and a check whose prerequisite failed is marked NOT_PERFORMED
@@ -2771,9 +2810,10 @@ fn read_packet(root_pin: &Value, evidence: &mut Evidence) -> Result<Value> {
 /// Check-only preflight over preserved local-adoption evidence. It reuses the
 /// installer's readers (`local_packages`, `local_set`, `bind_allocation`,
 /// `local_observation`, `Evidence`) so its rules cannot drift from installation,
-/// applies the unchanged frozen-set chronology separately so the owner sees the
-/// preserved instants, and never installs, retires, mutates evidence, runs
-/// candidate code, executes hooks or calls a model.
+/// applies the owner-approved freeze timing through the same
+/// `frozen_before_first_attempt` the installer uses, separately from the binding so
+/// the owner sees the preserved instants either way, and never installs, retires,
+/// mutates evidence, runs candidate code, executes hooks or calls a model.
 fn check_local_evidence(
     project: &Path,
     framework: &Path,
@@ -2862,8 +2902,13 @@ fn check_local_evidence(
                 let mut blocked_allocations = BTreeSet::new();
                 let mut failures = 0;
                 for reference in list(&packet["allocations"])? {
-                    let mut entry =
-                        json!({"reference": reference, "status": "COMPATIBLE", "blockers": []});
+                    // Every entry carries the applied rule, the frozen instant it was
+                    // applied against and its own timing disposition, whether or not the
+                    // reference binds; an unbound reference has no ledger to judge.
+                    let mut entry = json!({"reference": reference, "status": "COMPATIBLE",
+                        "blockers": [], "frozen_at_utc": plan["frozen_at_utc"],
+                        "rule": FREEZE_RULE, "timing": "NOT_PERFORMED",
+                        "timing_reason": TIMING_UNBOUND});
                     let key = pin_of(reference)
                         .and_then(|p| text(&p["path"], "allocation path").map(str::to_string));
                     let key = match key {
@@ -2912,18 +2957,36 @@ fn check_local_evidence(
                             entry["started_at_utc"] = loaded.started_at_utc.clone();
                             entry["deadline_utc"] = loaded.deadline_utc.clone();
                             entry["max_attempts"] = json!(loaded.max_attempts);
-                            entry["earliest_attempt_started_at_utc"] = rows
-                                .first()
-                                .map(|a| a["started_at_utc"].clone())
+                            // Reported from the same minimum the rule applies, in the
+                            // spelling its ledger row used; `null` for an empty ledger.
+                            entry["earliest_attempt_started_at_utc"] = loaded
+                                .first_attempt
+                                .and_then(|first| {
+                                    rows.iter()
+                                        .find(|a| {
+                                            time(&a["started_at_utc"]).is_ok_and(|t| t == first)
+                                        })
+                                        .map(|a| a["started_at_utc"].clone())
+                                })
                                 .unwrap_or(Value::Null);
                             entry["attempts"] = json!(ledger);
-                            if *frozen >= loaded.start {
-                                blockers.push(
-                                    "allocation window must follow the frozen acceptance set"
-                                        .to_string(),
-                                );
-                                entry["frozen_at_utc"] = plan["frozen_at_utc"].clone();
-                                entry["rule"] = json!(FREEZE_RULE);
+                            let timing = frozen_before_first_attempt(*frozen, &loaded);
+                            match (&timing, loaded.first_attempt) {
+                                (Ok(()), None) => {
+                                    entry["timing"] = json!("NOT_APPLICABLE");
+                                    entry["timing_reason"] = json!(TIMING_NO_ATTEMPT);
+                                }
+                                (Ok(()), Some(_)) => {
+                                    entry["timing"] = json!("COMPATIBLE");
+                                    entry["timing_reason"] = json!(TIMING_COMPATIBLE);
+                                }
+                                (Err(error), _) => {
+                                    entry["timing"] = json!("BLOCKED");
+                                    entry["timing_reason"] = json!(format!("{error:#}"));
+                                }
+                            }
+                            if let Err(error) = timing {
+                                blockers.push(format!("{error:#}"));
                             } else if allocations.contains_key(&key) {
                                 blockers.push("duplicate allocation reference".to_string());
                             } else {
