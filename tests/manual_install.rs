@@ -1327,6 +1327,79 @@ fn basic_iso_timestamps_preserve_accepted_evidence_compatibility() {
     assert_eq!(outcome.output["status"], "INSTALLED");
 }
 
+/// Local-baseline fixture whose every timestamp uses one date prefix and offset suffix.
+fn timestamp_fixture(prefix: &str, offset: &str) -> Local {
+    let mut fixture = Local::new();
+    fixture.plan["frozen_at_utc"] = json!(format!("{prefix}T12:00:00{offset}"));
+    fixture.results["started_at_utc"] = json!(format!("{prefix}T12:00:01{offset}"));
+    fixture.results["finished_at_utc"] = json!(format!("{prefix}T12:00:03{offset}"));
+    for observation in fixture.observations.values_mut() {
+        observation["started_at_utc"] = json!(format!("{prefix}T12:00:01{offset}"));
+        observation["finished_at_utc"] = json!(format!("{prefix}T12:00:02{offset}"));
+    }
+    fixture.freeze();
+    fixture
+}
+
+// Review regressions at 5a490fe (repair-5a490fe review, 2026-09-09).
+
+#[test]
+fn invalid_iso_week_53_must_be_refused() {
+    let fixture = timestamp_fixture("2021-W53-1", "+00:00");
+    let legacy = legacy_install(&fixture.ws, &fixture.evidence_path);
+    assert_ne!(
+        legacy.code, 0,
+        "baseline accepted invalid week date: {}",
+        legacy.text
+    );
+    assert!(
+        legacy.text.contains("invalid timestamp"),
+        "unexpected baseline refusal: {}",
+        legacy.text
+    );
+    assert!(!fixture.ws.project.join(".agents").exists());
+    fixture.refused(&["invalid timestamp"]);
+    assert!(!fixture.ws.project.join(".agents").exists());
+}
+
+#[test]
+fn fractional_offset_must_preserve_legacy_acceptance() {
+    let fixture = timestamp_fixture("2026-09-08", "+00:00:01.5");
+    let legacy = legacy_install(&fixture.ws, &fixture.evidence_path);
+    assert_eq!(
+        legacy.code, 0,
+        "baseline did not accept fractional offset: {}",
+        legacy.text
+    );
+    let outcome = fixture.ws.install(&fixture.evidence_path);
+    assert_eq!(
+        outcome.code, 0,
+        "Rust rejected baseline-valid offset: {}",
+        outcome.text
+    );
+    assert_eq!(outcome.output["status"], "INSTALLED");
+}
+
+#[test]
+fn fractional_offset_chronology_is_compared_by_instant() {
+    // The set is frozen at 12:00:00+00:00:00.5; results start at 12:00:00.4+00:00, which is
+    // 0.1 s later in real time, so the "predefined" order holds only with the fraction applied.
+    let mut fixture = Local::new();
+    fixture.plan["frozen_at_utc"] = json!("2026-09-08T12:00:00+00:00:00.5");
+    fixture.results["started_at_utc"] = json!("2026-09-08T12:00:00.4+00:00");
+    fixture.results["finished_at_utc"] = json!("2026-09-08T12:00:03+00:00");
+    for observation in fixture.observations.values_mut() {
+        observation["started_at_utc"] = json!("2026-09-08T12:00:01+00:00");
+        observation["finished_at_utc"] = json!("2026-09-08T12:00:02+00:00");
+    }
+    fixture.freeze();
+    fixture.installed();
+    // Moving the frozen time 0.2 s later than the start reverses the order and must refuse.
+    fixture.plan["frozen_at_utc"] = json!("2026-09-08T11:59:59.5-00:00:01.1");
+    fixture.freeze();
+    fixture.refused(&["predefined"]);
+}
+
 #[test]
 fn conflicting_replacement_aliases_must_not_report_installed() {
     let fixture = Local::new();

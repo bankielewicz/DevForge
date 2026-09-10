@@ -259,9 +259,13 @@ fn time(value: &Value) -> Result<i128> {
     parse_iso(&text).ok_or_else(invalid)
 }
 
+fn is_leap(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
 /// Days since 1970-01-01 for a valid proleptic Gregorian calendar date.
 fn civil_days(year: i64, month: i64, day: i64) -> Option<i64> {
-    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let leap = is_leap(year);
     let days_in_month = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -286,10 +290,15 @@ fn civil_days(year: i64, month: i64, day: i64) -> Option<i64> {
 
 /// The timestamp contract the legacy guard accepted through
 /// `datetime.fromisoformat` (Python 3.12) with `Z` mapped to `+00:00`:
-/// calendar or ISO week dates in extended or basic form, any single
-/// separator character, `HH[:MM[:SS[.frac]]]` or `HH[MM[SS[.frac]]]`, a
-/// fraction of any length truncated to microseconds, and a mandatory
-/// `±HH`, `±HHMM`, `±HH:MM`, `±HHMMSS` or `±HH:MM:SS` offset below 24 hours.
+/// calendar or ISO week dates in extended or basic form (week 53 only in a
+/// long ISO year), any single separator character, `HH[:MM[:SS]]` or
+/// `HH[MM[SS]]` with an optional fraction of any length after the last
+/// component (truncated to microseconds), and a mandatory offset `±HH`,
+/// `±HHMM`, `±HH:MM`, `±HHMMSS` or `±HH:MM:SS[.frac]` totalling under 24
+/// hours. Offset minute and second fields above 59 are summed as the legacy
+/// parser summed them. One legacy quirk is not reproduced: a fraction after
+/// an offset's hour or minute field, which the legacy parser accepted and
+/// then discarded or applied inconsistently, is refused here.
 fn parse_iso(text: &str) -> Option<i128> {
     fn digits(bytes: &[u8], start: usize, len: usize) -> Option<i64> {
         let slice = bytes.get(start..start + len)?;
@@ -297,6 +306,19 @@ fn parse_iso(text: &str) -> Option<i128> {
             return None;
         }
         std::str::from_utf8(slice).ok()?.parse().ok()
+    }
+    /// Consume fraction digits after a `.`/`,`; microseconds, truncated.
+    fn fraction(bytes: &[u8], pos: &mut usize, allow_empty: bool) -> Option<i64> {
+        let start = *pos;
+        while bytes.get(*pos).is_some_and(u8::is_ascii_digit) {
+            *pos += 1;
+        }
+        if *pos == start && !allow_empty {
+            return None;
+        }
+        let mut padded = format!("{:0<6}", std::str::from_utf8(&bytes[start..*pos]).ok()?);
+        padded.truncate(6);
+        padded.parse().ok()
     }
     let bytes = text.as_bytes();
     let year = digits(bytes, 0, 4)?;
@@ -325,7 +347,13 @@ fn parse_iso(text: &str) -> Option<i128> {
         if !(1..=53).contains(&week) || !(1..=7).contains(&weekday) {
             return None;
         }
-        // ISO week 1 contains January 4; 1970-01-01 was a Thursday.
+        // 1970-01-01 was a Thursday (Monday = 0). Week 53 exists only when
+        // January 1 is a Thursday, or a Wednesday in a leap year.
+        let jan1_weekday = (civil_days(year, 1, 1)? + 3).rem_euclid(7);
+        if week == 53 && !(jan1_weekday == 3 || (jan1_weekday == 2 && is_leap(year))) {
+            return None;
+        }
+        // ISO week 1 contains January 4.
         let jan4 = civil_days(year, 1, 4)?;
         let monday = jan4 - (jan4 + 3).rem_euclid(7);
         monday + (week - 1) * 7 + (weekday - 1)
@@ -367,17 +395,12 @@ fn parse_iso(text: &str) -> Option<i128> {
             }
             second = digits(bytes, pos, 2)?;
             pos += 2;
-            if matches!(bytes.get(pos), Some(b'.' | b',')) {
-                pos += 1;
-                let start = pos;
-                while bytes.get(pos).is_some_and(u8::is_ascii_digit) {
-                    pos += 1;
-                }
-                let mut padded = format!("{:0<6}", &text[start..pos]);
-                padded.truncate(6);
-                micro = padded.parse::<i64>().ok()?;
-            }
         }
+    }
+    // The legacy parser took a fraction after whichever component came last.
+    if matches!(bytes.get(pos), Some(b'.' | b',')) {
+        pos += 1;
+        micro = fraction(bytes, &mut pos, true)?;
     }
     let sign = match bytes.get(pos) {
         Some(b'+') => 1,
@@ -389,6 +412,7 @@ fn parse_iso(text: &str) -> Option<i128> {
     pos += 2;
     let mut offset_minutes = 0;
     let mut offset_seconds = 0;
+    let mut offset_micro = 0;
     if pos < bytes.len() {
         let colon = bytes.get(pos) == Some(&b':');
         if colon {
@@ -405,23 +429,24 @@ fn parse_iso(text: &str) -> Option<i128> {
             }
             offset_seconds = digits(bytes, pos, 2)?;
             pos += 2;
+            if matches!(bytes.get(pos), Some(b'.' | b',')) {
+                pos += 1;
+                offset_micro = fraction(bytes, &mut pos, false)?;
+            }
         }
     }
-    if pos != bytes.len()
-        || hour >= 24
-        || minute >= 60
-        || second >= 60
-        || offset_minutes >= 60
-        || offset_seconds >= 60
-    {
+    if pos != bytes.len() || hour >= 24 || minute >= 60 || second >= 60 {
         return None;
     }
-    let offset = offset_hours * 3_600 + offset_minutes * 60 + offset_seconds;
-    if offset >= 86_400 {
+    let offset = i128::from(offset_hours * 3_600 + offset_minutes * 60 + offset_seconds)
+        * 1_000_000
+        + i128::from(offset_micro);
+    if offset >= 86_400 * 1_000_000 {
         return None;
     }
-    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second - sign * offset;
-    Some(i128::from(seconds) * 1_000_000 + i128::from(micro))
+    let local = i128::from(days * 86_400 + hour * 3_600 + minute * 60 + second) * 1_000_000
+        + i128::from(micro);
+    Some(local - i128::from(sign) * offset)
 }
 
 struct Evidence {
@@ -2215,15 +2240,65 @@ mod tests {
             parse_iso("2026-09-08T12:00:00,5+00:00"),
             Some(base + 500_000)
         );
+        // A fraction may follow the hour or minute component of the time.
+        for (text, micros) in [
+            ("2026-09-08T12.5+00:00", 500_000),
+            ("2026-09-08T12:00.25+00:00", 250_000),
+            ("2026-09-08T1200.5+00:00", 500_000),
+        ] {
+            assert_eq!(parse_iso(text), Some(base + micros), "{text}");
+        }
+        // Fractional offsets shift the instant; large minute/second fields are summed.
+        for (text, micros) in [
+            ("2026-09-08T12:00:00+00:00:01.5", -1_500_000),
+            ("2026-09-08T12:00:00-00:00:01.5", 1_500_000),
+            ("2026-09-08T12:00:00+000001.5", -1_500_000),
+            ("2026-09-08T12:00:00+00:00:01,5", -1_500_000),
+            ("2026-09-08T12:00:00+00:00:01.1234567", -1_123_456),
+            ("2026-09-08T12:00:00+23:59:59.999999", -86_399_999_999),
+            ("2026-09-08T12:00:00+00:99", -5_940_000_000),
+            ("2026-09-08T12:00:00+00:00:99", -99_000_000),
+        ] {
+            assert_eq!(parse_iso(text), Some(base + micros), "{text}");
+        }
+        // ISO week 53 exists only in long years (January 1 on Thursday, or Wednesday when leap).
+        for (week_date, calendar) in [
+            ("2020-W53-1", "2020-12-28"),
+            ("2020-W53-7", "2021-01-03"),
+            ("2015-W53-5", "2016-01-01"),
+            ("2026-W53-7", "2027-01-03"),
+            ("2032-W53-1", "2032-12-27"),
+            ("2021-W52-7", "2022-01-02"),
+        ] {
+            assert_eq!(
+                parse_iso(&format!("{week_date}T00:00:00+00:00")),
+                parse_iso(&format!("{calendar}T00:00:00+00:00")),
+                "{week_date}"
+            );
+        }
         // Forms it rejected.
         for rejected in [
             "2026-251T12:00:00+00:00",
             "2026-09-08T24:00:00+00:00",
             "2026-09-08T12:00:60+00:00",
             "2026-09-08T12:00:00+24:00",
+            "2026-09-08T12:00:00+23:99",
             "2026-09-08T12:00:00+0",
             "2026-09-08T12:00:00+000",
+            "2026-09-08T12:00:00+00:0",
+            "2026-09-08T12:00:00+0000:00",
+            "2026-09-08T12:00:00+00:0000",
+            "2026-09-08T12:00:00+00:00:01.",
+            "2026-09-08T12:00:00+00:00:01.5abc",
+            "2026-09-08T12:00:00+00:00:01.5.5",
+            "2026-09-08T12:00:00+00:00xyz",
+            "2026-09-08T12:00:00.5abc+00:00",
+            "2026-09-08T12:00:00.5.5+00:00",
             "2026-W54-1T00:00:00+00:00",
+            "2026-W00-1T00:00:00+00:00",
+            "2021-W53-1T00:00:00+00:00",
+            "2024-W53-1T00:00:00+00:00",
+            "2028-W53-1T00:00:00+00:00",
         ] {
             assert!(parse_iso(rejected).is_none(), "{rejected}");
         }
