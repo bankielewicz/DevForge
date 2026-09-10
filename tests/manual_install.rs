@@ -1051,12 +1051,16 @@ impl Local {
     /// `stopped-unjudged` (the 2026-09-10 replacement closeout as actually written:
     /// the `stopped-multi` shape whose entries all completed with exit 0 and none of
     /// which records any `workflow_outcome`, so every ledger row is `NOT_EVALUATED`
-    /// until a separately recorded subsequent judgment is bound through `judge`).
+    /// until a separately recorded subsequent judgment is bound through `judge`) and
+    /// `stopped-empty` (the same multi-attempt shape with `attempts_used: 0`, an empty
+    /// `native` array and no ledger row at all: an allocation under which no native
+    /// attempt was ever made).
     fn reuse_format(&mut self, id: &str, keys: &[&str], format: &str) {
         self.plan["frozen_at_utc"] = json!("2026-09-07T09:00:00Z");
         let (start, deadline) = ("2026-09-07T10:00:00Z", "2026-09-07T13:00:00Z");
+        let empty = format == "stopped-empty";
         let mut attempts = Vec::new();
-        if format != "evaluator-return" {
+        if format != "evaluator-return" && !empty {
             attempts.push(attempt_row(
                 &self.ws,
                 &format!("{id}-a0"),
@@ -1067,8 +1071,8 @@ impl Local {
                 &self.history,
             ));
         }
-        let multi = format == "stopped-multi" || format == "stopped-unjudged";
-        if multi {
+        let multi = format == "stopped-multi" || format == "stopped-unjudged" || empty;
+        if multi && !empty {
             // Completed with exit 0, but no workflow judgment was ever recorded for it.
             attempts.push(attempt_row(
                 &self.ws,
@@ -1151,7 +1155,7 @@ impl Local {
                         "unused_slots": [format!("{id}-unused")], "installation_status": "NOT_PERFORMED"}),
                 )
             }
-            "stopped-multi" | "stopped-unjudged" => {
+            "stopped-multi" | "stopped-unjudged" | "stopped-empty" => {
                 let natives: Vec<Value> = attempts
                     .iter()
                     .map(|a| {
@@ -2134,12 +2138,16 @@ fn reused_observation_outside_its_allocation_window_is_refused() {
     observation["finished_at_utc"] = json!("2026-09-07T13:00:02Z");
     fixture.freeze();
     fixture.refused(&["outside its allocation window"]);
-    // An allocation that starts before the set was frozen is not an approved window for it.
+    // The owner's 2026-09-10 amendment lets preparation precede the freeze, so the window
+    // may open first, but the frozen requirements must still precede the allocation's first
+    // native attempt. Frozen 10:30:00 follows the 10:00:00 attempt, so this stays refused,
+    // now by the rule that names the first attempt rather than the window.
     let mut fixture = Local::new();
     fixture.reuse("alloc-01", &["grounded_creation"]);
     fixture.plan["frozen_at_utc"] = json!("2026-09-07T10:30:00Z");
     fixture.freeze();
-    fixture.refused(&["allocation window must follow the frozen acceptance set"]);
+    fixture
+        .refused(&["acceptance set must be frozen before the allocation's first native attempt"]);
 }
 
 #[test]
@@ -2921,13 +2929,21 @@ fn preflight_reports_compatible_synthetic_evidence_without_writing() {
     fixture.installed();
 }
 
+/// Superseded by the owner's approval of 2026-09-10 ("Preparation may begin before
+/// freezing. Requirements, cases and selected skill files must be fixed before the first
+/// native attempt in each allocation.", recorded in the coordinator task after DevForge
+/// PR #10). This fixture is the same one the former rule blocked: the window opens at
+/// 09:59:59Z, the set freezes at 09:59:59.5Z and the first native attempt starts at
+/// 10:00:00Z. Under the approved rule preparation inside the already-started window is
+/// admitted, so both commands now accept it; the original start, deadline and cap are
+/// unchanged.
 #[test]
-fn preflight_reports_unchanged_freeze_rule_with_first_attempt_time() {
+fn preflight_admits_preparation_before_the_freeze_when_the_first_attempt_follows() {
     let mut fixture = Local::new();
     fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
     fixture.reuse_format("alloc-x", &["reuse"], "expired");
     fixture.results["native_turns"] = json!(4);
-    // Move alloc-m's window to open before the freeze while its first attempt follows it.
+    // alloc-m's window opens before the freeze while its first attempt follows it.
     fixture.plan["frozen_at_utc"] = json!("2026-09-07T09:59:59.5Z");
     fixture.allocation("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:59Z");
     fixture.original("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:59Z");
@@ -2936,42 +2952,295 @@ fn preflight_reports_unchanged_freeze_rule_with_first_attempt_time() {
     let packet = fixture.packet();
     let before = snapshot(&fixture.ws.root);
     let result = fixture.ws.preflight(&packet);
-    assert_eq!(result.code, 2, "{}", result.text);
+    assert_eq!(result.code, 0, "{}", result.text);
     let report = &result.output;
-    assert_eq!(report["status"], "BLOCKED");
+    assert_eq!(report["status"], "COMPATIBLE", "{report}");
     assert_eq!(
         snapshot(&fixture.ws.root),
         before,
         "preflight must not write"
     );
+    let admitted = allocation_entry(report, "alloc-m");
+    assert_eq!(admitted["status"], "COMPATIBLE", "{report}");
+    assert_eq!(admitted["timing"], "COMPATIBLE", "{report}");
+    // The preserved instants are still reported, unchanged, beside the applied rule.
+    assert_eq!(admitted["attempts"].as_array().unwrap().len(), 3);
+    assert_eq!(admitted["frozen_at_utc"], "2026-09-07T09:59:59.5Z");
+    assert_eq!(admitted["started_at_utc"], "2026-09-07T09:59:59Z");
+    assert_eq!(admitted["deadline_utc"], "2026-09-07T13:00:00Z");
+    assert_eq!(
+        admitted["earliest_attempt_started_at_utc"],
+        "2026-09-07T10:00:00Z"
+    );
+    let rule = admitted["rule"].as_str().unwrap_or_default().to_string();
+    for needle in ["2026-09-10", "first native attempt", "failed ones included"] {
+        assert!(rule.contains(needle), "{needle}: {rule}");
+    }
+    let other = allocation_entry(report, "alloc-x");
+    assert_eq!(other["status"], "COMPATIBLE", "{report}");
+    assert_eq!(other["timing"], "COMPATIBLE", "{report}");
+    assert_eq!(other["frozen_at_utc"], "2026-09-07T09:59:59.5Z");
+    assert_eq!(other["rule"], json!(rule));
+    let observations = report["observations"].as_array().unwrap();
+    assert_eq!(observations.len(), 2);
+    assert!(
+        observations.iter().all(|o| o["status"] == "PASS"),
+        "{report}"
+    );
+    assert!(!report["pending"].as_array().unwrap().is_empty());
+    // The installer applies the same rule through the same helper.
+    fixture.installed();
+}
+
+/// The approved rule fixes the first native attempt as the earliest start across the
+/// complete ledger. A failed attempt is still an attempt, so recording it after the
+/// passing row in the array, or judging only the selected passing row, must not move the
+/// instant the freeze has to precede.
+#[test]
+fn first_attempt_is_the_ledger_minimum_not_its_order_or_its_passing_row() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    // Rotate the ledger: the selected PASS row (10:00:01Z) is written first and the failed
+    // COULD_NOT_RUN row (10:00:00Z) last. The closeout, launches and completions are untouched.
+    let rows = fixture.allocation("alloc-m")["attempts"]
+        .as_array()
+        .unwrap()
+        .clone();
+    fixture.allocation("alloc-m")["attempts"] = json!([rows[2], rows[1], rows[0]]);
+    // Frozen after the failed attempt began and before the passing one.
+    fixture.plan["frozen_at_utc"] = json!("2026-09-07T10:00:00.4Z");
+    fixture.freeze();
+    let packet = fixture.packet();
+    let before = snapshot(&fixture.ws.root);
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    let report = &result.output;
+    assert_eq!(report["status"], "BLOCKED", "{report}");
     let blocked = allocation_entry(report, "alloc-m");
     assert_eq!(blocked["status"], "BLOCKED", "{report}");
-    let blockers = serde_json::to_string(&blocked["blockers"]).unwrap();
+    assert_eq!(blocked["timing"], "BLOCKED", "{report}");
     assert!(
-        blockers.contains("allocation window must follow the frozen acceptance set"),
-        "{blockers}"
+        serde_json::to_string(&blocked["blockers"])
+            .unwrap()
+            .contains("acceptance set must be frozen before the allocation's first native attempt"),
+        "{report}"
     );
-    // The binding itself completed, so the owner sees the real first-attempt instant.
+    // Reported from the same minimum the rule applies, not from the ledger's first row.
+    assert_eq!(
+        blocked["earliest_attempt_started_at_utc"], "2026-09-07T10:00:00Z",
+        "{report}"
+    );
+    assert_eq!(blocked["frozen_at_utc"], "2026-09-07T10:00:00.4Z");
     assert_eq!(blocked["attempts"].as_array().unwrap().len(), 3);
-    assert_eq!(blocked["frozen_at_utc"], "2026-09-07T09:59:59.5Z");
-    assert_eq!(blocked["started_at_utc"], "2026-09-07T09:59:59Z");
+    assert_eq!(
+        snapshot(&fixture.ws.root),
+        before,
+        "preflight must not write"
+    );
+    fixture
+        .refused(&["acceptance set must be frozen before the allocation's first native attempt"]);
+}
+
+/// Boundary: the rule is strict, and it compares normalized instants. A freeze at the
+/// same instant as the first attempt is refused however it is spelled; one strictly
+/// earlier is admitted even when the allocation window opened before it.
+#[test]
+fn freeze_equal_to_the_first_attempt_is_refused_and_a_strictly_earlier_one_admitted() {
+    // Equal as written.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.plan["frozen_at_utc"] = json!("2026-09-07T10:00:00Z");
+    fixture.freeze();
+    fixture
+        .refused(&["acceptance set must be frozen before the allocation's first native attempt"]);
+    // Equal only after the fractional offset is applied: 10:00:01.5+00:00:01.5 is 10:00:00Z.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.plan["frozen_at_utc"] = json!("2026-09-07T10:00:01.5+00:00:01.5");
+    fixture.freeze();
+    fixture
+        .refused(&["acceptance set must be frozen before the allocation's first native attempt"]);
+    let packet = fixture.packet();
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    assert_eq!(
+        allocation_entry(&result.output, "alloc-m")["timing"],
+        "BLOCKED",
+        "{}",
+        result.text
+    );
+    // 10:00:01.4+00:00:01.5 is 09:59:59.9Z: strictly before the 10:00:00Z first attempt
+    // although the window opened at 09:59:00Z, which the former rule refused.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.plan["frozen_at_utc"] = json!("2026-09-07T10:00:01.4+00:00:01.5");
+    fixture.allocation("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:00Z");
+    fixture.original("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:00Z");
+    fixture.closeout("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:00Z");
+    fixture.freeze();
+    let packet = fixture.packet();
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 0, "{}", result.text);
+    let entry = allocation_entry(&result.output, "alloc-m");
+    assert_eq!(entry["timing"], "COMPATIBLE", "{}", result.text);
+    assert_eq!(entry["started_at_utc"], "2026-09-07T09:59:00Z");
+    assert_eq!(
+        entry["earliest_attempt_started_at_utc"],
+        "2026-09-07T10:00:00Z"
+    );
+    fixture.installed();
+}
+
+/// The verdict is per allocation: one reference may be timing-compatible while another in
+/// the same packet is blocked, and each observation follows its own allocation. Both
+/// ledgers are written out of order to keep the minimum independent of array order.
+#[test]
+fn one_allocation_may_be_timing_compatible_while_another_is_blocked() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.reuse_format("alloc-b", &["missing_evidence_refusal"], "evaluator-return");
+    fixture.results["native_turns"] = json!(4);
+    let rows = fixture.allocation("alloc-m")["attempts"]
+        .as_array()
+        .unwrap()
+        .clone();
+    fixture.allocation("alloc-m")["attempts"] = json!([rows[2], rows[1], rows[0]]);
+    // Frozen between alloc-m's first attempt (10:00:00Z) and alloc-b's only one (10:00:01Z).
+    // Both windows opened at 10:00:00Z, so the former rule blocked them together.
+    fixture.plan["frozen_at_utc"] = json!("2026-09-07T10:00:00.4Z");
+    fixture.freeze();
+    let packet = fixture.packet();
+    let before = snapshot(&fixture.ws.root);
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    let report = &result.output;
+    assert_eq!(report["status"], "BLOCKED", "{report}");
+    let blocked = allocation_entry(report, "alloc-m");
+    assert_eq!(blocked["status"], "BLOCKED", "{report}");
+    assert_eq!(blocked["timing"], "BLOCKED", "{report}");
     assert_eq!(
         blocked["earliest_attempt_started_at_utc"],
         "2026-09-07T10:00:00Z"
     );
-    assert!(blocked["rule"].as_str().unwrap().contains("unchanged"));
-    assert_eq!(allocation_entry(report, "alloc-x")["status"], "COMPATIBLE");
+    let admitted = allocation_entry(report, "alloc-b");
+    assert_eq!(admitted["status"], "COMPATIBLE", "{report}");
+    assert_eq!(admitted["timing"], "COMPATIBLE", "{report}");
+    assert_eq!(admitted["frozen_at_utc"], "2026-09-07T10:00:00.4Z");
+    assert_eq!(
+        admitted["earliest_attempt_started_at_utc"],
+        "2026-09-07T10:00:01Z"
+    );
     let observations = report["observations"].as_array().unwrap();
     let grounded = observations
         .iter()
         .find(|o| o["check"] == "grounded_creation")
         .unwrap();
     assert_eq!(grounded["status"], "NOT_PERFORMED", "{report}");
-    let reuse = observations.iter().find(|o| o["check"] == "reuse").unwrap();
-    assert_eq!(reuse["status"], "PASS", "{report}");
-    assert!(!report["pending"].as_array().unwrap().is_empty());
-    // The installer applies the same unchanged rule.
-    fixture.refused(&["allocation window must follow the frozen acceptance set"]);
+    let refusal = observations
+        .iter()
+        .find(|o| o["check"] == "missing_evidence_refusal")
+        .unwrap();
+    assert_eq!(refusal["status"], "PASS", "{report}");
+    assert_eq!(
+        snapshot(&fixture.ws.root),
+        before,
+        "preflight must not write"
+    );
+    fixture
+        .refused(&["acceptance set must be frozen before the allocation's first native attempt"]);
+}
+
+/// An allocation under which no native attempt was ever made has no first-attempt instant,
+/// so the rule has nothing to compare and no timestamp is invented. It is not blocked on
+/// timing, and it admits nothing either: an observation naming it is not a recorded
+/// attempt, so no native check is satisfied through it.
+#[test]
+fn an_allocation_without_any_recorded_attempt_has_no_timing_verdict() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.reuse_format("alloc-z", &[], "stopped-empty");
+    fixture.results["native_turns"] = json!(5);
+    // alloc-z's window opened well before the freeze and recorded no attempt at all.
+    fixture.allocation("alloc-z")["started_at_utc"] = json!("2026-09-07T08:00:00Z");
+    fixture.allocation("alloc-z")["deadline_utc"] = json!("2026-09-07T09:30:00Z");
+    fixture.original("alloc-z")["started_at_utc"] = json!("2026-09-07T08:00:00Z");
+    fixture.original("alloc-z")["deadline_utc"] = json!("2026-09-07T09:30:00Z");
+    fixture.closeout("alloc-z")["started_at_utc"] = json!("2026-09-07T08:00:00Z");
+    fixture.closeout("alloc-z")["original_deadline_utc"] = json!("2026-09-07T09:30:00Z");
+    fixture.freeze();
+    let packet = fixture.packet();
+    let before = snapshot(&fixture.ws.root);
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 0, "{}", result.text);
+    let report = &result.output;
+    assert_eq!(report["status"], "COMPATIBLE", "{report}");
+    let none = allocation_entry(report, "alloc-z");
+    assert_eq!(none["status"], "COMPATIBLE", "{report}");
+    assert_eq!(none["timing"], "NOT_APPLICABLE", "{report}");
+    assert_eq!(
+        none["earliest_attempt_started_at_utc"],
+        Value::Null,
+        "{report}"
+    );
+    assert_eq!(none["attempts"], json!([]), "{report}");
+    assert_eq!(none["frozen_at_utc"], "2026-09-07T09:00:00Z");
+    let reason = none["timing_reason"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    for needle in ["no native attempt", "no native observation"] {
+        assert!(reason.contains(needle), "{needle}: {reason}");
+    }
+    assert_eq!(allocation_entry(report, "alloc-m")["timing"], "COMPATIBLE");
+    assert_eq!(
+        snapshot(&fixture.ws.root),
+        before,
+        "preflight must not write"
+    );
+    // Moving the reused observation onto the empty allocation cannot make it an attempt.
+    fixture.entry("alloc-m").keys.clear();
+    fixture
+        .entry("alloc-z")
+        .keys
+        .push("grounded_creation".into());
+    let observation = fixture.observations.get_mut("grounded_creation").unwrap();
+    observation["started_at_utc"] = json!("2026-09-07T08:30:00Z");
+    observation["finished_at_utc"] = json!("2026-09-07T08:30:01Z");
+    fixture.materialize();
+    let packet = fixture.packet();
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    let report = &result.output;
+    let row = report["observations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["check"] == "grounded_creation")
+        .unwrap();
+    assert_eq!(row["status"], "BLOCKED", "{report}");
+    assert!(
+        row["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not a recorded attempt"),
+        "{report}"
+    );
+    assert_eq!(
+        allocation_entry(report, "alloc-z")["timing"],
+        "NOT_APPLICABLE",
+        "{report}"
+    );
+    assert!(
+        serde_json::to_string(&report["pending"])
+            .unwrap()
+            .contains("native observation for grounded_creation: NOT_PRESENT"),
+        "{report}"
+    );
+    fixture.refused(&["not a recorded attempt"]);
 }
 
 #[test]
@@ -3591,8 +3860,13 @@ fn unsafe_or_overlapping_test_destination_is_refused() {
     assert!(!worktree.join(".agents").exists());
 }
 
+/// Also superseded by the owner's 2026-09-10 approval (see
+/// `preflight_admits_preparation_before_the_freeze_when_the_first_attempt_follows`): the
+/// same preparation-before-freeze fixture, now under a selected test destination. The
+/// timing rule is destination-independent, so the redirected packet is admitted for the
+/// same reason and the installation writes only to the selected destination.
 #[test]
-fn selected_test_destination_keeps_the_freeze_rule_unchanged() {
+fn selected_test_destination_applies_the_approved_freeze_timing_rule() {
     let mut fixture = Local::new();
     fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
     fixture.results["native_turns"] = json!(5);
@@ -3602,34 +3876,54 @@ fn selected_test_destination_keeps_the_freeze_rule_unchanged() {
     fixture.original("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:59Z");
     fixture.closeout("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:59Z");
     fixture.freeze();
+    let historical = fixture.ws.project.clone();
     let worktree = fixture.redirect("worktree");
     fixture.publish();
+    let historical_before = snapshot(&historical);
     let packet = fixture.packet();
     let before = snapshot(&fixture.ws.root);
     let result = fixture.ws.preflight(&packet);
-    assert_eq!(result.code, 2, "{}", result.text);
+    assert_eq!(result.code, 0, "{}", result.text);
     let report = &result.output;
-    assert_eq!(report["status"], "BLOCKED");
+    assert_eq!(report["status"], "COMPATIBLE", "{report}");
     assert_eq!(check(report, "destination_separation")["status"], "PASS");
     assert_eq!(check(report, "packet_record")["status"], "PASS", "{report}");
-    let blocked = allocation_entry(report, "alloc-m");
-    assert_eq!(blocked["status"], "BLOCKED", "{report}");
-    assert!(
-        serde_json::to_string(&blocked["blockers"])
-            .unwrap()
-            .contains("allocation window must follow the frozen acceptance set"),
-        "{report}"
-    );
-    assert_eq!(blocked["frozen_at_utc"], "2026-09-07T09:59:59.5Z");
+    let admitted = allocation_entry(report, "alloc-m");
+    assert_eq!(admitted["status"], "COMPATIBLE", "{report}");
+    assert_eq!(admitted["timing"], "COMPATIBLE", "{report}");
+    assert_eq!(admitted["frozen_at_utc"], "2026-09-07T09:59:59.5Z");
     assert_eq!(
-        blocked["earliest_attempt_started_at_utc"],
+        admitted["earliest_attempt_started_at_utc"],
         "2026-09-07T10:00:00Z"
     );
+    assert!(
+        admitted["rule"].as_str().unwrap().contains("2026-09-10"),
+        "{report}"
+    );
+    // The preflight is read-only, so nothing is installed at the selected destination yet.
     assert_eq!(
         snapshot(&fixture.ws.root),
         before,
         "preflight must not write"
     );
-    fixture.refused(&["allocation window must follow the frozen acceptance set"]);
     assert!(!worktree.join(".agents").exists());
+    // Installation then writes only to the selected destination, never the historical root.
+    let result = fixture.installed();
+    assert_eq!(result["project"], json!(worktree.to_str().unwrap()));
+    assert_eq!(
+        result["historical_project_root"],
+        json!(historical.to_str().unwrap())
+    );
+    for package in &fixture.packages {
+        assert!(
+            worktree
+                .join(".agents/skills")
+                .join(package["name"].as_str().unwrap())
+                .join("SKILL.md")
+                .is_file(),
+            "expected the selected destination to receive the package"
+        );
+    }
+    assert!(!historical.join(".agents").exists());
+    assert_eq!(snapshot(&historical), historical_before);
 }
