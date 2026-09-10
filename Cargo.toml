@@ -21,3 +21,6 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 all = "warn"
+
+[build-dependencies]
+sha2 = "=0.10.9"
