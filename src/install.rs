@@ -1460,6 +1460,10 @@ fn closeout_facts(closeout: &Value, original: &Value) -> Result<Closeout> {
             )?;
             let native = sub(closeout, "native")?;
             let preserved = sub(closeout, "preserved")?;
+            require(
+                !obj(native)?.is_empty() || get(closeout, "attempts_used")? == &json!(0),
+                "stopped closeout has attempts but no native evidence",
+            )?;
             let natives = if obj(native)?.is_empty() {
                 Vec::new()
             } else {

@@ -2155,3 +2155,12 @@ fn reuse_results_must_declare_every_listed_allocation_and_count() {
     fixture.publish();
     fixture.refused(&["unlisted allocation"]);
 }
+
+#[test]
+fn stopped_closeout_with_attempts_requires_native_evidence() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.closeout("alloc-01")["native"] = json!({});
+    fixture.freeze();
+    fixture.refused(&["stopped closeout has attempts but no native evidence"]);
+}
