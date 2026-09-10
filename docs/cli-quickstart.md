@@ -32,15 +32,16 @@ CI selects Rust 1.94.0 (`.github/workflows/ci.yml`). Check before building:
 
 ```bash
 rustup toolchain list
-cargo +1.94.0 --version
+rustup run 1.94.0 cargo --version
 ```
 
 Expected: a line starting `1.94.0-` and `cargo 1.94.0 (...)`. If `rustup` prints
-`command not found`, Rust is not installed; installing rustup is your own
-action and is outside this guide. If the listing lacks `1.94.0`, rustup
-downloads that toolchain the first time `cargo +1.94.0` runs (CI uses
-`rustup toolchain install 1.94.0 --profile minimal` explicitly); treat that
-download as your own install decision, not a step this guide performs.
+`command not found`, it is unavailable on your current `PATH`; stop and arrange
+that prerequisite separately. If toolchain `1.94.0` is absent, `rustup run`
+without `--install` reports that it is not installed and exits without downloading
+it. Stop before building; toolchain installation is a separate operator decision.
+Repeat these checks after that prerequisite is satisfied. CI installs its own
+toolchain explicitly; this guide does not.
 
 Python 3.12 and bubblewrap are not needed for anything below. They belong to
 the legacy tests, gates, `devforge isolate`, and `scripts/verify_poc.py`.
@@ -49,7 +50,7 @@ the legacy tests, gates, `devforge isolate`, and `scripts/verify_poc.py`.
 
 ```bash
 cd "$DEVFORGE_SRC"
-cargo +1.94.0 build --locked
+rustup run 1.94.0 cargo build --locked
 ls -l "$DEVFORGE_SRC/target/debug/devforge"
 ```
 
@@ -66,13 +67,17 @@ project. Installation is a separate, evidence-gated action; see
 ```bash
 "$DEVFORGE_SRC/target/debug/devforge" --version
 "$DEVFORGE_SRC/target/debug/devforge" --help
+"$DEVFORGE_SRC/target/debug/devforge" install --help
+"$DEVFORGE_SRC/target/debug/devforge" validate --help
 "$DEVFORGE_SRC/target/debug/devforge" install identity
 ```
 
 `--version` prints `devforge 0.1.0`; it does not identify the source revision.
-`--help` lists the subcommands present in this build. A name that is not
-listed is not available: the CLI answers
-`error: unrecognized subcommand '<name>'` with exit 2 and runs nothing.
+`--help` lists commands at the selected level. Top-level help lists `install`
+and `validate`; `install --help` and `validate --help` list their nested commands.
+Check the appropriate level before deciding whether a command is available.
+An unavailable command produces `error: unrecognized subcommand '<name>'`
+with exit 2 and does not execute the requested operation.
 
 `install identity` prints JSON with the executable's canonical path and
 SHA-256 plus the `source_sha256` embedded at build time. Its own
