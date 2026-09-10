@@ -1341,6 +1341,136 @@ fn routine(
     Ok(())
 }
 
+const RESULTS_V1: &str = "devforge.manual-local-acceptance-results/v1";
+const RESULTS_V2: &str = "devforge.manual-local-acceptance-results/v2";
+const OBSERVATION_V1: &str = "devforge.manual-local-observation/v1";
+const OBSERVATION_V2: &str = "devforge.manual-local-observation/v2";
+const ALLOCATION_V1: &str = "devforge.manual-local-allocation/v1";
+const ALLOCATION_STATUSES: [&str; 3] = ["COMPLETED", "STOPPED_BLOCKED", "EXHAUSTED"];
+
+/// A preserved prior allocation whose recorded passing attempts may be reused.
+struct Allocation {
+    id: String,
+    start: i128,
+    deadline: i128,
+    attempts: BTreeMap<String, Value>,
+    used: bool,
+}
+
+/// Validate one `devforge.manual-local-allocation/v1` reference against the
+/// current record's owner, frozen set and candidate identity. Every attempt,
+/// including failed ones, stays in its ledger and must agree with the
+/// preserved closeout. Nothing here re-executes, re-grades or re-counts.
+fn allocation(
+    reference: &Value,
+    record: &Value,
+    owner: &str,
+    frozen: i128,
+    identities: &Value,
+    evidence: &mut Evidence,
+) -> Result<Allocation> {
+    let doc = evidence.document(reference, true)?;
+    exact(
+        &doc,
+        &[
+            "schema_version",
+            "allocation_id",
+            "owner",
+            "authorization",
+            "acceptance_set",
+            "packages",
+            "started_at_utc",
+            "deadline_utc",
+            "max_attempts",
+            "attempts",
+            "status",
+            "original_allocation",
+            "closeout",
+        ],
+        "allocation record",
+    )?;
+    require(
+        is(&doc["schema_version"], ALLOCATION_V1),
+        "unsupported allocation record",
+    )?;
+    let id = text(&doc["allocation_id"], "allocation ID")?.to_string();
+    require(is(&doc["owner"], owner), "allocation owner differs")?;
+    evidence.pin(&doc["authorization"], true)?;
+    require(
+        doc["acceptance_set"] == record["acceptance_set"],
+        "allocation bound to a different acceptance set",
+    )?;
+    require(
+        doc["packages"] == *identities,
+        "allocation candidate identity differs",
+    )?;
+    let start = time(&doc["started_at_utc"])?;
+    let deadline = time(&doc["deadline_utc"])?;
+    require(
+        frozen < start && start < deadline,
+        "allocation window must follow the frozen acceptance set",
+    )?;
+    let max_attempts = doc["max_attempts"].as_i64().unwrap_or_default();
+    require(
+        is_int(&doc["max_attempts"]) && max_attempts > 0,
+        "unbounded allocation",
+    )?;
+    require(
+        ALLOCATION_STATUSES.iter().any(|s| is(&doc["status"], s)),
+        "unsupported allocation status",
+    )?;
+    evidence.pin(&doc["original_allocation"], false)?;
+    let rows = list(&doc["attempts"])?;
+    require(
+        i64::try_from(rows.len()).is_ok_and(|n| n <= max_attempts),
+        "allocation attempt limit exceeded",
+    )?;
+    let closeout = evidence.document(&doc["closeout"], false)?;
+    require(
+        get(&closeout, "status")? == &doc["status"]
+            && get(&closeout, "attempts_used")? == &json!(rows.len())
+            && get(&closeout, "clock_restarted")? == &Value::Bool(false),
+        "allocation closeout differs from its ledger",
+    )?;
+    evidence.walk(&closeout)?;
+    let mut attempts = BTreeMap::new();
+    for row in rows {
+        exact(
+            row,
+            &[
+                "attempt_id",
+                "actor",
+                "started_at_utc",
+                "finished_at_utc",
+                "outcome",
+                "evidence",
+            ],
+            "allocation attempt",
+        )?;
+        let attempt_id = text(&row["attempt_id"], "attempt ID")?.to_string();
+        text(&row["actor"], "attempt actor")?;
+        text(&row["outcome"], "attempt outcome")?;
+        let from = time(&row["started_at_utc"])?;
+        let to = time(&row["finished_at_utc"])?;
+        require(
+            start <= from && from <= to && to <= deadline,
+            "allocation attempt outside its approved window",
+        )?;
+        evidence.refs(&row["evidence"])?;
+        require(
+            attempts.insert(attempt_id, row.clone()).is_none(),
+            "duplicate allocation attempt",
+        )?;
+    }
+    Ok(Allocation {
+        id,
+        start,
+        deadline,
+        attempts,
+        used: false,
+    })
+}
+
 /// A separately authorized local claim; never a Routine or Full decision.
 fn local_baseline(
     record: &Value,
@@ -1518,25 +1648,25 @@ fn local_baseline(
         "unbounded local set",
     )?;
     let results = evidence.document(&record["results"], false)?;
-    exact(
-        &results,
-        &[
-            "schema_version",
-            "acceptance_set",
-            "qualification_status",
-            "checks",
-            "qualification_cases",
-            "started_at_utc",
-            "finished_at_utc",
-            "native_turns",
-        ],
-        "local results",
-    )?;
+    // v2 results may reuse observations preserved from earlier approved allocations.
+    let reuse = is(&results["schema_version"], RESULTS_V2);
+    let mut fields = vec![
+        "schema_version",
+        "acceptance_set",
+        "qualification_status",
+        "checks",
+        "qualification_cases",
+        "started_at_utc",
+        "finished_at_utc",
+        "native_turns",
+    ];
+    if reuse {
+        fields.extend(["allocations", "reused_observations"]);
+    }
+    exact(&results, &fields, "local results")?;
     require(
-        is(
-            &results["schema_version"],
-            "devforge.manual-local-acceptance-results/v1",
-        ) && results["acceptance_set"] == record["acceptance_set"]
+        (reuse || is(&results["schema_version"], RESULTS_V1))
+            && results["acceptance_set"] == record["acceptance_set"]
             && is(&results["qualification_status"], "UNQUALIFIED"),
         "local result/claim mismatch",
     )?;
@@ -1546,8 +1676,9 @@ fn local_baseline(
     )?;
     let start = time(&results["started_at_utc"])?;
     let end = time(&results["finished_at_utc"])?;
+    let frozen = time(&plan["frozen_at_utc"])?;
     require(
-        time(&plan["frozen_at_utc"])? < start && start <= end,
+        frozen < start && start <= end,
         "acceptance set must be predefined",
     )?;
     require(
@@ -1569,6 +1700,7 @@ fn local_baseline(
         "local acceptance check coverage differs",
     )?;
     let mut observations = BTreeSet::new();
+    let mut reused = BTreeSet::new();
     let mut actors = BTreeSet::new();
     let mut identities = Map::new();
     for package in list(&record["packages"])? {
@@ -1578,6 +1710,24 @@ fn local_baseline(
         );
     }
     let identities = Value::Object(identities);
+    let mut allocations: BTreeMap<String, Allocation> = BTreeMap::new();
+    if reuse {
+        for reference in list(&results["allocations"])? {
+            let key = text(index(reference, "path")?, "allocation path")?.to_string();
+            let loaded = allocation(
+                reference,
+                record,
+                &owner,
+                frozen,
+                &identities,
+                &mut evidence,
+            )?;
+            require(
+                allocations.insert(key, loaded).is_none(),
+                "duplicate allocation reference",
+            )?;
+        }
+    }
     for (key, kind) in LOCAL_CHECKS {
         let result = exact(
             &results["checks"][key],
@@ -1603,31 +1753,30 @@ fn local_baseline(
             "native observation not bound to check",
         )?;
         let observation = evidence.document(&result["native_observation"], false)?;
-        exact(
-            &observation,
-            &[
-                "schema_version",
-                "acceptance_set",
-                "outcome",
-                "packages",
-                "actor",
-                "native_client",
-                "model",
-                "reasoning_effort",
-                "state_isolation",
-                "transcript",
-                "artifacts",
-                "started_at_utc",
-                "finished_at_utc",
-                "manual_transfer",
-            ],
-            "native local observation",
-        )?;
+        let prior = is(&observation["schema_version"], OBSERVATION_V2);
+        let mut fields = vec![
+            "schema_version",
+            "acceptance_set",
+            "outcome",
+            "packages",
+            "actor",
+            "native_client",
+            "model",
+            "reasoning_effort",
+            "state_isolation",
+            "transcript",
+            "artifacts",
+            "started_at_utc",
+            "finished_at_utc",
+            "manual_transfer",
+        ];
+        if prior {
+            fields.extend(["allocation", "attempt_id"]);
+        }
+        exact(&observation, &fields, "native local observation")?;
         require(
-            is(
-                &observation["schema_version"],
-                "devforge.manual-local-observation/v1",
-            ) && observation["acceptance_set"] == record["acceptance_set"]
+            (prior || is(&observation["schema_version"], OBSERVATION_V1))
+                && observation["acceptance_set"] == record["acceptance_set"]
                 && observation["packages"] == identities
                 && is(&observation["outcome"], "PASS")
                 && is(&observation["native_client"], "codex"),
@@ -1641,10 +1790,56 @@ fn local_baseline(
         )?;
         let observed_start = time(&observation["started_at_utc"])?;
         let observed_end = time(&observation["finished_at_utc"])?;
-        require(
-            start <= observed_start && observed_start <= observed_end && observed_end <= end,
-            "observation outside predefined set interval",
-        )?;
+        let path = index(&result["native_observation"], "path")?
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if prior {
+            // A preserved observation is validated against the allocation that
+            // produced it and is never counted as a turn of this interval.
+            require(reuse, "reused observation requires reuse results")?;
+            let allocation_path = text(
+                index(&observation["allocation"], "path")?,
+                "allocation path",
+            )?;
+            let allocation = allocations
+                .get_mut(allocation_path)
+                .ok_or_else(|| refuse("reused observation references an unlisted allocation"))?;
+            require(
+                allocation.start <= observed_start
+                    && observed_start <= observed_end
+                    && observed_end <= allocation.deadline,
+                "reused observation outside its allocation window",
+            )?;
+            let attempt_id = text(&observation["attempt_id"], "attempt ID")?;
+            let attempt = allocation.attempts.get(attempt_id).ok_or_else(|| {
+                refuse("reused observation is not a recorded attempt of its allocation")
+            })?;
+            require(
+                is(&attempt["outcome"], "PASS"),
+                "reused attempt did not pass",
+            )?;
+            require(
+                attempt["actor"] == observation["actor"]
+                    && time(&attempt["started_at_utc"])? == observed_start
+                    && time(&attempt["finished_at_utc"])? == observed_end,
+                "reused observation differs from its recorded attempt",
+            )?;
+            require(
+                attempt["evidence"]
+                    .as_array()
+                    .is_some_and(|e| e.contains(&observation["transcript"])),
+                "reused observation transcript is not the attempt's recorded evidence",
+            )?;
+            allocation.used = true;
+            reused.insert(path);
+        } else {
+            require(
+                start <= observed_start && observed_start <= observed_end && observed_end <= end,
+                "observation outside predefined set interval",
+            )?;
+            observations.insert(path);
+        }
         evidence.pin(&observation["state_isolation"], false)?;
         evidence.pin(&observation["transcript"], false)?;
         evidence.refs(&observation["artifacts"])?;
@@ -1676,17 +1871,21 @@ fn local_baseline(
             }
         }
         evidence.walk(&observation)?;
-        observations.insert(
-            index(&result["native_observation"], "path")?
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-        );
     }
     require(
         i64::try_from(observations.len()).is_ok_and(|n| n <= turns.as_i64().unwrap_or_default()),
         "native turn count omits observations",
     )?;
+    if reuse {
+        require(
+            results["reused_observations"] == json!(reused.len()),
+            "reused observation count differs",
+        )?;
+        require(
+            allocations.values().all(|a| a.used),
+            "listed allocation supplied no reused observation",
+        )?;
+    }
     let review = evidence.document(&record["review"], true)?;
     exact(
         &review,
@@ -1764,17 +1963,24 @@ fn local_baseline(
         "missing exact local owner acceptance",
     )?;
     evidence.recheck()?;
-    Ok(Validated {
-        summary: json!({
-            "record": root_pin,
-            "owner": owner,
-            "packages": packages.keys().collect::<Vec<_>>(),
-            "predicate": "manual-local-baseline/v1",
-            "qualification_status": "UNQUALIFIED",
-            "acceptance_status": "LOCAL_ACCEPTANCE_SET_PASS",
-        }),
-        evidence,
-    })
+    let mut summary = json!({
+        "record": root_pin,
+        "owner": owner,
+        "packages": packages.keys().collect::<Vec<_>>(),
+        "predicate": "manual-local-baseline/v1",
+        "qualification_status": "UNQUALIFIED",
+        "acceptance_status": "LOCAL_ACCEPTANCE_SET_PASS",
+    });
+    if reuse {
+        summary["reused_allocations"] = json!(
+            allocations
+                .values()
+                .map(|a| a.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        summary["reused_observations"] = json!(reused.len());
+    }
+    Ok(Validated { summary, evidence })
 }
 
 // ---- protected executable identity ---------------------------------------

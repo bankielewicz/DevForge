@@ -792,6 +792,14 @@ fn missing_evidence_record_refuses_before_writes() {
 }
 
 /// Owner-approved unqualified local baseline fixture for the exact package pair.
+/// A preserved prior allocation whose passing attempts are reused as observations.
+struct Allocation {
+    id: String,
+    record: Value,
+    keys: Vec<String>,
+    pin: Value,
+}
+
 struct Local {
     ws: Workspace,
     raw: Value,
@@ -799,6 +807,9 @@ struct Local {
     packages: Vec<Value>,
     plan: Value,
     observations: BTreeMap<String, Value>,
+    /// Check ID -> check ID whose observation it shares (compatible reuse).
+    shared: BTreeMap<String, String>,
+    allocations: Vec<Allocation>,
     results: Value,
     review: Value,
     evidence_path: PathBuf,
@@ -911,6 +922,8 @@ impl Local {
             packages,
             plan,
             observations,
+            shared: BTreeMap::new(),
+            allocations: Vec::new(),
             results,
             review,
             evidence_path: PathBuf::new(),
@@ -919,15 +932,105 @@ impl Local {
         fixture
     }
 
+    fn identities(&self) -> Value {
+        let map: Map<String, Value> = self
+            .packages
+            .iter()
+            .map(|p| {
+                (
+                    p["name"].as_str().unwrap().to_string(),
+                    p["manifest"].clone(),
+                )
+            })
+            .collect();
+        Value::Object(map)
+    }
+
+    /// Move the named checks' observations into a preserved prior allocation `id`
+    /// whose ledger also retains one failed attempt, and switch results to v2.
+    fn reuse(&mut self, id: &str, keys: &[&str]) {
+        self.plan["frozen_at_utc"] = json!("2026-09-07T09:00:00Z");
+        let mut attempts = vec![
+            json!({"attempt_id": format!("{id}-a0"), "actor": "fixture-worker",
+            "started_at_utc": "2026-09-07T10:00:00Z", "finished_at_utc": "2026-09-07T10:00:00.5Z",
+            "outcome": "COULD_NOT_RUN", "evidence": [self.history]}),
+        ];
+        for key in keys {
+            let observation = self.observations.get_mut(*key).unwrap();
+            observation["schema_version"] = json!("devforge.manual-local-observation/v2");
+            observation["started_at_utc"] = json!("2026-09-07T10:00:01Z");
+            observation["finished_at_utc"] = json!("2026-09-07T10:00:02Z");
+            observation["attempt_id"] = json!(format!("{id}-{key}"));
+            attempts.push(
+                json!({"attempt_id": format!("{id}-{key}"), "actor": "fixture-worker",
+                "started_at_utc": "2026-09-07T10:00:01Z", "finished_at_utc": "2026-09-07T10:00:02Z",
+                "outcome": "PASS", "evidence": [self.raw]}),
+            );
+        }
+        let original = self.ws.put(
+            &format!("{id}-original-allocation.json"),
+            &json!({"slots": keys, "max_seconds": 10800, "status": "STOPPED_BLOCKED"}),
+        );
+        let closeout = self.ws.put(
+            &format!("{id}-closeout.json"),
+            &json!({"status": "STOPPED_BLOCKED", "attempts_used": attempts.len(),
+                "clock_restarted": false, "reason": "Synthetic preserved failure; never rewritten"}),
+        );
+        let record = json!({"schema_version": "devforge.manual-local-allocation/v1", "allocation_id": id,
+            "owner": "fixture-owner", "authorization": self.raw, "packages": self.identities(),
+            "started_at_utc": "2026-09-07T10:00:00Z", "deadline_utc": "2026-09-07T13:00:00Z",
+            "max_attempts": 5, "attempts": attempts, "status": "STOPPED_BLOCKED",
+            "original_allocation": original, "closeout": closeout});
+        self.allocations.push(Allocation {
+            id: id.to_string(),
+            record,
+            keys: keys.iter().map(|k| k.to_string()).collect(),
+            pin: Value::Null,
+        });
+        self.results["schema_version"] = json!("devforge.manual-local-acceptance-results/v2");
+        let reused: usize = self.allocations.iter().map(|a| a.keys.len()).sum();
+        self.results["reused_observations"] = json!(reused);
+    }
+
+    fn allocation(&mut self, id: &str) -> &mut Value {
+        &mut self
+            .allocations
+            .iter_mut()
+            .find(|a| a.id == id)
+            .unwrap()
+            .record
+    }
+
     fn freeze(&mut self) {
         let plan = self.ws.put("set.json", &self.plan);
+        let mut listed = Vec::new();
+        for allocation in &mut self.allocations {
+            allocation.record["acceptance_set"] = plan.clone();
+            allocation.pin = self.ws.put(
+                &format!("allocation-{}.json", allocation.id),
+                &allocation.record,
+            );
+            listed.push(allocation.pin.clone());
+            for key in &allocation.keys {
+                self.observations.get_mut(key).unwrap()["allocation"] = allocation.pin.clone();
+            }
+        }
+        if !self.allocations.is_empty() {
+            self.results["allocations"] = json!(listed);
+        }
         let mut rows = Map::new();
+        let mut written: BTreeMap<String, Value> = BTreeMap::new();
         for (key, kind) in CHECKS {
             let mut observation = Value::Null;
             if kind == "N" {
-                let entry = self.observations.get_mut(key).unwrap();
-                entry["acceptance_set"] = plan.clone();
-                observation = self.ws.put(&format!("{key}.json"), entry);
+                if let Some(source) = self.shared.get(key) {
+                    observation = written[source].clone();
+                } else {
+                    let entry = self.observations.get_mut(key).unwrap();
+                    entry["acceptance_set"] = plan.clone();
+                    observation = self.ws.put(&format!("{key}.json"), entry);
+                    written.insert(key.to_string(), observation.clone());
+                }
             }
             let evidence = if observation.is_null() {
                 self.raw.clone()
@@ -1485,4 +1588,258 @@ fn conflicting_replacement_aliases_must_not_report_installed() {
         before,
         "refusal must not write"
     );
+}
+
+// Cross-allocation evidence reuse (2026-09-10).
+
+#[test]
+fn reused_observations_from_a_prior_allocation_install_without_counting_as_new_turns() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation", "creator_to_evaluator"]);
+    // Only the four observations of the current interval are new native turns.
+    fixture.results["native_turns"] = json!(4);
+    fixture.freeze();
+    let result = fixture.installed();
+    assert_eq!(result["qualification_status"], "UNQUALIFIED");
+    assert_eq!(result["acceptance_status"], "LOCAL_ACCEPTANCE_SET_PASS");
+    let adoption = &fixture.ws.inventory()["manual_expert_adoption"];
+    assert_eq!(adoption["reused_allocations"], json!(["alloc-01"]));
+    assert_eq!(adoption["reused_observations"], 2);
+    assert_eq!(adoption["acceptance_status"], "LOCAL_ACCEPTANCE_SET_PASS");
+    // Every original record, including the retained failure, is untouched.
+    let closeout: Value = serde_json::from_slice(
+        &fs::read(pin_path(&fixture.allocation("alloc-01")["closeout"])).unwrap(),
+    )
+    .unwrap();
+    // One retained failed attempt plus the two reused passing attempts.
+    assert_eq!(closeout["attempts_used"], 3);
+    assert_eq!(closeout["status"], "STOPPED_BLOCKED");
+    assert!(
+        fixture.allocation("alloc-01")["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["outcome"] == "COULD_NOT_RUN")
+    );
+    assert_eq!(
+        fs::read_to_string(pin_path(&fixture.history)).unwrap(),
+        "Retained original FAIL; never rewritten."
+    );
+    // A turn count below the current observations still refuses.
+    fixture.results["native_turns"] = json!(3);
+    fixture.freeze();
+    fixture.refused(&["native turn count omits observations"]);
+}
+
+#[test]
+fn reused_observation_requires_listed_allocation() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.results["schema_version"] = json!("devforge.manual-local-acceptance-results/v1");
+    fixture
+        .results
+        .as_object_mut()
+        .unwrap()
+        .remove("reused_observations");
+    fixture.freeze();
+    fixture
+        .results
+        .as_object_mut()
+        .unwrap()
+        .remove("allocations");
+    fixture.publish();
+    fixture.refused(&["reused observation requires"]);
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.freeze();
+    let unlisted = fixture
+        .ws
+        .put("unlisted-allocation.json", &json!({"other": true}));
+    fixture.observations.get_mut("grounded_creation").unwrap()["allocation"] = unlisted.clone();
+    fixture.observations.get_mut("grounded_creation").unwrap()["acceptance_set"] =
+        fixture.results["acceptance_set"].clone();
+    let observation = fixture.ws.put(
+        "grounded_creation.json",
+        &fixture.observations["grounded_creation"],
+    );
+    fixture.results["checks"]["grounded_creation"]["native_observation"] = observation.clone();
+    fixture.results["checks"]["grounded_creation"]["evidence"] = json!([observation]);
+    fixture.review["check_judgments"]["grounded_creation"]["evidence"] = json!([observation]);
+    fixture.publish();
+    fixture.refused(&["unlisted allocation"]);
+}
+
+#[test]
+fn allocation_without_authorization_or_with_wrong_identity_is_refused() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture
+        .allocation("alloc-01")
+        .as_object_mut()
+        .unwrap()
+        .remove("authorization");
+    fixture.freeze();
+    fixture.refused(&["invalid allocation record"]);
+    fixture.allocation("alloc-01")["authorization"] = json!({"path": "/nonexistent/approval.txt",
+        "sha256": "0".repeat(64)});
+    fixture.freeze();
+    fixture.refused(&["evidence"]);
+    let raw = fixture.raw.clone();
+    fixture.allocation("alloc-01")["authorization"] = raw;
+    fixture.allocation("alloc-01")["packages"][EVALUATOR]["sha256"] = json!("f".repeat(64));
+    fixture.freeze();
+    fixture.refused(&["allocation candidate identity differs"]);
+    let identities = fixture.identities();
+    fixture.allocation("alloc-01")["packages"] = identities;
+    fixture.allocation("alloc-01")["owner"] = json!("someone-else");
+    fixture.freeze();
+    fixture.refused(&["allocation owner differs"]);
+}
+
+#[test]
+fn allocation_must_bind_the_same_frozen_acceptance_set() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.freeze();
+    // Re-point the allocation at a different frozen set without touching anything else.
+    let other = fixture
+        .ws
+        .put("other-set.json", &json!({"frozen": "elsewhere"}));
+    let mut record = fixture.allocation("alloc-01").clone();
+    record["acceptance_set"] = other;
+    let pin = fixture.ws.put("allocation-alloc-01.json", &record);
+    fixture.results["allocations"] = json!([pin.clone()]);
+    fixture.observations.get_mut("grounded_creation").unwrap()["allocation"] = pin;
+    fixture.observations.get_mut("grounded_creation").unwrap()["acceptance_set"] =
+        fixture.results["acceptance_set"].clone();
+    let observation = fixture.ws.put(
+        "grounded_creation.json",
+        &fixture.observations["grounded_creation"],
+    );
+    fixture.results["checks"]["grounded_creation"]["native_observation"] = observation.clone();
+    fixture.results["checks"]["grounded_creation"]["evidence"] = json!([observation]);
+    fixture.review["check_judgments"]["grounded_creation"]["evidence"] = json!([observation]);
+    fixture.publish();
+    fixture.refused(&["different acceptance set"]);
+}
+
+#[test]
+fn reused_observation_outside_its_allocation_window_is_refused() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    let observation = fixture.observations.get_mut("grounded_creation").unwrap();
+    observation["started_at_utc"] = json!("2026-09-07T13:00:01Z");
+    observation["finished_at_utc"] = json!("2026-09-07T13:00:02Z");
+    fixture.freeze();
+    fixture.refused(&["outside its allocation window"]);
+    // An allocation that starts before the set was frozen is not an approved window for it.
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.plan["frozen_at_utc"] = json!("2026-09-07T10:30:00Z");
+    fixture.freeze();
+    fixture.refused(&["allocation window must follow the frozen acceptance set"]);
+}
+
+#[test]
+fn concealed_failed_or_exhausted_attempts_are_refused() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    // Dropping the retained failed attempt contradicts the preserved closeout.
+    fixture.allocation("alloc-01")["attempts"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    fixture.freeze();
+    fixture.refused(&["closeout differs from its ledger"]);
+    // Claiming more attempts than were approved.
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.allocation("alloc-01")["max_attempts"] = json!(1);
+    fixture.freeze();
+    fixture.refused(&["allocation attempt limit exceeded"]);
+    // Relabelling the allocation status without its closeout.
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.allocation("alloc-01")["status"] = json!("COMPLETED");
+    fixture.freeze();
+    fixture.refused(&["closeout differs from its ledger"]);
+    // Reusing the attempt that did not pass.
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.observations.get_mut("grounded_creation").unwrap()["attempt_id"] = json!("alloc-01-a0");
+    fixture.freeze();
+    fixture.refused(&["reused attempt did not pass"]);
+    // An attempt recorded outside the approved window.
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.allocation("alloc-01")["attempts"][0]["finished_at_utc"] =
+        json!("2026-09-07T13:00:01Z");
+    fixture.freeze();
+    fixture.refused(&["allocation attempt outside its approved window"]);
+}
+
+#[test]
+fn reused_observation_must_match_its_recorded_attempt() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.observations.get_mut("grounded_creation").unwrap()["attempt_id"] =
+        json!("alloc-01-unknown");
+    fixture.freeze();
+    fixture.refused(&["not a recorded attempt"]);
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.observations.get_mut("grounded_creation").unwrap()["actor"] = json!("another-worker");
+    fixture.freeze();
+    fixture.refused(&["differs from its recorded attempt"]);
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    let other = fixture
+        .ws
+        .put("other-transcript.txt", &json!("Unrecorded transcript"));
+    fixture.observations.get_mut("grounded_creation").unwrap()["transcript"] = other;
+    fixture.freeze();
+    fixture.refused(&["not the attempt's recorded evidence"]);
+}
+
+#[test]
+fn compatible_reuse_across_checks_still_needs_separate_judgments() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["reuse"]);
+    fixture
+        .shared
+        .insert("bounded_enhancement".into(), "reuse".into());
+    fixture.results["reused_observations"] = json!(1);
+    fixture.results["native_turns"] = json!(4);
+    fixture.freeze();
+    fixture.installed();
+    assert_eq!(
+        fixture.ws.inventory()["manual_expert_adoption"]["reused_observations"],
+        1
+    );
+    fixture.review["check_judgments"]
+        .as_object_mut()
+        .unwrap()
+        .remove("bounded_enhancement");
+    fixture.publish();
+    fixture.refused(&["local semantic review coverage incomplete"]);
+}
+
+#[test]
+fn reuse_results_must_declare_every_listed_allocation_and_count() {
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.results["reused_observations"] = json!(2);
+    fixture.freeze();
+    fixture.refused(&["reused observation count differs"]);
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.reuse("alloc-02", &[]);
+    fixture.freeze();
+    fixture.refused(&["supplied no reused observation"]);
+    let mut fixture = Local::new();
+    fixture.reuse("alloc-01", &["grounded_creation"]);
+    fixture.freeze();
+    fixture.results["allocations"] = json!([]);
+    fixture.publish();
+    fixture.refused(&["unlisted allocation"]);
 }
