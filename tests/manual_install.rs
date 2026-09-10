@@ -878,6 +878,9 @@ struct Local {
     results: Value,
     review: Value,
     evidence_path: PathBuf,
+    /// A separate test destination selected by the owner (`v2` records); the frozen
+    /// set and the record's `project_root` keep naming the historical root.
+    destination: Option<PathBuf>,
 }
 
 impl Local {
@@ -992,9 +995,29 @@ impl Local {
             results,
             review,
             evidence_path: PathBuf::new(),
+            destination: None,
         };
         fixture.freeze();
         fixture
+    }
+
+    /// Select `ws.root/<name>` as the actual installation destination. The record and
+    /// packet then use the `v2` shapes, naming the historical root, the selected path
+    /// and the unchanged acceptance-set pin; `--project` targets the selected path.
+    fn redirect(&mut self, name: &str) -> PathBuf {
+        let path = self.ws.root.join(name);
+        fs::create_dir_all(&path).unwrap();
+        self.destination = Some(path.clone());
+        self.ws.project = path.clone();
+        path
+    }
+
+    /// The `test_destination` selection for the current set pin, when redirected.
+    fn selection(&self, set: &Value) -> Option<Value> {
+        self.destination.as_ref().map(|path| {
+            json!({"historical_project_root": self.plan["project_root"],
+                "path": path.to_str().unwrap(), "acceptance_set": set})
+        })
     }
 
     fn identities(&self) -> Value {
@@ -1386,11 +1409,16 @@ impl Local {
     }
 
     fn publish(&mut self) {
+        let set = self.ws.put("set.json", &self.plan);
         let mut record = json!({"schema_version": "devforge.manual-expert-local-baseline/v1",
-            "project_root": self.ws.project.to_str().unwrap(), "owner": "fixture-owner", "authorization": self.raw,
-            "packages": self.packages, "acceptance_set": self.ws.put("set.json", &self.plan),
+            "project_root": self.plan["project_root"], "owner": "fixture-owner", "authorization": self.raw,
+            "packages": self.packages, "acceptance_set": set,
             "results": self.ws.put("results.json", &self.results), "review": self.ws.put("review.json", &self.review),
             "historical_evidence": [self.history]});
+        if let Some(selection) = self.selection(&set) {
+            record["schema_version"] = json!("devforge.manual-expert-local-baseline/v2");
+            record["test_destination"] = selection;
+        }
         let acceptance = self.ws.put(
             "acceptance.json",
             &json!({"schema_version": "devforge.manual-local-owner-acceptance/v1", "owner": "fixture-owner",
@@ -1425,12 +1453,17 @@ impl Local {
                     "observation": self.results["checks"][key]["native_observation"]}));
             }
         }
-        json!({"schema_version": "devforge.manual-local-evidence-preflight/v1",
-            "project_root": self.ws.project.to_str().unwrap(), "owner": "fixture-owner",
+        let mut packet = json!({"schema_version": "devforge.manual-local-evidence-preflight/v1",
+            "project_root": self.plan["project_root"], "owner": "fixture-owner",
             "authorization": self.raw, "packages": self.packages,
             "acceptance_set": self.results["acceptance_set"], "historical_evidence": [self.history],
             "allocations": self.results.get("allocations").cloned().unwrap_or_else(|| json!([])),
-            "observations": observations})
+            "observations": observations});
+        if let Some(selection) = self.selection(&self.results["acceptance_set"]) {
+            packet["schema_version"] = json!("devforge.manual-local-evidence-preflight/v2");
+            packet["test_destination"] = selection;
+        }
+        packet
     }
 
     fn packet(&self) -> PathBuf {
@@ -3250,4 +3283,353 @@ fn preflight_applies_the_subsequent_judgment_rule_and_reports_it() {
     );
     assert_eq!(report["observations"][0]["status"], "NOT_PERFORMED");
     fixture.refused(&["judgment is for a different attempt"]);
+}
+
+// Selected test destination (2026-09-10): a `v2` local-baseline record or preflight
+// packet keeps the historical `project_root` the frozen set names and selects a
+// separate `test_destination` for the actual installation, bound to the unchanged
+// acceptance-set pin. The set, its clocks and the historical evidence are not rewritten.
+
+/// A fixture whose owner selected `<root>/worktree` as the test destination, with one
+/// reused allocation so the preflight binds something; returns the historical root too.
+fn redirected_fixture() -> (Local, PathBuf, PathBuf) {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation", "reuse"], "stopped-multi");
+    fixture.results["native_turns"] = json!(4);
+    fixture.freeze();
+    let historical = fixture.ws.project.clone();
+    let worktree = fixture.redirect("worktree");
+    fixture.publish();
+    (fixture, historical, worktree)
+}
+
+fn read_json(path: &Path) -> Value {
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+/// Rewrite the published record's and packet's `test_destination` to `selection`
+/// without touching any other byte; returns the rewritten packet path.
+fn reselect(fixture: &Local, selection: &Value) -> PathBuf {
+    let mut record = read_json(&fixture.evidence_path);
+    record["test_destination"] = selection.clone();
+    fs::write(&fixture.evidence_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let mut packet = fixture.packet_record();
+    packet["test_destination"] = selection.clone();
+    pin_path(&fixture.ws.put("preflight-packet.json", &packet))
+}
+
+/// The preflight must block on `packet_record` with `needle`, mark the dependent
+/// checks NOT_PERFORMED and write nothing.
+fn preflight_blocked_on_packet(fixture: &Local, packet: &Path, needle: &str) {
+    let before = snapshot(&fixture.ws.root);
+    let result = fixture.ws.preflight(packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    assert_eq!(result.output["status"], "BLOCKED", "{}", result.text);
+    let entry = check(&result.output, "packet_record");
+    assert_eq!(entry["status"], "BLOCKED", "{}", result.text);
+    assert!(
+        entry["reason"].as_str().unwrap().contains(needle),
+        "{needle}: {}",
+        result.text
+    );
+    assert_eq!(
+        check(&result.output, "allocations")["status"],
+        "NOT_PERFORMED"
+    );
+    assert_eq!(
+        snapshot(&fixture.ws.root),
+        before,
+        "preflight must not write"
+    );
+}
+
+#[test]
+fn selected_test_destination_installs_without_rewriting_the_frozen_set() {
+    let (fixture, historical, worktree) = redirected_fixture();
+    let set_path = pin_path(&fixture.results["acceptance_set"]);
+    let set_bytes = fs::read(&set_path).unwrap();
+    let historical_before = snapshot(&historical);
+    let framework_before = snapshot(&fixture.ws.framework);
+    let (historical_text, worktree_text) = (
+        historical.to_str().unwrap().to_string(),
+        worktree.to_str().unwrap().to_string(),
+    );
+    // The preflight consumes the same selection and reports both roots.
+    let packet = fixture.packet();
+    let before = snapshot(&fixture.ws.root);
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 0, "{}", result.text);
+    let report = &result.output;
+    assert_eq!(report["status"], "COMPATIBLE", "{report}");
+    assert_eq!(report["project"], json!(worktree_text));
+    assert_eq!(check(report, "destination_separation")["status"], "PASS");
+    let detail = &check(report, "packet_record")["detail"];
+    assert_eq!(detail["historical_project_root"], json!(historical_text));
+    assert_eq!(detail["test_destination"], json!(worktree_text));
+    assert_eq!(check(report, "allocations")["status"], "PASS", "{report}");
+    assert_eq!(check(report, "observations")["status"], "PASS", "{report}");
+    assert!(
+        serde_json::to_string(&report["pending"])
+            .unwrap()
+            .contains(&worktree_text),
+        "pending destination checks must name the actual destination: {report}"
+    );
+    assert_eq!(
+        snapshot(&fixture.ws.root),
+        before,
+        "preflight must not write"
+    );
+    // Installation writes only to the selected destination and records both roots.
+    let result = fixture.installed();
+    assert_eq!(result["project"], json!(worktree_text));
+    assert_eq!(result["historical_project_root"], json!(historical_text));
+    assert_eq!(result["qualification_status"], "UNQUALIFIED");
+    assert_eq!(result["acceptance_status"], "LOCAL_ACCEPTANCE_SET_PASS");
+    for (index, package) in fixture.packages.iter().enumerate() {
+        let installed = worktree
+            .join(".agents/skills")
+            .join(package["name"].as_str().unwrap());
+        assert_eq!(
+            fs::read(installed.join("SKILL.md")).unwrap(),
+            fs::read(fixture.source(index).join("SKILL.md")).unwrap()
+        );
+        assert!(!installed.join("evals").exists());
+    }
+    let adoption = fixture.ws.inventory()["manual_expert_adoption"].clone();
+    assert_eq!(adoption["predicate"], "manual-local-baseline/v2");
+    assert_eq!(adoption["historical_project_root"], json!(historical_text));
+    assert_eq!(adoption["test_destination"], json!(worktree_text));
+    assert_eq!(adoption["acceptance_status"], "LOCAL_ACCEPTANCE_SET_PASS");
+    assert_eq!(adoption["qualification_status"], "UNQUALIFIED");
+    assert_eq!(adoption["reused_allocations"], json!(["alloc-m"]));
+    assert_eq!(snapshot(&historical), historical_before);
+    assert_eq!(snapshot(&fixture.ws.framework), framework_before);
+    // The frozen set is byte-identical and still names only the historical root.
+    assert_eq!(fs::read(&set_path).unwrap(), set_bytes);
+    let set = read_json(&set_path);
+    assert_eq!(set["project_root"], json!(historical_text));
+    assert!(set.get("test_destination").is_none());
+    assert_eq!(
+        fs::read_to_string(pin_path(&fixture.history)).unwrap(),
+        "Retained original FAIL; never rewritten."
+    );
+    // Owner acceptance covered the selected destination through the record it accepted.
+    let record = read_json(&fixture.evidence_path);
+    assert_eq!(record["project_root"], json!(historical_text));
+    let acceptance = read_json(&pin_path(&record["acceptance"]));
+    assert_eq!(
+        acceptance["inputs"]["test_destination"],
+        json!({"historical_project_root": historical_text, "path": worktree_text,
+            "acceptance_set": fixture.results["acceptance_set"]})
+    );
+}
+
+#[test]
+fn different_destination_without_explicit_selection_still_refuses() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    fixture.freeze();
+    let v1_record = fs::read(&fixture.evidence_path).unwrap();
+    let v1_packet = fixture.packet_record();
+    let worktree = fixture.redirect("worktree");
+    // The unchanged v1 record and packet name only the historical root.
+    fs::write(&fixture.evidence_path, &v1_record).unwrap();
+    fixture.refused(&["wrong local installation destination"]);
+    let packet = pin_path(&fixture.ws.put("v1-packet.json", &v1_packet));
+    preflight_blocked_on_packet(&fixture, &packet, "wrong local installation destination");
+    // A v1 record cannot carry the selection, and a v2 record cannot omit it.
+    let mut record = read_json(&fixture.evidence_path);
+    record["test_destination"] = fixture.selection(&record["acceptance_set"]).unwrap();
+    fs::write(&fixture.evidence_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    fixture.refused(&["invalid local baseline record"]);
+    fixture.publish();
+    let mut record = read_json(&fixture.evidence_path);
+    assert_eq!(
+        record["schema_version"],
+        "devforge.manual-expert-local-baseline/v2"
+    );
+    record.as_object_mut().unwrap().remove("test_destination");
+    fs::write(&fixture.evidence_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    fixture.refused(&["invalid local baseline record"]);
+    let mut packet = fixture.packet_record();
+    packet.as_object_mut().unwrap().remove("test_destination");
+    let packet = pin_path(&fixture.ws.put("v2-packet.json", &packet));
+    preflight_blocked_on_packet(&fixture, &packet, "invalid preflight packet");
+    assert!(!worktree.join(".agents").exists());
+}
+
+#[test]
+fn test_destination_selection_must_bind_the_actual_destination_and_frozen_set() {
+    let (fixture, _historical, worktree) = redirected_fixture();
+    let set = fixture.results["acceptance_set"].clone();
+    let good = fixture.selection(&set).unwrap();
+    let elsewhere = fixture.ws.root.join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    let mut other = good.clone();
+    other["path"] = json!(elsewhere.to_str().unwrap());
+    let mut stale = good.clone();
+    stale["acceptance_set"]["sha256"] = json!("0".repeat(64));
+    let mut moved = good.clone();
+    moved["acceptance_set"]["path"] = json!(
+        pin_path(&set)
+            .with_file_name("other-set.json")
+            .to_str()
+            .unwrap()
+    );
+    let mut root = good.clone();
+    root["historical_project_root"] = json!(worktree.to_str().unwrap());
+    let mut relative = good.clone();
+    relative["path"] = json!("worktree");
+    let mut dotted = good.clone();
+    dotted["path"] = json!(format!("{}/../worktree", worktree.to_str().unwrap()));
+    let mut extra = good.clone();
+    extra["note"] = json!("selected by the owner");
+    let mut bare = good.clone();
+    bare.as_object_mut().unwrap().remove("acceptance_set");
+    for (selection, needle) in [
+        (
+            other,
+            "test destination differs from the installation destination",
+        ),
+        (
+            stale,
+            "test destination is bound to a different acceptance set",
+        ),
+        (
+            moved,
+            "test destination is bound to a different acceptance set",
+        ),
+        (
+            root,
+            "test destination names a different historical project root",
+        ),
+        (relative, "noncanonical test destination"),
+        (dotted, "noncanonical test destination"),
+        (extra, "invalid test destination selection"),
+        (bare, "invalid test destination selection"),
+    ] {
+        let packet = reselect(&fixture, &selection);
+        fixture.refused(&[needle]);
+        preflight_blocked_on_packet(&fixture, &packet, needle);
+    }
+    // The selection is consumed again after every refusal, so the good bytes still install.
+    let packet = reselect(&fixture, &good);
+    assert_eq!(fixture.ws.preflight(&packet).code, 0);
+    // Owner acceptance must cover the selected destination, not another one.
+    let mut record = read_json(&fixture.evidence_path);
+    let acceptance_path = pin_path(&record["acceptance"]);
+    let mut acceptance = read_json(&acceptance_path);
+    acceptance["inputs"]["test_destination"]["path"] = json!(elsewhere.to_str().unwrap());
+    fs::write(&acceptance_path, serde_json::to_vec(&acceptance).unwrap()).unwrap();
+    record["acceptance"] = pin(&acceptance_path);
+    fs::write(&fixture.evidence_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    fixture.refused(&["missing exact local owner acceptance"]);
+    assert!(!worktree.join(".agents").exists());
+    assert!(!elsewhere.join(".agents").exists());
+}
+
+#[test]
+fn unsafe_or_overlapping_test_destination_is_refused() {
+    let (mut fixture, historical, worktree) = redirected_fixture();
+    // A destination containing the framework (here the whole fixture root, which also
+    // holds the authority record) is refused before any evidence is read.
+    let root = fixture.ws.root.clone();
+    fixture.destination = Some(root.clone());
+    fixture.ws.project = root.clone();
+    fixture.publish();
+    fixture.refused(&["project and framework must be separate directories"]);
+    let result = fixture.ws.preflight(&fixture.packet());
+    assert_eq!(result.code, 2, "{}", result.text);
+    assert!(result.output.get("checks").is_none(), "{}", result.text);
+    assert!(
+        result.output["reason"]
+            .as_str()
+            .unwrap()
+            .contains("protected authority"),
+        "{}",
+        result.text
+    );
+    assert!(!root.join(".agents").exists());
+    assert!(!historical.join(".agents").exists());
+    // The framework itself, or a directory inside it, is refused by installation and
+    // by the preflight alike.
+    for overlapping in [
+        fixture.ws.framework.clone(),
+        fixture.ws.skills().join("nested-project"),
+    ] {
+        fs::create_dir_all(&overlapping).unwrap();
+        fixture.destination = Some(overlapping.clone());
+        fixture.ws.project = overlapping.clone();
+        fixture.publish();
+        fixture.refused(&["project and framework must be separate directories"]);
+        let packet = fixture.packet();
+        let before = snapshot(&fixture.ws.root);
+        let result = fixture.ws.preflight(&packet);
+        assert_eq!(result.code, 2, "{}", result.text);
+        let separation = check(&result.output, "destination_separation");
+        assert_eq!(separation["status"], "BLOCKED", "{}", result.text);
+        assert_eq!(
+            snapshot(&fixture.ws.root),
+            before,
+            "preflight must not write"
+        );
+        assert!(!overlapping.join(".agents").exists());
+    }
+    // A symlinked path is not the selected destination: `--project` refuses the link and
+    // a selection naming the link is noncanonical for the real directory.
+    let link = fixture.ws.root.join("worktree-link");
+    std::os::unix::fs::symlink(&worktree, &link).unwrap();
+    fixture.destination = Some(link.clone());
+    fixture.ws.project = link.clone();
+    fixture.publish();
+    fixture.refused(&["symlink not allowed"]);
+    fixture.ws.project = worktree.clone();
+    fixture.refused(&["noncanonical test destination"]);
+    let packet = fixture.packet();
+    preflight_blocked_on_packet(&fixture, &packet, "noncanonical test destination");
+    assert!(!worktree.join(".agents").exists());
+}
+
+#[test]
+fn selected_test_destination_keeps_the_freeze_rule_unchanged() {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    // The window opens before the freeze while its first attempt follows it.
+    fixture.plan["frozen_at_utc"] = json!("2026-09-07T09:59:59.5Z");
+    fixture.allocation("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:59Z");
+    fixture.original("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:59Z");
+    fixture.closeout("alloc-m")["started_at_utc"] = json!("2026-09-07T09:59:59Z");
+    fixture.freeze();
+    let worktree = fixture.redirect("worktree");
+    fixture.publish();
+    let packet = fixture.packet();
+    let before = snapshot(&fixture.ws.root);
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    let report = &result.output;
+    assert_eq!(report["status"], "BLOCKED");
+    assert_eq!(check(report, "destination_separation")["status"], "PASS");
+    assert_eq!(check(report, "packet_record")["status"], "PASS", "{report}");
+    let blocked = allocation_entry(report, "alloc-m");
+    assert_eq!(blocked["status"], "BLOCKED", "{report}");
+    assert!(
+        serde_json::to_string(&blocked["blockers"])
+            .unwrap()
+            .contains("allocation window must follow the frozen acceptance set"),
+        "{report}"
+    );
+    assert_eq!(blocked["frozen_at_utc"], "2026-09-07T09:59:59.5Z");
+    assert_eq!(
+        blocked["earliest_attempt_started_at_utc"],
+        "2026-09-07T10:00:00Z"
+    );
+    assert_eq!(
+        snapshot(&fixture.ws.root),
+        before,
+        "preflight must not write"
+    );
+    fixture.refused(&["allocation window must follow the frozen acceptance set"]);
+    assert!(!worktree.join(".agents").exists());
 }

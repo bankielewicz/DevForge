@@ -51,6 +51,9 @@ const INVENTORY: &str = ".devforge-install.json";
 const SKILL_ROOT: &str = ".agents/skills";
 const INSTALL_ROOTS: [&str; 3] = [".agents", ".codex", ".claude"];
 const AUTHORITY_SCHEMA: &str = "devforge.manual-install-authority/v1";
+const LOCAL_BASELINE_V1: &str = "devforge.manual-expert-local-baseline/v1";
+/// The `v1` record plus a `test_destination` selected for the actual installation.
+const LOCAL_BASELINE_V2: &str = "devforge.manual-expert-local-baseline/v2";
 static EMPTY_OBJECT: LazyLock<Value> = LazyLock::new(|| Value::Object(Map::new()));
 static EMPTY_LIST: LazyLock<Value> = LazyLock::new(|| Value::Array(Vec::new()));
 
@@ -787,10 +790,8 @@ fn validate(
     })?;
     let root_pin = json!({"path": evidence_path, "sha256": crate::hash(&raw)});
     let record = evidence.document(&root_pin, true)?;
-    if is(
-        get(&record, "schema_version")?,
-        "devforge.manual-expert-local-baseline/v1",
-    ) {
+    let schema = get(&record, "schema_version")?;
+    if is(schema, LOCAL_BASELINE_V1) || is(schema, LOCAL_BASELINE_V2) {
         return local_baseline(&record, &root_pin, &packages, evidence);
     }
     exact(
@@ -2047,26 +2048,24 @@ fn local_baseline(
     packages: &BTreeMap<String, BTreeMap<String, String>>,
     mut evidence: Evidence,
 ) -> Result<Validated> {
-    exact(
-        record,
-        &[
-            "schema_version",
-            "project_root",
-            "owner",
-            "authorization",
-            "packages",
-            "acceptance_set",
-            "results",
-            "review",
-            "acceptance",
-            "historical_evidence",
-        ],
-        "local baseline record",
-    )?;
-    require(
-        record["project_root"] == json!(evidence.project),
-        "wrong local installation destination",
-    )?;
+    let redirected = is(&record["schema_version"], LOCAL_BASELINE_V2);
+    let mut fields = vec![
+        "schema_version",
+        "project_root",
+        "owner",
+        "authorization",
+        "packages",
+        "acceptance_set",
+        "results",
+        "review",
+        "acceptance",
+        "historical_evidence",
+    ];
+    if redirected {
+        fields.push("test_destination");
+    }
+    exact(record, &fields, "local baseline record")?;
+    let historical = bind_destination(record, redirected, &evidence)?;
     let owner = text(&record["owner"], "local owner")?.to_string();
     evidence.pin(&record["authorization"], true)?;
     evidence.refs(&record["historical_evidence"])?;
@@ -2289,10 +2288,14 @@ fn local_baseline(
         "record": root_pin,
         "owner": owner,
         "packages": packages.keys().collect::<Vec<_>>(),
-        "predicate": "manual-local-baseline/v1",
+        "predicate": if redirected { "manual-local-baseline/v2" } else { "manual-local-baseline/v1" },
         "qualification_status": "UNQUALIFIED",
         "acceptance_status": "LOCAL_ACCEPTANCE_SET_PASS",
     });
+    if let Some(historical) = historical {
+        summary["historical_project_root"] = historical;
+        summary["test_destination"] = json!(evidence.project);
+    }
     if reuse {
         summary["reused_allocations"] = json!(
             allocations
@@ -2305,6 +2308,51 @@ fn local_baseline(
             json!(allocations.values().map(|a| a.judged).sum::<usize>());
     }
     Ok(Validated { summary, evidence })
+}
+
+/// Bind a local record's declared destination to the actual `--project`. A `v1`
+/// record installs at its `project_root`. A `v2` record keeps that root, which its
+/// frozen acceptance set names, and selects a separate `test_destination` for the
+/// actual installation: exactly `{historical_project_root, path, acceptance_set}`,
+/// whose root and set pin must equal the record's own and whose `path` must be the
+/// canonical actual destination. Installation and the preflight share this rule.
+/// Returns the historical root when the record is redirected.
+fn bind_destination(
+    record: &Value,
+    redirected: bool,
+    evidence: &Evidence,
+) -> Result<Option<Value>> {
+    if !redirected {
+        require(
+            record["project_root"] == json!(evidence.project),
+            "wrong local installation destination",
+        )?;
+        return Ok(None);
+    }
+    let selection = exact(
+        &record["test_destination"],
+        &["historical_project_root", "path", "acceptance_set"],
+        "test destination selection",
+    )?;
+    text(&record["project_root"], "historical project root")?;
+    require(
+        selection["historical_project_root"] == record["project_root"],
+        "test destination names a different historical project root",
+    )?;
+    require(
+        selection["acceptance_set"] == record["acceptance_set"],
+        "test destination is bound to a different acceptance set",
+    )?;
+    let path = PathBuf::from(text(&selection["path"], "test destination path")?);
+    require(
+        path.is_absolute() && canonical(&path)?,
+        "noncanonical test destination",
+    )?;
+    require(
+        path == evidence.project,
+        "test destination differs from the installation destination",
+    )?;
+    Ok(Some(record["project_root"].clone()))
 }
 
 struct LocalPackages {
@@ -2626,6 +2674,8 @@ fn local_observation(
 // ---- evidence preflight -----------------------------------------------------
 
 const PREFLIGHT_SCHEMA: &str = "devforge.manual-local-evidence-preflight/v1";
+/// The `v1` packet plus the same `test_destination` selection a `v2` record carries.
+const PREFLIGHT_V2: &str = "devforge.manual-local-evidence-preflight/v2";
 const PREFLIGHT_MEANING: &str = "COMPATIBLE means only that every mechanical check within this preflight's documented scope passed for the selected bytes; it is not acceptance, qualification, an installation receipt or permission to run a model";
 const FREEZE_RULE: &str = "unchanged: the acceptance set must be frozen before the allocation window starts; a later first attempt does not satisfy it, and the recorded instants are preserved here for the owner's separate decision";
 
@@ -2677,29 +2727,27 @@ impl Preflight {
 /// acceptance record is expected; their absence is reported as pending.
 fn read_packet(root_pin: &Value, evidence: &mut Evidence) -> Result<Value> {
     let packet = evidence.document(root_pin, true)?;
-    exact(
-        &packet,
-        &[
-            "schema_version",
-            "project_root",
-            "owner",
-            "authorization",
-            "packages",
-            "acceptance_set",
-            "historical_evidence",
-            "allocations",
-            "observations",
-        ],
-        "preflight packet",
-    )?;
+    let redirected = is(&packet["schema_version"], PREFLIGHT_V2);
+    let mut fields = vec![
+        "schema_version",
+        "project_root",
+        "owner",
+        "authorization",
+        "packages",
+        "acceptance_set",
+        "historical_evidence",
+        "allocations",
+        "observations",
+    ];
+    if redirected {
+        fields.push("test_destination");
+    }
+    exact(&packet, &fields, "preflight packet")?;
     require(
-        is(&packet["schema_version"], PREFLIGHT_SCHEMA),
+        redirected || is(&packet["schema_version"], PREFLIGHT_SCHEMA),
         "unsupported preflight packet",
     )?;
-    require(
-        packet["project_root"] == json!(evidence.project),
-        "wrong local installation destination",
-    )?;
+    bind_destination(&packet, redirected, evidence)?;
     text(&packet["owner"], "local owner")?;
     evidence.pin(&packet["authorization"], true)?;
     evidence.refs(&packet["historical_evidence"])?;
@@ -2777,6 +2825,8 @@ fn check_local_evidence(
         read_packet(&root_pin, &mut evidence),
         |p| {
             json!({"owner": p["owner"],
+                "historical_project_root": p["project_root"],
+                "test_destination": p["test_destination"]["path"],
                 "allocations": p["allocations"].as_array().map(Vec::len).unwrap_or_default(),
                 "observations": p["observations"].as_array().map(Vec::len).unwrap_or_default()})
         },
@@ -3012,9 +3062,10 @@ fn check_local_evidence(
         json!(
             "owner acceptance (devforge.manual-local-owner-acceptance/v1): NOT_PRESENT in preflight scope"
         ),
-        json!(
-            "installation destination checks (inventory, local edits, aliases, project quiescence) and installation writes: NOT_PERFORMED"
-        ),
+        json!(format!(
+            "installation destination checks (inventory, local edits, aliases, project quiescence) and installation writes at {}: NOT_PERFORMED",
+            project.display()
+        )),
     ];
     for (key, kind) in LOCAL_CHECKS {
         if kind == "N" && !observed_checks.contains(key) {
@@ -3484,6 +3535,9 @@ fn manual_experts(
     if is(&adoption.summary["qualification_status"], "UNQUALIFIED") {
         result["qualification_status"] = json!("UNQUALIFIED");
         result["acceptance_status"] = json!("LOCAL_ACCEPTANCE_SET_PASS");
+    }
+    if let Some(historical) = adoption.summary.get("historical_project_root") {
+        result["historical_project_root"] = historical.clone();
     }
     Ok(result)
 }
