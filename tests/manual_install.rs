@@ -63,7 +63,8 @@ impl Drop for Temp {
 }
 
 fn temp() -> Temp {
-    let path = std::env::temp_dir().join(format!(
+    // Fixtures live beside the test binary so hard-link alias cases share its filesystem.
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "devforge-manual-install-{}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -1195,4 +1196,169 @@ fn malformed_authority_record_is_refused() {
         b"{\"schema_version\": 1, \"schema_version\": 2}",
     );
     fixture.refused(&["duplicate JSON key"]);
+}
+
+/// The unchanged legacy Python installer, invoked only as a compatibility baseline.
+/// It supplies comparison evidence for a preserved contract; it makes no decision here.
+fn legacy_install(ws: &Workspace, evidence: &Path) -> Run {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/install_framework.py");
+    run(
+        "/usr/bin/python3",
+        &[
+            script.to_str().unwrap(),
+            "--framework",
+            ws.framework.to_str().unwrap(),
+            "--project",
+            ws.project.to_str().unwrap(),
+            "--provider",
+            "codex",
+            "--manual-experts-only",
+            "--manual-evidence",
+            evidence.to_str().unwrap(),
+        ],
+    )
+}
+
+// Review regressions (PR 3 review, 2026-09-09): each failed against bf6edc1.
+
+#[test]
+fn install_must_not_overwrite_authority_record_through_destination_alias() {
+    let fixture = Local::new();
+    let before_authority = fs::read(&fixture.ws.authority).unwrap();
+    let relative = format!(".agents/skills/{EVALUATOR}/SKILL.md");
+    let destination = fixture.ws.project.join(&relative);
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    fs::hard_link(&fixture.ws.authority, &destination).unwrap();
+    let inventory = json!({"schema": 1, "files": {relative.clone(): sha(&before_authority)},
+        "managed_hooks": {}});
+    write(
+        &fixture.ws.project.join(".devforge-install.json"),
+        &serde_json::to_vec(&inventory).unwrap(),
+    );
+    let outcome = fixture.ws.install(&fixture.evidence_path);
+    assert_eq!(
+        fs::read(&fixture.ws.authority).unwrap(),
+        before_authority,
+        "installation changed authority record via destination hardlink; exit={} result={}",
+        outcome.code,
+        outcome.text
+    );
+    assert_eq!(
+        outcome.code, 2,
+        "must refuse authority alias before writes: {}",
+        outcome.text
+    );
+    assert_eq!(outcome.output["status"], "BLOCKED");
+    assert!(
+        outcome.output["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("alias"),
+        "{}",
+        outcome.text
+    );
+}
+
+#[test]
+fn install_must_not_overwrite_pinned_executable_through_destination_alias() {
+    let fixture = Local::new();
+    let executable = pin_path(&identity()["executable"]);
+    let before = fs::read(&executable).unwrap();
+    let relative = format!(".agents/skills/{CREATOR}/SKILL.md");
+    let destination = fixture.ws.project.join(&relative);
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    fs::hard_link(&executable, &destination).unwrap();
+    let inventory =
+        json!({"schema": 1, "files": {relative.clone(): sha(&before)}, "managed_hooks": {}});
+    write(
+        &fixture.ws.project.join(".devforge-install.json"),
+        &serde_json::to_vec(&inventory).unwrap(),
+    );
+    let outcome = fixture.ws.install(&fixture.evidence_path);
+    assert_eq!(fs::read(&executable).unwrap(), before, "{}", outcome.text);
+    assert_eq!(outcome.code, 2, "{}", outcome.text);
+    assert_eq!(outcome.output["status"], "BLOCKED");
+}
+
+#[test]
+fn symlinked_promoted_skill_must_refuse_not_silently_skip() {
+    let fixture = Adoption::new("Full");
+    std::os::unix::fs::symlink(
+        fixture.ws.skills().join(EVALUATOR),
+        fixture.ws.skills().join(CREATOR),
+    )
+    .unwrap();
+    let legacy = legacy_install(&fixture.ws, &fixture.evidence_path);
+    assert_ne!(
+        legacy.code, 0,
+        "baseline unexpectedly allowed symlink: {}",
+        legacy.text
+    );
+    let reason = fixture.refused(&["symlink"]);
+    assert!(
+        reason.contains("missing or symlink source directory"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn basic_iso_timestamps_preserve_accepted_evidence_compatibility() {
+    let mut fixture = Local::new();
+    fixture.plan["frozen_at_utc"] = json!("20260908T120000+0000");
+    fixture.results["started_at_utc"] = json!("20260908T120001+0000");
+    fixture.results["finished_at_utc"] = json!("20260908T120003+0000");
+    for observation in fixture.observations.values_mut() {
+        observation["started_at_utc"] = json!("20260908T120001+0000");
+        observation["finished_at_utc"] = json!("20260908T120002+0000");
+    }
+    fixture.freeze();
+    let legacy = legacy_install(&fixture.ws, &fixture.evidence_path);
+    assert_eq!(
+        legacy.code, 0,
+        "baseline did not accept basic ISO fixture: {}",
+        legacy.text
+    );
+    let outcome = fixture.ws.install(&fixture.evidence_path);
+    assert_eq!(
+        outcome.code, 0,
+        "Rust rejected baseline-compatible timestamps: {}",
+        outcome.text
+    );
+    assert_eq!(outcome.output["status"], "INSTALLED");
+}
+
+#[test]
+fn conflicting_replacement_aliases_must_not_report_installed() {
+    let fixture = Local::new();
+    fixture.installed();
+    let erel = format!(".agents/skills/{EVALUATOR}/SKILL.md");
+    let crel = format!(".agents/skills/{CREATOR}/SKILL.md");
+    let evaluator = fixture.ws.project.join(&erel);
+    let creator = fixture.ws.project.join(&crel);
+    fs::remove_file(&creator).unwrap();
+    fs::hard_link(&evaluator, &creator).unwrap();
+    let shared = sha(&fs::read(&evaluator).unwrap());
+    let mut inventory = fixture.ws.inventory();
+    inventory["files"][&erel] = json!(shared);
+    inventory["files"][&crel] = json!(shared);
+    write(
+        &fixture.ws.project.join(".devforge-install.json"),
+        &serde_json::to_vec(&inventory).unwrap(),
+    );
+    let before = snapshot(&fixture.ws.project);
+    let outcome = fixture.ws.install(&fixture.evidence_path);
+    assert_eq!(
+        outcome.code,
+        2,
+        "conflicting inode payloads must refuse; result={} creator={} evaluator={}",
+        outcome.text,
+        String::from_utf8_lossy(&fs::read(&creator).unwrap()),
+        String::from_utf8_lossy(&fs::read(&evaluator).unwrap())
+    );
+    assert_eq!(outcome.output["status"], "BLOCKED");
+    assert_eq!(
+        snapshot(&fixture.ws.project),
+        before,
+        "refusal must not write"
+    );
 }

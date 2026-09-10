@@ -259,70 +259,8 @@ fn time(value: &Value) -> Result<i128> {
     parse_iso(&text).ok_or_else(invalid)
 }
 
-fn parse_iso(text: &str) -> Option<i128> {
-    fn digits(bytes: &[u8], start: usize, len: usize) -> Option<i64> {
-        let slice = bytes.get(start..start + len)?;
-        if !slice.iter().all(u8::is_ascii_digit) {
-            return None;
-        }
-        std::str::from_utf8(slice).ok()?.parse().ok()
-    }
-    let bytes = text.as_bytes();
-    let year = digits(bytes, 0, 4)?;
-    if bytes.get(4) != Some(&b'-') || bytes.get(7) != Some(&b'-') {
-        return None;
-    }
-    let month = digits(bytes, 5, 2)?;
-    let day = digits(bytes, 8, 2)?;
-    if !matches!(bytes.get(10), Some(b'T' | b't' | b' ')) {
-        return None;
-    }
-    let hour = digits(bytes, 11, 2)?;
-    if bytes.get(13) != Some(&b':') {
-        return None;
-    }
-    let minute = digits(bytes, 14, 2)?;
-    let mut pos = 16;
-    let mut second = 0;
-    let mut micro = 0;
-    if bytes.get(pos) == Some(&b':') {
-        second = digits(bytes, pos + 1, 2)?;
-        pos += 3;
-        if matches!(bytes.get(pos), Some(b'.' | b',')) {
-            pos += 1;
-            let start = pos;
-            while bytes.get(pos).is_some_and(u8::is_ascii_digit) {
-                pos += 1;
-            }
-            let fraction = &text[start..pos];
-            if fraction.is_empty() || fraction.len() > 9 {
-                return None;
-            }
-            let mut padded = format!("{fraction:0<6}");
-            padded.truncate(6);
-            micro = padded.parse::<i64>().ok()?;
-        }
-    }
-    let sign = match bytes.get(pos) {
-        Some(b'+') => 1,
-        Some(b'-') => -1,
-        _ => return None,
-    };
-    pos += 1;
-    let offset_hours = digits(bytes, pos, 2)?;
-    pos += 2;
-    let offset_minutes = if bytes.get(pos) == Some(&b':') {
-        pos += 3;
-        digits(bytes, pos - 2, 2)?
-    } else if pos < bytes.len() {
-        pos += 2;
-        digits(bytes, pos - 2, 2)?
-    } else {
-        0
-    };
-    if pos != bytes.len() {
-        return None;
-    }
+/// Days since 1970-01-01 for a valid proleptic Gregorian calendar date.
+fn civil_days(year: i64, month: i64, day: i64) -> Option<i64> {
     let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
     let days_in_month = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
@@ -331,13 +269,7 @@ fn parse_iso(text: &str) -> Option<i128> {
         2 => 28,
         _ => return None,
     };
-    if !(1..=days_in_month).contains(&day)
-        || hour >= 24
-        || minute >= 60
-        || second >= 60
-        || offset_hours >= 24
-        || offset_minutes >= 60
-    {
+    if !(1..=days_in_month).contains(&day) {
         return None;
     }
     let (y, m) = if month <= 2 {
@@ -349,9 +281,146 @@ fn parse_iso(text: &str) -> Option<i128> {
     let yoe = y - era * 400;
     let doy = (153 * m + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second
-        - sign * (offset_hours * 3_600 + offset_minutes * 60);
+    Some(era * 146_097 + doe - 719_468)
+}
+
+/// The timestamp contract the legacy guard accepted through
+/// `datetime.fromisoformat` (Python 3.12) with `Z` mapped to `+00:00`:
+/// calendar or ISO week dates in extended or basic form, any single
+/// separator character, `HH[:MM[:SS[.frac]]]` or `HH[MM[SS[.frac]]]`, a
+/// fraction of any length truncated to microseconds, and a mandatory
+/// `±HH`, `±HHMM`, `±HH:MM`, `±HHMMSS` or `±HH:MM:SS` offset below 24 hours.
+fn parse_iso(text: &str) -> Option<i128> {
+    fn digits(bytes: &[u8], start: usize, len: usize) -> Option<i64> {
+        let slice = bytes.get(start..start + len)?;
+        if !slice.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        std::str::from_utf8(slice).ok()?.parse().ok()
+    }
+    let bytes = text.as_bytes();
+    let year = digits(bytes, 0, 4)?;
+    let mut pos = 4;
+    let extended = bytes.get(pos) == Some(&b'-');
+    if extended {
+        pos += 1;
+    }
+    let days = if bytes.get(pos) == Some(&b'W') {
+        pos += 1;
+        let week = digits(bytes, pos, 2)?;
+        pos += 2;
+        let mut weekday = 1;
+        let has_day = if extended {
+            bytes.get(pos) == Some(&b'-')
+        } else {
+            bytes.get(pos).is_some_and(u8::is_ascii_digit)
+        };
+        if has_day {
+            if extended {
+                pos += 1;
+            }
+            weekday = digits(bytes, pos, 1)?;
+            pos += 1;
+        }
+        if !(1..=53).contains(&week) || !(1..=7).contains(&weekday) {
+            return None;
+        }
+        // ISO week 1 contains January 4; 1970-01-01 was a Thursday.
+        let jan4 = civil_days(year, 1, 4)?;
+        let monday = jan4 - (jan4 + 3).rem_euclid(7);
+        monday + (week - 1) * 7 + (weekday - 1)
+    } else {
+        let month = digits(bytes, pos, 2)?;
+        pos += 2;
+        if extended {
+            if bytes.get(pos) != Some(&b'-') {
+                return None;
+            }
+            pos += 1;
+        }
+        let day = digits(bytes, pos, 2)?;
+        pos += 2;
+        civil_days(year, month, day)?
+    };
+    // Any single separator character precedes the time.
+    pos += text.get(pos..)?.chars().next()?.len_utf8();
+    let hour = digits(bytes, pos, 2)?;
+    pos += 2;
+    let mut minute = 0;
+    let mut second = 0;
+    let mut micro = 0;
+    let colon = bytes.get(pos) == Some(&b':');
+    if colon || bytes.get(pos).is_some_and(u8::is_ascii_digit) {
+        if colon {
+            pos += 1;
+        }
+        minute = digits(bytes, pos, 2)?;
+        pos += 2;
+        let has_seconds = if colon {
+            bytes.get(pos) == Some(&b':')
+        } else {
+            bytes.get(pos).is_some_and(u8::is_ascii_digit)
+        };
+        if has_seconds {
+            if colon {
+                pos += 1;
+            }
+            second = digits(bytes, pos, 2)?;
+            pos += 2;
+            if matches!(bytes.get(pos), Some(b'.' | b',')) {
+                pos += 1;
+                let start = pos;
+                while bytes.get(pos).is_some_and(u8::is_ascii_digit) {
+                    pos += 1;
+                }
+                let mut padded = format!("{:0<6}", &text[start..pos]);
+                padded.truncate(6);
+                micro = padded.parse::<i64>().ok()?;
+            }
+        }
+    }
+    let sign = match bytes.get(pos) {
+        Some(b'+') => 1,
+        Some(b'-') => -1,
+        _ => return None,
+    };
+    pos += 1;
+    let offset_hours = digits(bytes, pos, 2)?;
+    pos += 2;
+    let mut offset_minutes = 0;
+    let mut offset_seconds = 0;
+    if pos < bytes.len() {
+        let colon = bytes.get(pos) == Some(&b':');
+        if colon {
+            pos += 1;
+        }
+        offset_minutes = digits(bytes, pos, 2)?;
+        pos += 2;
+        if pos < bytes.len() {
+            if colon {
+                if bytes.get(pos) != Some(&b':') {
+                    return None;
+                }
+                pos += 1;
+            }
+            offset_seconds = digits(bytes, pos, 2)?;
+            pos += 2;
+        }
+    }
+    if pos != bytes.len()
+        || hour >= 24
+        || minute >= 60
+        || second >= 60
+        || offset_minutes >= 60
+        || offset_seconds >= 60
+    {
+        return None;
+    }
+    let offset = offset_hours * 3_600 + offset_minutes * 60 + offset_seconds;
+    if offset >= 86_400 {
+        return None;
+    }
+    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second - sign * offset;
     Some(i128::from(seconds) * 1_000_000 + i128::from(micro))
 }
 
@@ -1935,7 +2004,9 @@ fn manual_experts(
             .file_name()
             .and_then(|n| n.to_str())
             .is_some_and(|n| NAMES.contains(&n));
-        if promoted && fs::symlink_metadata(&path)?.is_dir() {
+        // Select through the link like the legacy installer; regular_files then
+        // refuses a symlinked source instead of silently omitting the package.
+        if promoted && fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
             skills.push(path);
         }
     }
@@ -2015,16 +2086,32 @@ fn manual_experts(
         .map(|(relative, data)| (relative.as_str(), data.as_slice()))
         .collect();
     replacements.insert(INVENTORY, &record_bytes);
+    // One existing inode may be reached through several destinations; it can only
+    // receive one payload, so differing payloads cannot both be installed.
     let mut overwritten: BTreeMap<(u64, u64), BTreeSet<String>> = BTreeMap::new();
     for (relative, payload) in &replacements {
         if let Ok(meta) = fs::metadata(project.join(relative)) {
             if meta.is_file() {
-                overwritten
-                    .entry((meta.dev(), meta.ino()))
-                    .or_default()
-                    .insert(crate::hash(payload));
+                let digests = overwritten.entry((meta.dev(), meta.ino())).or_default();
+                digests.insert(crate::hash(payload));
+                ensure!(
+                    digests.len() == 1,
+                    "destination alias would receive conflicting replacement payloads: {relative}"
+                );
             }
         }
+    }
+    // The selected authority record and the running executable must not be reachable
+    // through any destination, whatever payload that destination would receive.
+    for key in ["record", "executable"] {
+        let path = protected[key]["path"]
+            .as_str()
+            .with_context(|| format!("protected {key} path"))?;
+        let meta = fs::metadata(path)?;
+        ensure!(
+            !overwritten.contains_key(&(meta.dev(), meta.ino())),
+            "protected authority: installation would overwrite the selected {key} through a destination alias"
+        );
     }
     for (path, sha) in adoption.evidence.pins.clone() {
         let meta = fs::metadata(&path)?;
@@ -2048,10 +2135,12 @@ fn manual_experts(
         }
     }
     adoption.evidence.recheck()?;
-    let (running, digest) = executable_identity()?;
+    // Recheck the selected authority record and the running executable immediately
+    // before the writes. This bounds drift between checks; it is not a defense
+    // against a concurrent writer racing these path-based checks.
     ensure!(
-        json!({"path": running, "sha256": digest}) == protected["executable"],
-        "protected authority: executable identity changed before installation writes"
+        verify_authority(authority, &project, &framework)? == protected,
+        "protected authority: authority record or executable identity changed before installation writes"
     );
     for relative in &retired {
         let destination = safe_destination(&project, relative)?;
@@ -2101,6 +2190,43 @@ mod tests {
         assert_eq!(parse_iso("2026-09-08 12:00-00:00"), Some(base));
         assert!(parse_iso("2026-09-08T12:00:00").is_none());
         assert!(parse_iso("2026-02-30T00:00:00+00:00").is_none());
+        // Forms the legacy datetime.fromisoformat path accepted (probed on Python 3.12).
+        for accepted in [
+            "20260908T120000+0000",
+            "2026-09-08T12:00:00+0000",
+            "2026-09-08T12:00:00+00",
+            "2026-09-08T12+00:00",
+            "2026-09-08T1200+00:00",
+            "20260908T12+00:00",
+            "2026-W37-2T12:00:00+00:00",
+            "2026W372T120000+0000",
+            "2026-09-08t12:00:00+00:00",
+            "2026-09-08_12:00:00+00:00",
+            "2026-09-08T12:00:00.+00:00",
+            "2026-09-08T13:00:30+01:00:30",
+        ] {
+            assert_eq!(parse_iso(accepted), Some(base), "{accepted}");
+        }
+        assert_eq!(
+            parse_iso("2026-09-08T12:00:00.1234567+00:00"),
+            Some(base + 123_456)
+        );
+        assert_eq!(
+            parse_iso("2026-09-08T12:00:00,5+00:00"),
+            Some(base + 500_000)
+        );
+        // Forms it rejected.
+        for rejected in [
+            "2026-251T12:00:00+00:00",
+            "2026-09-08T24:00:00+00:00",
+            "2026-09-08T12:00:60+00:00",
+            "2026-09-08T12:00:00+24:00",
+            "2026-09-08T12:00:00+0",
+            "2026-09-08T12:00:00+000",
+            "2026-W54-1T00:00:00+00:00",
+        ] {
+            assert!(parse_iso(rejected).is_none(), "{rejected}");
+        }
         assert_eq!(
             time(&json!("2026-09-08T12:00:01Z")).unwrap() - base,
             1_000_000
