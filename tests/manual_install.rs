@@ -1382,22 +1382,73 @@ fn fractional_offset_must_preserve_legacy_acceptance() {
 
 #[test]
 fn fractional_offset_chronology_is_compared_by_instant() {
-    // The set is frozen at 12:00:00+00:00:00.5; results start at 12:00:00.4+00:00, which is
-    // 0.1 s later in real time, so the "predefined" order holds only with the fraction applied.
-    let mut fixture = Local::new();
-    fixture.plan["frozen_at_utc"] = json!("2026-09-08T12:00:00+00:00:00.5");
-    fixture.results["started_at_utc"] = json!("2026-09-08T12:00:00.4+00:00");
-    fixture.results["finished_at_utc"] = json!("2026-09-08T12:00:03+00:00");
-    for observation in fixture.observations.values_mut() {
-        observation["started_at_utc"] = json!("2026-09-08T12:00:01+00:00");
-        observation["finished_at_utc"] = json!("2026-09-08T12:00:02+00:00");
-    }
+    // Frozen 12:00:01.2+00:00:01.5 is 11:59:59.7 UTC only when the offset fraction is
+    // applied (12:00:00.2 if it were ignored); results start at exactly 12:00:00 UTC, so
+    // the "predefined" order holds only with the fraction applied.
+    let mut fixture = timestamp_fixture("2026-09-08", "+00:00");
+    fixture.plan["frozen_at_utc"] = json!("2026-09-08T12:00:01.2+00:00:01.5");
+    fixture.results["started_at_utc"] = json!("2026-09-08T12:00:00+00:00");
     fixture.freeze();
+    let legacy = legacy_install(&fixture.ws, &fixture.evidence_path);
+    assert_eq!(
+        legacy.code, 0,
+        "baseline chronology differs: {}",
+        legacy.text
+    );
     fixture.installed();
-    // Moving the frozen time 0.2 s later than the start reverses the order and must refuse.
-    fixture.plan["frozen_at_utc"] = json!("2026-09-08T11:59:59.5-00:00:01.1");
+    // Matched control: the same digits swapped, 12:00:01.5+00:00:01.2, is 12:00:00.3 UTC,
+    // after the start, and must refuse.
+    let mut control = timestamp_fixture("2026-09-08", "+00:00");
+    control.plan["frozen_at_utc"] = json!("2026-09-08T12:00:01.5+00:00:01.2");
+    control.results["started_at_utc"] = json!("2026-09-08T12:00:00+00:00");
+    control.freeze();
+    let legacy = legacy_install(&control.ws, &control.evidence_path);
+    assert_eq!(legacy.code, 2, "baseline control differs: {}", legacy.text);
+    control.refused(&["predefined"]);
+}
+
+// Review regressions at c3eb99d (repair-c3eb99d review, 2026-09-10).
+
+#[test]
+fn short_offset_fraction_preserves_legacy_contract() {
+    let fixture = timestamp_fixture("2026-09-08", "+00:00.5");
+    let legacy = legacy_install(&fixture.ws, &fixture.evidence_path);
+    assert_eq!(
+        legacy.code, 0,
+        "legacy rejected the documented accepted form: {}",
+        legacy.text
+    );
+    let outcome = fixture.ws.install(&fixture.evidence_path);
+    assert_eq!(
+        outcome.code, legacy.code,
+        "timestamp acceptance contract differs: {}",
+        outcome.text
+    );
+    assert_eq!(outcome.output["status"], "INSTALLED");
+}
+
+#[test]
+fn zero_whole_offset_fraction_preserves_legacy_chronology() {
+    // The legacy parser treats +00:00:00.5 as UTC, so frozen 12:00:00.2 is after the
+    // 12:00:00.1 start and the set is not predefined.
+    let mut fixture = timestamp_fixture("2026-09-08", "+00:00");
+    fixture.plan["frozen_at_utc"] = json!("2026-09-08T12:00:00.2+00:00:00.5");
+    fixture.results["started_at_utc"] = json!("2026-09-08T12:00:00.1+00:00");
     fixture.freeze();
+    let legacy = legacy_install(&fixture.ws, &fixture.evidence_path);
+    assert_eq!(
+        legacy.code, 2,
+        "legacy chronology control differs: {}",
+        legacy.text
+    );
+    assert!(
+        legacy.text.contains("predefined"),
+        "unexpected legacy rejection: {}",
+        legacy.text
+    );
+    assert!(!fixture.ws.project.join(".agents").exists());
     fixture.refused(&["predefined"]);
+    assert!(!fixture.ws.project.join(".agents").exists());
 }
 
 #[test]

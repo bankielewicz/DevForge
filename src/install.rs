@@ -293,12 +293,11 @@ fn civil_days(year: i64, month: i64, day: i64) -> Option<i64> {
 /// calendar or ISO week dates in extended or basic form (week 53 only in a
 /// long ISO year), any single separator character, `HH[:MM[:SS]]` or
 /// `HH[MM[SS]]` with an optional fraction of any length after the last
-/// component (truncated to microseconds), and a mandatory offset `±HH`,
-/// `±HHMM`, `±HH:MM`, `±HHMMSS` or `±HH:MM:SS[.frac]` totalling under 24
-/// hours. Offset minute and second fields above 59 are summed as the legacy
-/// parser summed them. One legacy quirk is not reproduced: a fraction after
-/// an offset's hour or minute field, which the legacy parser accepted and
-/// then discarded or applied inconsistently, is refused here.
+/// component (truncated to microseconds), and a mandatory offset in the same
+/// `HH[[:]MM[[:]SS]][.frac]` grammar totalling under 24 hours. Offset minute
+/// and second fields above 59 are summed as the legacy parser summed them,
+/// and an offset fraction counts only when the whole offset is non-zero
+/// (`+00:00:00.5` and `+00:00.5` are UTC), which is also legacy behavior.
 fn parse_iso(text: &str) -> Option<i128> {
     fn digits(bytes: &[u8], start: usize, len: usize) -> Option<i64> {
         let slice = bytes.get(start..start + len)?;
@@ -408,39 +407,48 @@ fn parse_iso(text: &str) -> Option<i128> {
         _ => return None,
     };
     pos += 1;
+    // The offset uses the time grammar: HH[[:]MM[[:]SS]] and a fraction after
+    // the last component, which here must not be empty.
     let offset_hours = digits(bytes, pos, 2)?;
     pos += 2;
     let mut offset_minutes = 0;
     let mut offset_seconds = 0;
     let mut offset_micro = 0;
-    if pos < bytes.len() {
-        let colon = bytes.get(pos) == Some(&b':');
+    let colon = bytes.get(pos) == Some(&b':');
+    if colon || bytes.get(pos).is_some_and(u8::is_ascii_digit) {
         if colon {
             pos += 1;
         }
         offset_minutes = digits(bytes, pos, 2)?;
         pos += 2;
-        if pos < bytes.len() {
+        let has_seconds = if colon {
+            bytes.get(pos) == Some(&b':')
+        } else {
+            bytes.get(pos).is_some_and(u8::is_ascii_digit)
+        };
+        if has_seconds {
             if colon {
-                if bytes.get(pos) != Some(&b':') {
-                    return None;
-                }
                 pos += 1;
             }
             offset_seconds = digits(bytes, pos, 2)?;
             pos += 2;
-            if matches!(bytes.get(pos), Some(b'.' | b',')) {
-                pos += 1;
-                offset_micro = fraction(bytes, &mut pos, false)?;
-            }
         }
+    }
+    if matches!(bytes.get(pos), Some(b'.' | b',')) {
+        pos += 1;
+        offset_micro = fraction(bytes, &mut pos, false)?;
     }
     if pos != bytes.len() || hour >= 24 || minute >= 60 || second >= 60 {
         return None;
     }
-    let offset = i128::from(offset_hours * 3_600 + offset_minutes * 60 + offset_seconds)
-        * 1_000_000
-        + i128::from(offset_micro);
+    // The legacy parser applied the fraction only to a non-zero whole offset;
+    // an all-zero whole offset is UTC whatever its fraction.
+    let whole = offset_hours * 3_600 + offset_minutes * 60 + offset_seconds;
+    let offset = if whole == 0 {
+        0
+    } else {
+        i128::from(whole) * 1_000_000 + i128::from(offset_micro)
+    };
     if offset >= 86_400 * 1_000_000 {
         return None;
     }
@@ -2258,6 +2266,19 @@ mod tests {
             ("2026-09-08T12:00:00+23:59:59.999999", -86_399_999_999),
             ("2026-09-08T12:00:00+00:99", -5_940_000_000),
             ("2026-09-08T12:00:00+00:00:99", -99_000_000),
+            // A fraction may follow the offset's last component, as in the time.
+            ("2026-09-08T12:00:00+00:01.5", -60_500_000),
+            ("2026-09-08T12:00:00+0001.5", -60_500_000),
+            ("2026-09-08T12:00:00+00:01,5", -60_500_000),
+            ("2026-09-08T12:00:00+01.5", -3_600_500_000),
+            ("2026-09-08T12:00:00+2359.5", -86_340_500_000),
+            // The legacy parser applied the fraction only to a non-zero whole offset.
+            ("2026-09-08T12:00:00+00:00:00.5", 0),
+            ("2026-09-08T12:00:00-00:00:00.5", 0),
+            ("2026-09-08T12:00:00+00:00:00.000001", 0),
+            ("2026-09-08T12:00:00+00:00.5", 0),
+            ("2026-09-08T12:00:00+0000.5", 0),
+            ("2026-09-08T12:00:00+00.5", 0),
         ] {
             assert_eq!(parse_iso(text), Some(base + micros), "{text}");
         }
@@ -2289,6 +2310,9 @@ mod tests {
             "2026-09-08T12:00:00+0000:00",
             "2026-09-08T12:00:00+00:0000",
             "2026-09-08T12:00:00+00:00:01.",
+            "2026-09-08T12:00:00+00:00.",
+            "2026-09-08T12:00:00+00.",
+            "2026-09-08T12:00:00+00:00.5abc",
             "2026-09-08T12:00:00+00:00:01.5abc",
             "2026-09-08T12:00:00+00:00:01.5.5",
             "2026-09-08T12:00:00+00:00xyz",
