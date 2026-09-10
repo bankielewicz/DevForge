@@ -1369,9 +1369,13 @@ const RESULTS_V2: &str = "devforge.manual-local-acceptance-results/v2";
 const OBSERVATION_V1: &str = "devforge.manual-local-observation/v1";
 const OBSERVATION_V2: &str = "devforge.manual-local-observation/v2";
 const ALLOCATION_V1: &str = "devforge.manual-local-allocation/v1";
+const ALLOCATION_V2: &str = "devforge.manual-local-allocation/v2";
+const JUDGMENT_V1: &str = "devforge.manual-local-attempt-judgment/v1";
 /// A preserved prior allocation whose recorded passing attempts may be reused.
 struct Allocation {
     id: String,
+    /// Ledger rows whose outcome is a separately recorded subsequent judgment.
+    judged: usize,
     /// The reference's normalized status, equal to the closeout's normalized status.
     status: String,
     /// The preserved closeout's raw status, as written.
@@ -1628,9 +1632,10 @@ fn allocation(
     owner: &str,
     frozen: i128,
     identities: &Value,
+    authors: &BTreeSet<String>,
     evidence: &mut Evidence,
 ) -> Result<Allocation> {
-    let loaded = bind_allocation(reference, record, owner, identities, evidence)?;
+    let loaded = bind_allocation(reference, record, owner, identities, authors, evidence)?;
     require(
         frozen < loaded.start,
         "allocation window must follow the frozen acceptance set",
@@ -1641,12 +1646,16 @@ fn allocation(
 /// Bind one allocation reference to its preserved sources: everything
 /// `allocation` checks except the frozen-set chronology, which the caller
 /// applies. The preflight uses this to report the binding and that rule
-/// separately without weakening either.
+/// separately without weakening either. A `v2` reference may bind a
+/// separately recorded subsequent judgment to a ledger row (see
+/// `attempt_judgment`); `authors` are the package authors that judgment's
+/// reviewer must differ from.
 fn bind_allocation(
     reference: &Value,
     record: &Value,
     owner: &str,
     identities: &Value,
+    authors: &BTreeSet<String>,
     evidence: &mut Evidence,
 ) -> Result<Allocation> {
     let doc = evidence.document(reference, true)?;
@@ -1669,8 +1678,9 @@ fn bind_allocation(
         ],
         "allocation record",
     )?;
+    let judgments = is(&doc["schema_version"], ALLOCATION_V2);
     require(
-        is(&doc["schema_version"], ALLOCATION_V1),
+        judgments || is(&doc["schema_version"], ALLOCATION_V1),
         "unsupported allocation record",
     )?;
     let id = text(&doc["allocation_id"], "allocation ID")?.to_string();
@@ -1770,21 +1780,22 @@ fn bind_allocation(
     evidence.walk(&closeout)?;
     let mut matched = vec![false; facts.natives.len()];
     let mut attempts = BTreeMap::new();
+    let mut judged = 0;
+    let mut row_fields = vec![
+        "attempt_id",
+        "actor",
+        "started_at_utc",
+        "finished_at_utc",
+        "outcome",
+        "launch",
+        "completion",
+        "evidence",
+    ];
+    if judgments {
+        row_fields.push("judgment");
+    }
     for row in rows {
-        exact(
-            row,
-            &[
-                "attempt_id",
-                "actor",
-                "started_at_utc",
-                "finished_at_utc",
-                "outcome",
-                "launch",
-                "completion",
-                "evidence",
-            ],
-            "allocation attempt",
-        )?;
+        exact(row, &row_fields, "allocation attempt")?;
         let attempt_id = text(&row["attempt_id"], "attempt ID")?.to_string();
         require(
             slot_ids.contains(&attempt_id),
@@ -1817,6 +1828,23 @@ fn bind_allocation(
             !passed || completed,
             "completion record contradicts the PASS outcome",
         )?;
+        // A separately recorded later judgment of this attempt's saved outputs. It
+        // is validated after the execution evidence so that a failed process or an
+        // adverse recorded judgment is never overridden by a new label.
+        let judgment = judgments && !row["judgment"].is_null();
+        if judgment {
+            attempt_judgment(
+                &row["judgment"],
+                row,
+                &doc,
+                owner,
+                identities,
+                authors,
+                (from, to),
+                evidence,
+            )?;
+            judged += 1;
+        }
         if let Some(slots) = &facts.slots {
             let state = slots
                 .get(&attempt_id)
@@ -1869,7 +1897,7 @@ fn bind_allocation(
                 "preserved closeout records the attempt as not passed",
             )?;
             require(
-                !(native.judgment_required && passed && native.passed.is_none()),
+                !(native.judgment_required && passed && native.passed.is_none() && !judgment),
                 "preserved closeout records no workflow judgment for the attempt; a PASS outcome cannot be inferred from its process exit",
             )?;
             if let Some(transcript) = &native.transcript {
@@ -1896,6 +1924,7 @@ fn bind_allocation(
     )?;
     Ok(Allocation {
         id,
+        judged,
         status: facts.status.to_string(),
         closeout_status: get(&closeout, "status")?
             .as_str()
@@ -1909,6 +1938,106 @@ fn bind_allocation(
         attempts,
         used: false,
     })
+}
+
+/// Validate a `devforge.manual-local-attempt-judgment/v1` record: a later
+/// independent judgment of one preserved attempt's saved outputs, recorded
+/// separately from the closeout that truthfully says no judgment existed. It
+/// binds the frozen requirements, the candidate identity, the preserved
+/// allocation and closeout, the exact attempt (ID, actor, instants, launch,
+/// completion) and the attempt's recorded raw evidence; the ledger outcome must
+/// be the judgment's outcome. It never pins the reference, results or review,
+/// so no record digests itself. Independence is checked as distinct names plus
+/// a pinned independence record; actual context independence remains observed
+/// evidence, not a string guarantee.
+#[allow(clippy::too_many_arguments)]
+fn attempt_judgment(
+    reference: &Value,
+    row: &Value,
+    doc: &Value,
+    owner: &str,
+    identities: &Value,
+    authors: &BTreeSet<String>,
+    (from, to): (i128, i128),
+    evidence: &mut Evidence,
+) -> Result<()> {
+    let judgment = evidence.document(reference, true)?;
+    exact(
+        &judgment,
+        &[
+            "schema_version",
+            "reviewer",
+            "independence_evidence",
+            "acceptance_set",
+            "packages",
+            "original_allocation",
+            "closeout",
+            "attempt_id",
+            "actor",
+            "started_at_utc",
+            "finished_at_utc",
+            "launch",
+            "completion",
+            "evidence",
+            "outcome",
+            "reason",
+            "judged_at_utc",
+        ],
+        "attempt judgment",
+    )?;
+    require(
+        is(&judgment["schema_version"], JUDGMENT_V1),
+        "unsupported attempt judgment",
+    )?;
+    require(
+        judgment["acceptance_set"] == doc["acceptance_set"],
+        "attempt judgment bound to a different acceptance set",
+    )?;
+    require(
+        judgment["packages"] == *identities,
+        "attempt judgment candidate identity differs",
+    )?;
+    require(
+        judgment["original_allocation"] == doc["original_allocation"]
+            && judgment["closeout"] == doc["closeout"],
+        "attempt judgment is for a different allocation",
+    )?;
+    require(
+        judgment["attempt_id"] == row["attempt_id"],
+        "attempt judgment is for a different attempt",
+    )?;
+    require(
+        judgment["actor"] == row["actor"]
+            && time(&judgment["started_at_utc"])? == from
+            && time(&judgment["finished_at_utc"])? == to
+            && judgment["launch"] == row["launch"]
+            && judgment["completion"] == row["completion"],
+        "attempt judgment differs from the recorded attempt",
+    )?;
+    let listed = list(&judgment["evidence"])?;
+    require(
+        list(&row["evidence"])?.iter().all(|e| listed.contains(e)),
+        "attempt judgment omits the attempt's recorded evidence",
+    )?;
+    evidence.refs(&judgment["evidence"])?;
+    text(&judgment["outcome"], "judgment outcome")?;
+    require(
+        row["outcome"] == judgment["outcome"],
+        "attempt outcome differs from its subsequent judgment",
+    )?;
+    text(&judgment["reason"], "judgment reason")?;
+    require(
+        time(&judgment["judged_at_utc"])? > to,
+        "attempt judgment precedes the attempt it judges",
+    )?;
+    let reviewer = text(&judgment["reviewer"], "judgment reviewer")?;
+    require(
+        !is(&row["actor"], reviewer) && reviewer != owner && !authors.contains(reviewer),
+        "attempt judgment reviewer is not independent of the attempt actor, package authors or owner",
+    )?;
+    evidence.pin(&judgment["independence_evidence"], false)?;
+    evidence.walk(&judgment)?;
+    Ok(())
 }
 
 /// A separately authorized local claim; never a Routine or Full decision.
@@ -2011,6 +2140,7 @@ fn local_baseline(
                 &owner,
                 frozen,
                 &identities,
+                &authors,
                 &mut evidence,
             )?;
             require(
@@ -2171,6 +2301,8 @@ fn local_baseline(
                 .collect::<Vec<_>>()
         );
         summary["reused_observations"] = json!(reused.len());
+        summary["subsequent_judgments"] =
+            json!(allocations.values().map(|a| a.judged).sum::<usize>());
     }
     Ok(Validated { summary, evidence })
 }
@@ -2709,6 +2841,7 @@ fn check_local_evidence(
                         packet,
                         &owner,
                         &local.identities,
+                        &local.authors,
                         &mut evidence,
                     ) {
                         Ok(loaded) => {
@@ -2719,7 +2852,8 @@ fn check_local_evidence(
                                 .map(|a| {
                                     json!({"attempt_id": a["attempt_id"], "actor": a["actor"],
                                         "started_at_utc": a["started_at_utc"],
-                                        "finished_at_utc": a["finished_at_utc"], "outcome": a["outcome"]})
+                                        "finished_at_utc": a["finished_at_utc"], "outcome": a["outcome"],
+                                        "judgment": a.get("judgment").cloned().unwrap_or(Value::Null)})
                                 })
                                 .collect();
                             entry["allocation_id"] = json!(loaded.id);

@@ -834,6 +834,12 @@ struct Allocation {
     approval_ref: bool,
     keys: Vec<String>,
     pin: Value,
+    /// Write the reference as `devforge.manual-local-allocation/v2` with a `judgment` key on every row.
+    v2: bool,
+    /// Attempt ID -> subsequent judgment template, bound and materialized with the reference.
+    judgments: BTreeMap<String, Value>,
+    /// Leave the attempt rows' `judgment` values as a test edited them.
+    keep_rows: bool,
 }
 
 /// One preserved attempt: its launch and completion records in the historical shape.
@@ -1018,7 +1024,11 @@ impl Local {
     /// original allocation chains to a prior allocation and carries a text approval)
     /// and `stopped-multi` (a STOPPED_BLOCKED closeout recording one `native` entry
     /// per attempt, pinning its approval and its allocation, with an inline
-    /// `native_completion` and a workflow judgment only where one was made).
+    /// `native_completion` and a workflow judgment only where one was made) and
+    /// `stopped-unjudged` (the 2026-09-10 replacement closeout as actually written:
+    /// the `stopped-multi` shape whose entries all completed with exit 0 and none of
+    /// which records any `workflow_outcome`, so every ledger row is `NOT_EVALUATED`
+    /// until a separately recorded subsequent judgment is bound through `judge`).
     fn reuse_format(&mut self, id: &str, keys: &[&str], format: &str) {
         self.plan["frozen_at_utc"] = json!("2026-09-07T09:00:00Z");
         let (start, deadline) = ("2026-09-07T10:00:00Z", "2026-09-07T13:00:00Z");
@@ -1034,7 +1044,8 @@ impl Local {
                 &self.history,
             ));
         }
-        if format == "stopped-multi" {
+        let multi = format == "stopped-multi" || format == "stopped-unjudged";
+        if multi {
             // Completed with exit 0, but no workflow judgment was ever recorded for it.
             attempts.push(attempt_row(
                 &self.ws,
@@ -1058,7 +1069,11 @@ impl Local {
                 "2026-09-07T10:00:01Z",
                 "2026-09-07T10:00:02Z",
                 0,
-                "PASS",
+                if format == "stopped-unjudged" {
+                    "NOT_EVALUATED"
+                } else {
+                    "PASS"
+                },
                 &self.raw,
             ));
         }
@@ -1113,7 +1128,7 @@ impl Local {
                         "unused_slots": [format!("{id}-unused")], "installation_status": "NOT_PERFORMED"}),
                 )
             }
-            "stopped-multi" => {
+            "stopped-multi" | "stopped-unjudged" => {
                 let natives: Vec<Value> = attempts
                     .iter()
                     .map(|a| {
@@ -1124,7 +1139,9 @@ impl Local {
                             "packet": self.raw, "elapsed_seconds": 1.0,
                             "native_completion": {"returncode": if failed { -15 } else { 0 }, "timed_out": false,
                                 "finished_at_utc": a["finished_at_utc"]}});
-                        if a["outcome"] == "PASS" {
+                        if format == "stopped-unjudged" {
+                            // No judgment was made for any attempt, passing or failed.
+                        } else if a["outcome"] == "PASS" {
                             entry["workflow_outcome"] = json!("PASS");
                         } else if failed {
                             entry["workflow_outcome"] = json!("COULD_NOT_RUN");
@@ -1171,7 +1188,6 @@ impl Local {
             "started_at_utc": start, "deadline_utc": deadline, "max_attempts": 5,
             "attempts": attempts, "status": status, "original_allocation": null, "closeout": null});
         let evaluator_return = format == "evaluator-return";
-        let multi = format == "stopped-multi";
         self.allocations.push(Allocation {
             id: id.to_string(),
             record,
@@ -1184,6 +1200,9 @@ impl Local {
             approval_ref: false,
             keys: keys.iter().map(|k| k.to_string()).collect(),
             pin: Value::Null,
+            v2: false,
+            judgments: BTreeMap::new(),
+            keep_rows: false,
         });
         self.results["schema_version"] = json!("devforge.manual-local-acceptance-results/v2");
         let reused: usize = self.allocations.iter().map(|a| a.keys.len()).sum();
@@ -1204,6 +1223,31 @@ impl Local {
 
     fn closeout(&mut self, id: &str) -> &mut Value {
         &mut self.entry(id).closeout
+    }
+
+    /// Record a separate, later independent judgment of the saved outputs of
+    /// `attempt` under allocation `id`, set the ledger row's outcome to it and
+    /// write the reference in the `v2` shape. The preserved closeout is untouched.
+    fn judge(&mut self, id: &str, attempt: &str, outcome: &str) {
+        let index = ledger_index(self, id, attempt);
+        let row = self.allocation(id)["attempts"][index].clone();
+        self.allocation(id)["attempts"][index]["outcome"] = json!(outcome);
+        let judgment = json!({"schema_version": "devforge.manual-local-attempt-judgment/v1",
+            "reviewer": "fixture-independent-reviewer", "independence_evidence": self.raw,
+            "acceptance_set": null, "packages": self.identities(),
+            "original_allocation": null, "closeout": null,
+            "attempt_id": attempt, "actor": row["actor"],
+            "started_at_utc": row["started_at_utc"], "finished_at_utc": row["finished_at_utc"],
+            "launch": row["launch"], "completion": row["completion"], "evidence": row["evidence"],
+            "outcome": outcome, "reason": "Synthetic subsequent judgment of the saved outputs",
+            "judged_at_utc": "2026-09-07T15:00:00Z"});
+        let entry = self.entry(id);
+        entry.v2 = true;
+        entry.judgments.insert(attempt.to_string(), judgment);
+    }
+
+    fn judgment(&mut self, id: &str, attempt: &str) -> &mut Value {
+        self.entry(id).judgments.get_mut(attempt).unwrap()
     }
 
     /// Bind the preserved-record templates to the frozen set, then materialize everything.
@@ -1257,11 +1301,39 @@ impl Local {
             if allocation.bind_text_authorization {
                 allocation.record["authorization"] = original.clone();
             }
-            allocation.record["original_allocation"] = original;
-            allocation.record["closeout"] = self.ws.put(
+            allocation.record["original_allocation"] = original.clone();
+            let closeout = self.ws.put(
                 &format!("{}-closeout.json", allocation.id),
                 &allocation.closeout,
             );
+            allocation.record["closeout"] = closeout.clone();
+            if allocation.v2 {
+                allocation.record["schema_version"] = json!("devforge.manual-local-allocation/v2");
+            }
+            if allocation.v2 && !allocation.keep_rows {
+                for row in allocation.record["attempts"].as_array_mut().unwrap() {
+                    let attempt = row["attempt_id"].as_str().unwrap().to_string();
+                    row["judgment"] = match allocation.judgments.get_mut(&attempt) {
+                        Some(judgment) => {
+                            // Bind once; a test may then point these at other records.
+                            for (field, value) in [
+                                ("acceptance_set", &plan),
+                                ("original_allocation", &original),
+                                ("closeout", &closeout),
+                            ] {
+                                if judgment[field].is_null() {
+                                    judgment[field] = value.clone();
+                                }
+                            }
+                            self.ws.put(
+                                &format!("{}-judgment-{attempt}.json", allocation.id),
+                                judgment,
+                            )
+                        }
+                        None => Value::Null,
+                    };
+                }
+            }
             allocation.pin = self.ws.put(
                 &format!("allocation-{}.json", allocation.id),
                 &allocation.record,
@@ -2513,6 +2585,238 @@ fn preserved_approval_may_be_recorded_as_approval_ref_or_pinned_by_the_closeout(
     fixture.refused(&["preserved allocation records no authorization"]);
 }
 
+/// The 2026-09-10 replacement closeout shape: every attempt completed with exit 0
+/// and none carries a workflow judgment. A later independent judgment of the saved
+/// outputs is recorded separately and bound through a `v2` reference.
+fn unjudged_fixture(keys: &[&str]) -> Local {
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-r", keys, "stopped-unjudged");
+    fixture.results["native_turns"] = json!(5);
+    fixture
+}
+
+#[test]
+fn subsequent_independent_judgment_admits_an_unjudged_attempt_without_rewriting() {
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    fixture.judge("alloc-r", "alloc-r-missing_evidence_refusal", "PASS");
+    fixture.freeze();
+    let closeout_path = pin_path(&fixture.allocation("alloc-r")["closeout"]);
+    let before = fs::read(&closeout_path).unwrap();
+    let result = fixture.installed();
+    assert_eq!(result["acceptance_status"], "LOCAL_ACCEPTANCE_SET_PASS");
+    let adoption = fixture.ws.inventory()["manual_expert_adoption"].clone();
+    assert_eq!(adoption["reused_allocations"], json!(["alloc-r"]));
+    assert_eq!(adoption["reused_observations"], 1);
+    assert_eq!(adoption["subsequent_judgments"], 1);
+    // The preserved closeout still records no judgment for any attempt.
+    assert_eq!(fs::read(&closeout_path).unwrap(), before);
+    let closeout: Value = serde_json::from_slice(&before).unwrap();
+    assert!(
+        closeout["native"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e.get("workflow_outcome").is_none())
+    );
+    // The failed and the still unjudged attempts remain in the ledger as recorded.
+    let ledger = fixture.allocation("alloc-r")["attempts"].clone();
+    let outcomes: Vec<(&str, &str)> = ledger
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            (
+                a["attempt_id"].as_str().unwrap(),
+                a["outcome"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(outcomes.contains(&("alloc-r-a0", "COULD_NOT_RUN")));
+    assert!(outcomes.contains(&("alloc-r-a1", "NOT_EVALUATED")));
+    assert!(outcomes.contains(&("alloc-r-missing_evidence_refusal", "PASS")));
+    // A `v2` reference declares `judgment` on every row, null where none exists.
+    let unjudged = ledger_index(&mut fixture, "alloc-r", "alloc-r-a1");
+    assert_eq!(
+        fixture.allocation("alloc-r")["attempts"][unjudged]["judgment"],
+        Value::Null
+    );
+    // A second reused attempt with no judgment stays missing: its observation is refused.
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal", "reuse"]);
+    fixture.judge("alloc-r", "alloc-r-missing_evidence_refusal", "PASS");
+    fixture.freeze();
+    fixture.refused(&["reused attempt did not pass"]);
+    // Without any judgment the real shape is still refused exactly as before.
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    fixture.freeze();
+    fixture.refused(&["reused attempt did not pass"]);
+    // A ledger PASS without a judgment is still inferred from nothing but a process exit.
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    let index = ledger_index(&mut fixture, "alloc-r", "alloc-r-missing_evidence_refusal");
+    fixture.allocation("alloc-r")["attempts"][index]["outcome"] = json!("PASS");
+    fixture.freeze();
+    fixture.refused(&["no workflow judgment"]);
+}
+
+#[test]
+fn allocation_reference_shapes_stay_explicit_about_judgments() {
+    // A `v1` reference cannot carry a judgment key.
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    fixture.judge("alloc-r", "alloc-r-missing_evidence_refusal", "PASS");
+    fixture.freeze();
+    fixture.allocation("alloc-r")["schema_version"] = json!("devforge.manual-local-allocation/v1");
+    fixture.entry("alloc-r").v2 = false;
+    fixture.entry("alloc-r").keep_rows = true;
+    fixture.materialize();
+    fixture.refused(&["invalid allocation attempt"]);
+    // A `v2` reference must say `judgment: null` explicitly for an unjudged row.
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    fixture.judge("alloc-r", "alloc-r-missing_evidence_refusal", "PASS");
+    fixture.freeze();
+    let index = ledger_index(&mut fixture, "alloc-r", "alloc-r-a1");
+    fixture.allocation("alloc-r")["attempts"][index]
+        .as_object_mut()
+        .unwrap()
+        .remove("judgment");
+    fixture.entry("alloc-r").keep_rows = true;
+    fixture.materialize();
+    fixture.refused(&["invalid allocation attempt"]);
+}
+
+#[test]
+fn subsequent_judgment_must_bind_the_exact_attempt_candidate_and_requirements() {
+    let attempt = "alloc-r-missing_evidence_refusal";
+    let cases: [(&str, Value, &str); 8] = [
+        (
+            "attempt_id",
+            json!("alloc-r-a1"),
+            "judgment is for a different attempt",
+        ),
+        (
+            "actor",
+            json!("someone-else"),
+            "judgment differs from the recorded attempt",
+        ),
+        (
+            "started_at_utc",
+            json!("2026-09-07T10:00:01.5Z"),
+            "judgment differs from the recorded attempt",
+        ),
+        (
+            "outcome",
+            json!("FAIL"),
+            "attempt outcome differs from its subsequent judgment",
+        ),
+        ("reason", json!(""), "missing judgment reason"),
+        (
+            "judged_at_utc",
+            json!("2026-09-07T10:00:01.9Z"),
+            "judgment precedes the attempt it judges",
+        ),
+        (
+            "schema_version",
+            json!("devforge.manual-local-attempt-judgment/v0"),
+            "unsupported attempt judgment",
+        ),
+        (
+            "evidence",
+            json!([]),
+            "judgment omits the attempt's recorded evidence",
+        ),
+    ];
+    for (field, value, needle) in cases {
+        let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+        fixture.judge("alloc-r", attempt, "PASS");
+        fixture.judgment("alloc-r", attempt)[field] = value;
+        fixture.freeze();
+        fixture.refused(&[needle]);
+    }
+    // Candidate identity, frozen requirements and the judged allocation are bound too.
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    fixture.judge("alloc-r", attempt, "PASS");
+    fixture.judgment("alloc-r", attempt)["packages"][EVALUATOR] = fixture.history.clone();
+    fixture.freeze();
+    fixture.refused(&["judgment candidate identity differs"]);
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    fixture.judge("alloc-r", attempt, "PASS");
+    fixture.freeze();
+    let other_set = fixture.ws.put("other-set.json", &json!({"other": true}));
+    fixture.judgment("alloc-r", attempt)["acceptance_set"] = other_set;
+    fixture.materialize();
+    fixture.refused(&["judgment bound to a different acceptance set"]);
+    for field in ["original_allocation", "closeout"] {
+        let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+        fixture.judge("alloc-r", attempt, "PASS");
+        fixture.freeze();
+        let elsewhere = fixture.ws.put("elsewhere.json", &json!({"other": true}));
+        fixture.judgment("alloc-r", attempt)[field] = elsewhere;
+        fixture.materialize();
+        fixture.refused(&["judgment is for a different allocation"]);
+    }
+    // The launch and completion records the judgment names must be the attempt's.
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    fixture.judge("alloc-r", attempt, "PASS");
+    let a1 = ledger_index(&mut fixture, "alloc-r", "alloc-r-a1");
+    let other_completion = fixture.allocation("alloc-r")["attempts"][a1]["completion"].clone();
+    fixture.judgment("alloc-r", attempt)["completion"] = other_completion;
+    fixture.freeze();
+    fixture.refused(&["judgment differs from the recorded attempt"]);
+}
+
+#[test]
+fn subsequent_judgment_cannot_override_contradictory_execution_evidence() {
+    // The failed attempt (exit -15) judged PASS later.
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    fixture.judge("alloc-r", "alloc-r-a0", "PASS");
+    fixture.freeze();
+    fixture.refused(&["completion record contradicts the PASS outcome"]);
+    // A closeout that recorded an adverse judgment cannot be overturned by a later PASS.
+    let mut fixture = Local::new();
+    fixture.reuse_format("alloc-m", &["grounded_creation"], "stopped-multi");
+    fixture.results["native_turns"] = json!(5);
+    let clean = fixture.ws.put(
+        "alloc-m-a0-completion.json",
+        &json!({"returncode": 0, "timed_out": false, "finished_at_utc": "2026-09-07T10:00:00.5Z"}),
+    );
+    let index = ledger_index(&mut fixture, "alloc-m", "alloc-m-a0");
+    fixture.allocation("alloc-m")["attempts"][index]["completion"] = clean.clone();
+    let entry = native_entry(fixture.closeout("alloc-m"), "alloc-m-a0");
+    entry["completion"] = clean;
+    entry["native_completion"]["returncode"] = json!(0);
+    fixture.judge("alloc-m", "alloc-m-a0", "PASS");
+    fixture.freeze();
+    fixture.refused(&["preserved closeout records the attempt as not passed"]);
+    // An adverse subsequent judgment is preserved: the ledger says FAIL and the
+    // observation that reuses the attempt is refused.
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    fixture.judge("alloc-r", "alloc-r-missing_evidence_refusal", "FAIL");
+    fixture.freeze();
+    fixture.refused(&["reused attempt did not pass"]);
+}
+
+#[test]
+fn subsequent_judgment_reviewer_must_be_independent_and_outside_the_candidate() {
+    let attempt = "alloc-r-missing_evidence_refusal";
+    for reviewer in ["fixture-worker", "fixture-owner", "fixture-author"] {
+        let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+        fixture.judge("alloc-r", attempt, "PASS");
+        fixture.judgment("alloc-r", attempt)["reviewer"] = json!(reviewer);
+        fixture.freeze();
+        fixture.refused(&["judgment reviewer is not independent"]);
+    }
+    // A judgment stored inside the installation destination is not authority evidence.
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    fixture.judge("alloc-r", attempt, "PASS");
+    fixture.freeze();
+    let index = ledger_index(&mut fixture, "alloc-r", attempt);
+    let judgment_pin = fixture.allocation("alloc-r")["attempts"][index]["judgment"].clone();
+    let inside = fixture.ws.project.join(".agents/skills/judgment.json");
+    write(&inside, &fs::read(pin_path(&judgment_pin)).unwrap());
+    fixture.allocation("alloc-r")["attempts"][index]["judgment"] = pin(&inside);
+    fixture.entry("alloc-r").keep_rows = true;
+    fixture.materialize();
+    fixture.refused(&["authority evidence must be outside candidate and installation roots"]);
+}
+
 #[test]
 fn preflight_reports_compatible_synthetic_evidence_without_writing() {
     let mut fixture = Local::new();
@@ -2896,4 +3200,54 @@ fn preflight_requires_the_pinned_authority_and_never_installs() {
         result.text
     );
     assert!(!fixture.ws.project.join(".agents").exists());
+}
+
+#[test]
+fn preflight_applies_the_subsequent_judgment_rule_and_reports_it() {
+    let attempt = "alloc-r-missing_evidence_refusal";
+    let mut fixture = unjudged_fixture(&["missing_evidence_refusal"]);
+    fixture.judge("alloc-r", attempt, "PASS");
+    fixture.freeze();
+    let packet = fixture.packet();
+    let before = snapshot(&fixture.ws.root);
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 0, "{}", result.text);
+    let report = &result.output;
+    assert_eq!(report["status"], "COMPATIBLE", "{report}");
+    assert_eq!(snapshot(&fixture.ws.root), before);
+    let entry = allocation_entry(report, "alloc-r");
+    assert_eq!(entry["status"], "COMPATIBLE");
+    let index = ledger_index(&mut fixture, "alloc-r", attempt);
+    let judgment_pin = fixture.allocation("alloc-r")["attempts"][index]["judgment"].clone();
+    let rows = entry["attempts"].as_array().unwrap();
+    let judged = rows.iter().find(|a| a["attempt_id"] == attempt).unwrap();
+    assert_eq!(judged["outcome"], "PASS");
+    assert_eq!(judged["judgment"], judgment_pin, "{report}");
+    let unjudged = rows
+        .iter()
+        .find(|a| a["attempt_id"] == "alloc-r-a1")
+        .unwrap();
+    assert_eq!(unjudged["outcome"], "NOT_EVALUATED");
+    assert_eq!(unjudged["judgment"], Value::Null);
+    let observations = report["observations"].as_array().unwrap();
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0]["status"], "PASS", "{report}");
+    // The same mismatch that installation refuses blocks the preflight binding.
+    fixture.judgment("alloc-r", attempt)["attempt_id"] = json!("alloc-r-a1");
+    fixture.materialize();
+    let packet = fixture.packet();
+    let result = fixture.ws.preflight(&packet);
+    assert_eq!(result.code, 2, "{}", result.text);
+    let report = &result.output;
+    let entry = allocation_entry(report, "alloc-r");
+    assert_eq!(entry["status"], "BLOCKED", "{report}");
+    assert!(
+        entry["blockers"][0]
+            .as_str()
+            .unwrap()
+            .contains("judgment is for a different attempt"),
+        "{report}"
+    );
+    assert_eq!(report["observations"][0]["status"], "NOT_PERFORMED");
+    fixture.refused(&["judgment is for a different attempt"]);
 }
