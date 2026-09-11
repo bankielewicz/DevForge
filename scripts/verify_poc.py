@@ -22,7 +22,7 @@ def main():
         ("clippy", ["cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings"]),
         ("build", ["cargo", "build", "--locked"]),
         ("tests", ["python3", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"]),
-        ("framework-structure", ["python3", "scripts/validate_framework.py", "--framework", str(framework)]),
+        ("framework-structure", ["target/debug/devforge", "validate", "framework", "--framework", str(framework)]),
         ("mvp-documents", ["python3", "scripts/validate_mvp.py", "--mvp", str(framework / "docs/mvp")]),
         ("fixture-demo", ["python3", "scripts/demo.py", "--framework", str(framework)]),
     ]
