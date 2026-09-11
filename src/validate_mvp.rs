@@ -36,6 +36,12 @@ const NOT_CHECKED: [&str; 4] = [
 ];
 const SYMLINK_HOP_LIMIT: usize = 64;
 
+// The sibling structural validator. `src/main.rs` is owned by another slice, so
+// the module is declared here; moving it to `mod validate_framework;` in the
+// crate root would be equivalent.
+#[path = "validate_framework.rs"]
+mod validate_framework;
+
 #[derive(Subcommand)]
 pub enum Action {
     /// Check authored document links, indexes and source hashes; never run model evaluations.
@@ -46,6 +52,12 @@ pub enum Action {
         /// Optional full report including files_sha256; parent directories are created.
         #[arg(long)]
         report: Option<PathBuf>,
+    },
+    /// Check a DevForgeAI checkout's structure; never execute its code or hooks.
+    Framework {
+        /// Selected DevForgeAI framework root.
+        #[arg(long)]
+        framework: PathBuf,
     },
 }
 
@@ -214,7 +226,13 @@ struct Report {
 }
 
 pub fn main(action: &Action) {
-    let Action::Mvp { mvp, report } = action;
+    let (mvp, report) = match action {
+        Action::Mvp { mvp, report } => (mvp, report),
+        Action::Framework { framework } => {
+            validate_framework::main(framework);
+            return;
+        }
+    };
     match run(mvp, report.as_deref()) {
         Ok(status) => std::process::exit(status),
         Err(error) => {
