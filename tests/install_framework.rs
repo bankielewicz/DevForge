@@ -2179,6 +2179,7 @@ fn malformed_hook_sources_and_sidecars_fail_export_before_writes() {
         let result = export(&hooks, "codex", &output);
         blocked_with(&result, expected);
         assert!(!output.exists(), "raw={raw}");
+        assert!(!output.parent().unwrap().exists(), "raw={raw}");
     }
     // A malformed, duplicate-keyed or unsupported delivery sidecar refuses too.
     let delivery = fixture();
@@ -2205,6 +2206,7 @@ fn malformed_hook_sources_and_sidecars_fail_export_before_writes() {
         let result = export(&delivery, "codex", &output);
         assert_eq!(result.code, 2, "raw={raw} stdout={}", result.stdout);
         assert!(!output.exists(), "raw={raw}");
+        assert!(!output.parent().unwrap().exists(), "raw={raw}");
     }
     // The unchanged sidecar exports, so the refusals above were specific.
     fs::write(&path, requirement.to_string()).unwrap();

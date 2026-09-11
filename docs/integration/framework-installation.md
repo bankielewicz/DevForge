@@ -207,7 +207,7 @@ half of `tests/test_installer.py`, which stays in place and passing.
 | `test_delivery_validator_mutation_after_probe_blocks_all_installation_writes` | NOT_RUN: same reason. `tests/probe_runtime.rs::a_validator_whose_bytes_changed_since_the_probe_is_refused` covers the compiled decision directly. |
 | `test_delivery_selected_validator_cannot_be_overwritten_by_installation` | NOT_APPLICABLE: guard check 1 (a destination naming the validator) is unreachable from `install framework`, because the probe refuses a validating executable inside the project first. That refusal is `a_validating_executable_inside_the_project_is_refused_before_execution`; `tests/probe_runtime.rs::a_destination_that_names_the_validating_executable_is_refused` covers check 1 itself. |
 | `test_export_preserves_runtime_and_excludes_authoring_material` | `export_preserves_runtime_and_excludes_authoring_material` |
-| `test_delivery_export_retains_dependency_without_executing_runtime` | `delivery_export_retains_the_dependency_without_executing_a_runtime` |
+| `test_delivery_export_retains_dependency_without_executing_runtime` | `delivery_export_retains_the_dependency_without_executing_a_runtime`. The copied sidecar, `runtime_requirements`, `runtime_host`, the `files_sha256` entry and `behavior` are asserted. The **no-probe half is verified by inspection, not by execution**: the legacy case mocked `runtime_requirements.probe_runtime` to raise if called, which has no black-box equivalent, and the Rust case's execution-marker assertion cannot fail because the export takes no `--runtime` and performs no discovery. `export_plugin` contains no `Command::new` and no `probe_runtime` call; the CLI's only spawn is `capability_output`, inside `probe_runtime`, unreachable from this action. |
 
 Added beyond the legacy suite:
 
@@ -270,9 +270,15 @@ These are the only known observable differences from
 6. **Path resolution.** `crate::resolved` refuses any symlinked component of
    `--project` or `--framework`; Python's `Path.resolve()` followed them. This
    matches `install manual-experts`.
-7. **Refusal wording for malformed JSON.** The exact decoder message differs
-   (`serde_json` versus Python's `json`); the status, the exit code and the
-   absence of writes do not.
+7. **Refusal wording for malformed or unreadable input.** Both the decoder
+   message (`serde_json` versus Python's `json`) and the reader/io message
+   differ. The one reachable io case is a missing plugin manifest during an
+   export: the legacy script reports `[Errno 2] No such file or directory:
+   '<path>'`, and the compiled command reports `cannot read the plugin manifest
+   <path>: No such file or directory (os error 2)` — the path is attached
+   deliberately so the operator still learns which file was missing, but the
+   wording is not the legacy wording. The status, the exit code and the absence
+   of writes are identical in every such case.
 8. **Export and the global `--project`.** The legacy parser put `--project` and
    `--export-plugin` in one mutually exclusive group, so passing both was an
    argparse error. `--project` is a global flag of this CLI, so

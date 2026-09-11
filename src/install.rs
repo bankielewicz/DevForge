@@ -4202,7 +4202,13 @@ fn export_plugin(framework: &Path, provider: &str, output: &Path) -> Result<Valu
         let name = relative.to_str().context("non-UTF8 plugin path")?;
         planned.insert(name.to_string(), fs::read(&path)?);
     }
-    let manifest = crate::plugin::read_json(&plugin.join(format!("{component}/plugin.json")))?;
+    let manifest_path = plugin.join(format!("{component}/plugin.json"));
+    let manifest = crate::plugin::read_json(&manifest_path).with_context(|| {
+        format!(
+            "cannot read the plugin manifest {}",
+            manifest_path.display()
+        )
+    })?;
     ensure!(
         manifest.get("name").and_then(Value::as_str) == Some("devforgeai"),
         "plugin manifest name must be devforgeai"
