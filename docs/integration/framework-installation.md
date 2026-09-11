@@ -158,6 +158,9 @@ Added beyond the legacy suite:
 
 - `project_and_framework_must_be_separate` — the new path-hygiene predicate.
 - `project_experts_are_added_only_when_selected_and_collide_by_name`.
+- `a_recorded_manual_expert_adoption_is_preserved_and_its_flags_are_not_offered` —
+  an existing `manual_expert_adoption` record survives an install unchanged, and
+  `--manual-evidence` / `--manual-experts-only` are rejected by the parser.
 - `the_legacy_installer_and_the_compiled_command_agree_and_cross_refresh` — the
   legacy oracle: `/usr/bin/python3 scripts/install_framework.py` and the compiled
   command install the same delivery-aware fixture into two projects with one

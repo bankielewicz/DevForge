@@ -677,6 +677,35 @@ fn project_experts_are_added_only_when_selected_and_collide_by_name() {
     );
 }
 
+/// The evidence-gated `manual-experts` record is another action's, and survives.
+/// This action refuses the flags that would produce one by not offering them.
+#[test]
+fn a_recorded_manual_expert_adoption_is_preserved_and_its_flags_are_not_offered() {
+    let fixture = fixture();
+    let adoption = json!({"schema_version": "devforge.manual-expert-adoption/v1",
+                          "owner": "integration owner", "packages": ["devforge-evaluate-expert"]});
+    write(
+        &fixture.project.join(".devforge-install.json"),
+        json!({"schema": 1, "files": {}, "manual_expert_adoption": adoption})
+            .to_string()
+            .as_bytes(),
+    );
+    installed(&fixture, &[]);
+    assert_eq!(fixture.inventory()["manual_expert_adoption"], adoption);
+    // Refused by not offering them: clap rejects both before anything is planned.
+    for flag in ["--manual-evidence", "--manual-experts-only"] {
+        let result = install(&fixture, &[flag, "ignored"]);
+        assert_eq!(result.code, 2, "flag={flag} stdout={}", result.stdout);
+        assert!(result.stdout.is_empty(), "flag={flag}");
+        assert!(
+            result.stderr.contains("unexpected argument"),
+            "flag={flag} stderr={}",
+            result.stderr
+        );
+    }
+    assert_eq!(fixture.inventory()["manual_expert_adoption"], adoption);
+}
+
 // ---- hook registry --------------------------------------------------------
 
 /// Legacy `test_hook_sources_install_for_both_providers_and_repeat_without_duplicates`.
