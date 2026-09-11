@@ -195,6 +195,14 @@ Added beyond the legacy suite:
   same check, named: `validating executable must be outside the installation
   project` and `validating executable must be outside the framework`, both on a
   run where nothing declares a runtime requirement.
+- `an_aliased_destination_is_refused_without_any_requirement` — the no-requirement
+  path reaches `protect_validator`, not only the placement check: an executable
+  *outside* the project, reached through a managed destination that is a hard
+  link to it, is refused with `installation would overwrite the selected
+  validator binary through an alias` before any write. Added for review J
+  finding J1: without it, skipping `protect_validator` on that arm left all 186
+  tests green while reproducing the original P1 symptom (a write, then
+  `Text file busy (os error 26)`).
 - `the_legacy_installer_and_the_compiled_command_agree_and_cross_refresh` — the
   legacy oracle: `/usr/bin/python3 scripts/install_framework.py` and the compiled
   command install the same delivery-aware fixture into two projects with one
@@ -244,16 +252,36 @@ These are the only known observable differences from
    `/usr/bin/python3 -c 'import json; print(json.dumps([0.000001,1e16,1.5e-7,0.0001,123456789012345.0,12345678901234567.0,1e100,-0.0,1.0,5],separators=(",",":")))'`
    → `[1e-06,1e+16,1.5e-07,0.0001,123456789012345.0,1.2345678901234568e+16,1e+100,-0.0,1.0,5]`
    (Python 3.12.3). Two differences are introduced by the *decoder*, before any
-   encoding, and no encoder can recover them from a `serde_json::Value`:
-   - the integer literal `-0` decodes to the float `-0.0` and encodes as `-0.0`,
-     where Python keeps an `int` and writes `0`;
-   - an integer literal outside `i64`/`u64` range decodes to an `f64` and encodes
-     in float form (`12345678901234567890123` → `1.2345678901234568e+22`), where
-     Python's arbitrary-precision `int` writes every digit.
+   encoding, and no encoder can recover them from a `serde_json::Value`
+   (`serde_json` is pinned without `arbitrary_precision`, so the original digits
+   are gone by the time `group_digest` sees the value). They do **not** have the
+   same consequence:
+   - **An integer literal outside `i64`/`u64` range hard-blocks a refresh.** It
+     decodes to an `f64` and encodes in float form
+     (`12345678901234567890123` → `1.2345678901234568e+22`) where Python's
+     arbitrary-precision `int` writes every digit, so the two installers derive
+     different identities for the same group. A valid inventory the legacy
+     installer wrote for such a hook is then unrefreshable by the compiled
+     command: exit 2, `managed hook definition digest mismatch`, project
+     unchanged — the same shape as the P2 defect this exception otherwise
+     records as fixed. Non-delivery hook handlers are validated only for a
+     nonempty `type` and a nonempty `command` (`src/plugin.rs`,
+     `validate_hook_groups`); the key whitelist and the positive-`timeout` rule
+     belong to `validate_delivery_hooks` alone, so an integer-valued field of any
+     size is accepted into an ordinary hook group.
+   - **`-0` never blocks, but makes cross-installer refreshes non-idempotent.**
+     The integer literal `-0` decodes to the float `-0.0` and encodes as `-0.0`,
+     where Python keeps an `int` and writes `0`. Both installers still accept
+     each other's inventory — the recorded digest always matches the document
+     each one just read — but each rewrites the settings document, so a
+     legacy → compiled → legacy sequence flips `"timeout": 0` ⇄
+     `"timeout": -0.0` forever. Every step exits 0 and each installer is
+     idempotent with itself; only the alternation churns.
 
-   Both are unchanged by this repair and are pinned by the same unit test.
-   Neither appears in any provider hook definition; a package that introduced one
-   would need this checked.
+   Both are unchanged by this repair — 1cd38a1 hashed `serde_json`'s compact
+   encoding and was equally divergent from Python for these inputs — and both are
+   pinned by the same unit test. Neither appears in any provider hook definition;
+   a package that introduced one would need this checked.
 6. **Path resolution.** `crate::resolved` refuses any symlinked component of
    `--project` or `--framework`; Python's `Path.resolve()` followed them. This
    matches `install manual-experts`.
