@@ -513,6 +513,22 @@ fn exact<'a>(value: &'a Value, keys: &[&str], label: &str) -> R<&'a Map<String, 
     }
 }
 
+/// CPython `str.isspace()`.
+///
+/// Rust's `char::is_whitespace` is the Unicode `White_Space` property; CPython
+/// also treats the four bidirectional-class B/S control characters
+/// U+001C..U+001F as space. The full CPython set was enumerated with
+/// `/usr/bin/python3 -c 'print([hex(i) for i in range(0x110000) if chr(i).isspace()])'`
+/// and is pinned by `tests::python_isspace_matches_the_enumerated_cpython_set`.
+fn python_isspace(value: char) -> bool {
+    value.is_whitespace() || matches!(value, '\u{1c}'..='\u{1f}')
+}
+
+/// `str.strip()` over CPython's whitespace set.
+fn python_strip(value: &str) -> &str {
+    value.trim_matches(python_isspace)
+}
+
 /// `delivery_core._text`.
 fn text(value: &Value, label: &str) -> R<String> {
     let Some(raw) = value.as_str() else {
@@ -520,7 +536,7 @@ fn text(value: &Value, label: &str) -> R<String> {
             "{label}: expected a nonempty string without surrounding whitespace"
         ));
     };
-    if raw.trim().is_empty() || raw != raw.trim() {
+    if python_strip(raw).is_empty() || raw != python_strip(raw) {
         return fail(format!(
             "{label}: expected a nonempty string without surrounding whitespace"
         ));
@@ -635,7 +651,7 @@ fn sections(value: &Value, label: &str) -> R<Vec<String>> {
 
 /// `phase_state._string`.
 fn bounded_string(value: &Value, label: &str) -> R<String> {
-    let Some(raw) = value.as_str().filter(|raw| !raw.trim().is_empty()) else {
+    let Some(raw) = value.as_str().filter(|raw| !python_strip(raw).is_empty()) else {
         return fail(format!("{label}: expected a nonempty string"));
     };
     if raw.len() > 8192 || has_placeholder(raw) {
@@ -758,7 +774,7 @@ fn stamp(value: &Value, label: &str) -> R<i128> {
     let Some(raw) = value.as_str() else {
         return fail(format!("{label}: expected an aware ISO UTC timestamp"));
     };
-    if raw.is_empty() || raw != raw.trim() {
+    if raw.is_empty() || raw != python_strip(raw) {
         return fail(format!("{label}: expected an aware ISO UTC timestamp"));
     }
     match parse_utc(raw) {
@@ -1321,8 +1337,15 @@ fn validate_ref(value: &Value, blobs: &BTreeMap<String, Vec<u8>>) -> R<()> {
         return fail("snapshot locator does not match its digest");
     }
     let bytes = field(reference, "bytes")?;
-    if bytes.is_boolean() || !bytes.is_i64() || bytes.as_i64().is_some_and(|count| count < 0) {
-        return fail("snapshot byte count must be a nonnegative integer");
+    match bytes.as_i64() {
+        // CPython's `type(x) is int` accepts an arbitrarily large integer and
+        // fails later at the blob length comparison. Without serde_json's
+        // `arbitrary_precision` (which would move `Cargo.lock`) an out-of-range
+        // integer and a float are the same `Number`, so both are delegated.
+        Some(count) if count >= 0 => {}
+        Some(_) => return fail("snapshot byte count must be a nonnegative integer"),
+        None if bytes.is_number() => return delegate(),
+        None => return fail("snapshot byte count must be a nonnegative integer"),
     }
     if !field(reference, "kind")?.is_string() || !field(reference, "source")?.is_string() {
         return fail("snapshot kind/source must be strings");
@@ -1815,8 +1838,9 @@ impl State {
                 let valid = issues.as_array().is_some_and(|items| {
                     (1..=100).contains(&items.len())
                         && items.iter().all(|item| {
-                            item.as_str()
-                                .is_some_and(|text| !text.trim().is_empty() && text.len() <= 32768)
+                            item.as_str().is_some_and(|text| {
+                                !python_strip(text).is_empty() && text.len() <= 32768
+                            })
                         })
                 });
                 if !valid {
@@ -2321,7 +2345,7 @@ pub(crate) fn status(state: &Path, package: &Path) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_days, has_placeholder, parse_utc};
+    use super::{civil_days, has_placeholder, parse_utc, python_isspace, python_strip};
 
     #[test]
     fn aware_utc_timestamps_parse_to_their_epoch_microsecond() {
@@ -2347,6 +2371,41 @@ mod tests {
     fn civil_days_matches_the_proleptic_gregorian_epoch() {
         assert_eq!(civil_days(1970, 1, 1), Some(0));
         assert_eq!(civil_days(2000, 3, 1), Some(11017));
+    }
+
+    /// The complete CPython set, from
+    /// `/usr/bin/python3 -c 'print([hex(i) for i in range(0x110000) if chr(i).isspace()])'`.
+    const CPYTHON_SPACE: [u32; 29] = [
+        0x9, 0xa, 0xb, 0xc, 0xd, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x85, 0xa0, 0x1680, 0x2000, 0x2001,
+        0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029,
+        0x202f, 0x205f, 0x3000,
+    ];
+
+    #[test]
+    fn python_isspace_matches_the_enumerated_cpython_set() {
+        for code in 0..0x11_0000u32 {
+            let Some(value) = char::from_u32(code) else {
+                continue;
+            };
+            assert_eq!(
+                python_isspace(value),
+                CPYTHON_SPACE.contains(&code),
+                "U+{code:04X} disagrees with CPython str.isspace()"
+            );
+        }
+        // The four characters Rust does not call whitespace at all.
+        for code in 0x1c..=0x1fu32 {
+            let value = char::from_u32(code).expect("a control character");
+            assert!(!value.is_whitespace() && python_isspace(value));
+        }
+    }
+
+    #[test]
+    fn python_strip_removes_what_cpython_str_strip_removes() {
+        assert_eq!(python_strip("\u{1c}"), "");
+        assert_eq!(python_strip("\u{1f} a \u{1c}"), "a");
+        assert_eq!(python_strip(" a "), "a");
+        assert_eq!(python_strip("a"), "a");
     }
 
     #[test]

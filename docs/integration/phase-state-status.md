@@ -38,6 +38,7 @@ or `STALE`, otherwise `0`. Neither the rendering nor the exit rule changed.
 | `delivery_core._load_contract` (`devforge.delivery-task/v1`) | `load_contract` |
 | `delivery_core.prepare` (v1 outcome) | `prepare` |
 | `delivery_core._text` / `_relative` / `_absolute` / `_exact` / `_digest` / `_revision` / `_sections` | `text` / `relative` / `absolute` / `exact` / `hex_digest` / `revision` / `sections` |
+| `str.isspace()` / `str.strip()` | `python_isspace` / `python_strip` |
 | `workflow_runtime.engine_for_state` (phase engine only) | `phase_engine` |
 
 The compiled reader answers a `status` call when all of the following hold:
@@ -102,6 +103,32 @@ in `Cargo.toml` by commit `ea22280`; `Cargo.lock` is unchanged. It needs no
 (`std::fs::File::try_lock` would have required 1.89 and fails
 `clippy::incompatible_msrv`).
 
+### CPython whitespace is wider than Rust's
+
+Rust's `char::is_whitespace` is the Unicode `White_Space` property. CPython's
+`str.isspace()` additionally treats U+001C, U+001D, U+001E and U+001F as space,
+and `str.strip()` removes them. Enumerating both sets over all of Unicode
+(`/usr/bin/python3 -c 'print([hex(i) for i in range(0x110000) if chr(i).isspace()])'`)
+gives exactly those four as the difference, with nothing in the reverse
+direction.
+
+That matters wherever the legacy runtime calls `.strip()` on attacker-supplied
+journal content. `phase_state._string` treats a value of only such characters as
+empty and refuses it; so does the `correction` record's issues check; and
+`delivery_core._text` rejects it before its control-character branch can produce
+a different message. A reader using `str::trim` would **accept** a pending
+`question` made of U+001C and answer `WAITING_USER` with exit 0 where the legacy
+authority answers `FAIL` with exit 2 — the defect review K found and this slice
+now fixes. `python_isspace`/`python_strip` are used at every such call site
+(`text`, `bounded_string`, `stamp`, and the correction-issues check); no
+`str::trim` call remains in `src/phase_state.rs`. The predicate is pinned
+against the enumerated CPython set by the unit test
+`phase_state::tests::python_isspace_matches_the_enumerated_cpython_set`, and the
+behaviour by `a_checkpoint_question_of_python_only_whitespace_is_refused`,
+`a_correction_issue_of_python_only_whitespace_is_refused` and
+`a_contract_field_of_python_only_whitespace_is_refused_with_the_legacy_wording`,
+each of which tampers with a committed journal object and re-chains it.
+
 ## Reading through held directory descriptors
 
 The Python runtime never resolves a path by name twice: it opens `/`, walks each
@@ -120,9 +147,13 @@ addressing the held descriptor through procfs:
   through the descriptor rather than by re-walking the original path, with
   `O_NOFOLLOW` still applying to the final component;
 * `fs::read_dir("/proc/self/fd/<fd>")` replaces `os.listdir(dir_fd)`;
-* file reads additionally re-check the `(dev, ino, size, mtime_ns, ctime_ns,
-  nlink)` identity before the open, after the `fstat`, and after the readback,
-  exactly as `phase_state._read_at` does.
+* file reads additionally re-check the
+  `(dev, ino, size, mtime, mtime_nsec, ctime, ctime_nsec)` identity before the
+  open, after the `fstat`, and after the readback, at the same three points as
+  `phase_state._read_at`. `delivery_core._identity` also carries `st_nlink`;
+  the Rust tuple does not, because the link count is asserted separately on both
+  the `lstat` and the `fstat` (`nlink() != 1` is its own refusal) and any change
+  to it also moves `ctime`.
 
 This requires a mounted `/proc`, which the runtime already requires (the
 supervisor uses pidfds). `tests/phase_state.rs::a_symlinked_journal_component_is_refused_exactly_as_before`
@@ -131,16 +162,18 @@ refusals.
 
 ## Parity exceptions
 
-Each exception below is pinned by a test in `tests/phase_state.rs`.
+Every row states its pinning test, or `NOT_PINNED` with the reason no
+deterministic fixture exists.
 
 | Condition | Behaviour | Pinned by |
 | --- | --- | --- |
 | Absent state root | The CLI boundary (`checked_path`/`project_for` in `src/delivery.rs`) refuses before any engine is selected, with its own wording. Pre-existing; unchanged by this slice. | `a_missing_or_unreadable_state_root_is_refused_exactly_as_before` |
 | State root without a readable `MANIFEST.json`, or a manifest above 1 MiB | Same CLI boundary refusal; the legacy engine's own wording (`workflow manifest: ...`) is recorded in the test but is never reached through the CLI. Pre-existing. | `a_missing_or_unreadable_state_root_is_refused_exactly_as_before`, `a_malformed_manifest_or_head_is_refused_exactly_as_before` |
-| A state root that is not absolute | `NOT_APPLICABLE` at the CLI: `--state` is absolutised by `crate::resolved` before either implementation sees it. `phase_state::absolute` still applies the `delivery_core._absolute` rules to the resolved value. | — |
+| A state root that is not absolute | `NOT_APPLICABLE` at the CLI: `--state` is absolutised by `crate::resolved` before either implementation sees it. `phase_state::absolute` still applies the `delivery_core._absolute` rules to the resolved value. | `NOT_PINNED` — the condition cannot be reached through the CLI, so no fixture can exhibit it. |
 | Unparsable JSON in any read object | Delegated, so the CPython decoder message is emitted verbatim. | `a_malformed_manifest_or_head_is_refused_exactly_as_before` |
-| An unexpected `errno` (anything but `ENOENT`, `ELOOP`, `ENOTDIR`) | Delegated, so `strerror` wording stays exact. | — (no deterministic fixture) |
-| `_configuration`'s `implementation` collision check | Python binds `Path(__file__).parent`, the materialised module cache; Rust binds the same `package` directory computed by `src/delivery.rs`. Identical under the CLI. When the legacy controller is run directly from the source tree (as the test oracle does), its `implementation` is `runtime/delivery` instead, so a state root or receipt placed inside either directory would diverge. No fixture does that. | — |
+| An unexpected `errno` (anything but `ENOENT`, `ELOOP`, `ENOTDIR`) | Delegated, so `strerror` wording stays exact. | `NOT_PINNED` — provoking a specific `errno` (`EACCES`, `EMFILE`, `ENOMEM`) deterministically from a test needs privileges or resource exhaustion this suite does not take. |
+| A snapshot `bytes` value that is a JSON number outside `i64` | Delegated. CPython's `type(x) is int` accepts an arbitrarily large integer and fails later at the blob length comparison; without serde_json's `arbitrary_precision` (which would move `Cargo.lock`) a huge integer and a float are the same `Number`, so both are delegated rather than reworded. A float is therefore delegated too, trading a little more delegation for exact stdout. | `a_snapshot_byte_count_outside_i64_is_answered_exactly_as_before` |
+| `_configuration`'s `implementation` collision check | Python binds `Path(__file__).parent`, the materialised module cache; Rust binds the same `package` directory computed by `src/delivery.rs`. Identical under the CLI. When the legacy controller is run directly from the source tree (as the test oracle does), its `implementation` is `runtime/delivery` instead, so a state root or receipt placed inside either directory would diverge. | `NOT_PINNED` — the oracle harness itself is what diverges, so a test using that oracle cannot express the expectation. No fixture places a state root or receipt inside either directory. |
 
 ## Legacy-to-Rust test mapping
 
@@ -197,11 +230,18 @@ changed.
 Neither `tests/test_phase_state.py` nor `tests/test_phase_references.py`
 exercises lock contention, so porting the acquisition does not move any row of
 the table above and the 16/5/9/3 split over the 33 legacy read-path cases is
-unchanged. What it changes is the reader's own delegation set, which drops from
-five conditions to four: `READY`/`COMPLETED` journals, `devforge.delivery-task/v2`
-contracts, non-phase state schemas, and CPython JSON/`strerror` diagnostics. A
-held exclusive lock moved from that set into the ported set and is now pinned by
-a parity test rather than by a delegation test.
+unchanged. What changed is the reader's own delegation set. A held exclusive
+lock left it for the ported set and is now pinned by a parity test rather than a
+delegation test; review K's F2 added a snapshot `bytes` number outside `i64`.
+The set now holds five conditions, each pinned:
+
+| Delegated condition | Pinned by |
+| --- | --- |
+| A `READY` or `COMPLETED` journal | `a_ready_journal_is_still_answered_by_the_legacy_delivery_checks` (second half: an accepted Focus output drifts, so the legacy authority answers `FAIL`/2 where a reader skipping the delegation would answer `READY`/0) |
+| A `devforge.delivery-task/v2` contract | `a_v2_reference_contract_is_still_answered_by_the_legacy_runtime` |
+| A state schema that is not `devforge.brainstorm-state/v1` | `an_unsupported_workflow_state_schema_is_still_answered_by_the_controller` |
+| CPython JSON decoder diagnostics | `a_malformed_manifest_or_head_is_refused_exactly_as_before` |
+| A snapshot `bytes` number outside `i64`, and `strerror` diagnostics | `a_snapshot_byte_count_outside_i64_is_answered_exactly_as_before`; the `errno` half is `NOT_PINNED` (see Parity exceptions) |
 
 Additional Rust coverage with no single legacy counterpart:
 `a_symlinked_journal_component_is_refused_exactly_as_before`,
@@ -210,6 +250,10 @@ Additional Rust coverage with no single legacy counterpart:
 `a_replaced_or_unusable_lock_is_refused_exactly_as_before`,
 `a_held_exclusive_lock_is_refused_exactly_as_before`,
 `the_exclusive_lock_is_released_after_every_read`,
+`a_checkpoint_question_of_python_only_whitespace_is_refused`,
+`a_correction_issue_of_python_only_whitespace_is_refused`,
+`a_contract_field_of_python_only_whitespace_is_refused_with_the_legacy_wording`,
+`a_snapshot_byte_count_outside_i64_is_answered_exactly_as_before`,
 `an_existing_receipt_without_a_completion_intent_is_refused`,
 `a_leftover_partial_publication_is_inspected_without_recovery`,
 `an_unsupported_workflow_state_schema_is_still_answered_by_the_controller`,
@@ -225,8 +269,11 @@ not installed in this environment):
    reader answers: an ACTIVE v1 journal (ported) and the same journal rebound to
    a `devforge.delivery-task/v2` contract (delegated). Both pay the identical
    CLI boundary and runtime-cache verification, so the only difference is the
-   `/usr/bin/python3` spawn. The minimum of five runs on the ported fixture must
-   be less than half the minimum of five runs on the delegated one.
+   `/usr/bin/python3` spawn. `fastest_status` takes the minimum of **seven**
+   complete runs on each side, and the assertion is an **absolute** margin:
+   `ported + PYTHON_START_UP < delegated`, with `PYTHON_START_UP` at 20 ms. A
+   margin rather than a ratio, because load inflates the delegated side more, so
+   the margin only widens where a ratio would narrow.
 2. **Source audit.** The test reads `src/delivery.rs` and asserts that the
    `crate::phase_state::status` call site appears before the
    `python(&package, "controller.py")` command is constructed, so the reader is
@@ -234,8 +281,8 @@ not installed in this environment):
 
 `a_held_exclusive_lock_is_refused_exactly_as_before` repeats observation 1 for
 the contended refusal: with a real `flock(1)` holder in place, the minimum of
-five compiled runs against the locked journal must be under half the minimum of
-five compiled runs against a delegating fixture. Before the lock was ported this
+seven compiled runs against the locked journal plus the same 20 ms margin must
+still be under the minimum of seven compiled runs against a delegating fixture. Before the lock was ported this
 assertion failed at a ratio of about 1.15 (`w3a/lock-red.log`), because the
 contended path was itself spawning Python.
 

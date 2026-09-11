@@ -978,6 +978,182 @@ fn a_leftover_partial_publication_is_inspected_without_recovery() {
 }
 
 // ---------------------------------------------------------------------------
+// Journal re-chaining, so a committed record can be tampered with in place
+// ---------------------------------------------------------------------------
+
+fn read_json(path: &Path) -> Value {
+    serde_json::from_slice(&fs::read(path).unwrap_or_else(|error| panic!("{path:?}: {error}")))
+        .unwrap_or_else(|error| panic!("{path:?}: {error}"))
+}
+
+fn relax(path: &Path) {
+    let mode = fs::symlink_metadata(path)
+        .expect("state entry")
+        .permissions()
+        .mode();
+    fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o700)).expect("writable");
+}
+
+/// Replace the last committed record, re-hashing it and re-pinning `HEAD.json`.
+///
+/// The journal is content-addressed: a record's file name is its own SHA-256 and
+/// `HEAD.records` lists those digests in order. Rewriting the last record
+/// therefore means writing a new object, removing the old one and re-pinning the
+/// final `HEAD` entry. `MANIFEST.json` is untouched, so `manifest_sha256` still
+/// matches.
+fn retamper_last_record(state: &Path, operation: &str, mutate: impl FnOnce(&mut Value)) {
+    relax(state);
+    relax(&state.join("records"));
+    relax(&state.join("snapshots"));
+    let mut head = read_json(&state.join("HEAD.json"));
+    let digests: Vec<String> = head["records"]
+        .as_array()
+        .expect("records")
+        .iter()
+        .map(|value| value.as_str().expect("digest").to_owned())
+        .collect();
+    let last = digests.last().expect("one record").clone();
+    let path = state.join(format!("records/{last}.json"));
+    let mut record = read_json(&path);
+    assert_eq!(
+        record["operation"],
+        json!(operation),
+        "the last committed record is not the one to tamper with"
+    );
+    mutate(&mut record);
+    let raw = json_bytes(&record);
+    let digest = digest(&raw);
+    fs::remove_file(&path).expect("remove the superseded record");
+    write(&state.join(format!("records/{digest}.json")), &raw);
+    let count = digests.len();
+    head["records"][count - 1] = json!(digest);
+    write(&state.join("HEAD.json"), &json_bytes(&head));
+}
+
+/// Rewrite the checkpoint blob a record points at, re-chaining both objects.
+fn retamper_checkpoint(state: &Path, operation: &str, mutate: impl FnOnce(&mut Value)) {
+    let state = state.to_path_buf();
+    retamper_last_record(&state, operation, |record| {
+        let old = record["data"]["checkpoint_sha256"]
+            .as_str()
+            .expect("a bound checkpoint")
+            .to_owned();
+        let blob = state.join(format!("snapshots/{old}.bin"));
+        let mut checkpoint = read_json(&blob);
+        mutate(&mut checkpoint);
+        let raw = json_bytes(&checkpoint);
+        let digest = digest(&raw);
+        fs::remove_file(&blob).expect("remove the superseded blob");
+        write(&state.join(format!("snapshots/{digest}.bin")), &raw);
+        record["data"]["checkpoint_sha256"] = json!(digest);
+        for reference in record["snapshots"].as_array_mut().expect("snapshots") {
+            if reference["kind"] == json!("checkpoint") {
+                reference["sha256"] = json!(digest);
+                reference["path"] = json!(format!("snapshots/{digest}.bin"));
+                reference["bytes"] = json!(raw.len());
+            }
+        }
+    });
+}
+
+/// U+001C..U+001F are whitespace to CPython `str.isspace()` and to nothing in
+/// Rust's `char::is_whitespace`. The legacy runtime strips them, so a value made
+/// only of them is empty to `_string` and to the correction-issues check.
+const PYTHON_ONLY_SPACE: [&str; 2] = ["\u{1c}", "\u{1f}"];
+
+#[test]
+fn a_checkpoint_question_of_python_only_whitespace_is_refused() {
+    for blank in PYTHON_ONLY_SPACE {
+        let fixture = Fixture::active("python-space-question");
+        fixture.checkpoint(
+            "awaiting_user",
+            json!({"question": "Which volunteer group?",
+                   "blocking_dependency": "A named coordinator"}),
+        );
+        assert!(fixture.advance().status.success());
+        retamper_checkpoint(&fixture.state, "waiting_user", |checkpoint| {
+            checkpoint["content"]["question"] = json!(blank);
+        });
+        let observed = assert_parity(
+            &fixture.state,
+            "a pending question of CPython-only whitespace",
+        );
+        assert_eq!(observed["status"], json!("FAIL"), "{blank:?}");
+        assert_eq!(issue(&observed), "question: expected a nonempty string");
+    }
+}
+
+#[test]
+fn a_correction_issue_of_python_only_whitespace_is_refused() {
+    for blank in PYTHON_ONLY_SPACE {
+        let fixture = Fixture::active("python-space-issue");
+        fixture.checkpoint(
+            "ready",
+            json!({"known_ideas": [], "known_decisions": [], "missing_inputs": []}),
+        );
+        assert!(!fixture.advance().status.success());
+        retamper_last_record(&fixture.state, "correction", |record| {
+            record["data"]["issues"] = json!([blank]);
+        });
+        let observed = assert_parity(
+            &fixture.state,
+            "a correction whose only issue is CPython-only whitespace",
+        );
+        assert_eq!(observed["status"], json!("FAIL"), "{blank:?}");
+        assert_eq!(
+            issue(&observed),
+            "correction record has no failure evidence"
+        );
+    }
+}
+
+#[test]
+fn a_contract_field_of_python_only_whitespace_is_refused_with_the_legacy_wording() {
+    let fixture = Fixture::active("python-space-task-id");
+    let mut session: Value =
+        serde_json::from_slice(&fs::read(&fixture.session_path).expect("session"))
+            .expect("session JSON");
+    session["task_id"] = json!("\u{1c}");
+    write(&fixture.session_path, &json_bytes(&session));
+    let observed = assert_parity(&fixture.state, "a task_id of CPython-only whitespace");
+    assert_eq!(observed["status"], json!("FAIL"));
+    assert_eq!(
+        issue(&observed),
+        "task_id: expected a nonempty string without surrounding whitespace"
+    );
+}
+
+#[test]
+fn a_snapshot_byte_count_outside_i64_is_answered_exactly_as_before() {
+    let fixture = Fixture::active("huge-bytes");
+    relax(&fixture.state);
+    let manifest = fixture.state.join("MANIFEST.json");
+    let text = String::from_utf8(fs::read(&manifest).expect("manifest")).expect("utf-8");
+    // Edit the JSON text, not a parsed value: serde_json cannot round-trip an
+    // integer this large without changing it into a float.
+    let marker = text.find("\"bytes\":").expect("a snapshot byte count");
+    let start = marker
+        + text[marker..]
+            .find(|c: char| c.is_ascii_digit())
+            .expect("a decimal byte count");
+    let end = start
+        + text[start..]
+            .find(|c: char| !c.is_ascii_digit())
+            .expect("the end of the byte count");
+    let tampered = format!("{}99999999999999999999{}", &text[..start], &text[end..]);
+    write(&manifest, tampered.as_bytes());
+    let mut head = read_json(&fixture.state.join("HEAD.json"));
+    head["manifest_sha256"] = json!(digest(tampered.as_bytes()));
+    write(&fixture.state.join("HEAD.json"), &json_bytes(&head));
+    let observed = assert_parity(&fixture.state, "a snapshot byte count above i64::MAX");
+    assert_eq!(observed["status"], json!("FAIL"));
+    assert_eq!(
+        issue(&observed),
+        "protected snapshot is missing or its byte count changed"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Read-only guarantee
 // ---------------------------------------------------------------------------
 
@@ -1040,6 +1216,21 @@ fn a_ready_journal_is_still_answered_by_the_legacy_delivery_checks() {
     let observed = assert_parity(&fixture.state, "a READY journal");
     assert_eq!(observed["status"], json!("READY"));
     assert_eq!(observed["persisted_status"], json!("READY"));
+
+    // Discriminating half: once an accepted Focus output drifts, only
+    // `delivery_core.check` can see it. A reader that answered READY from the
+    // journal alone would report READY and exit 0 where the legacy authority
+    // reports FAIL and exit 2.
+    let handoff = fixture.project.join("docs/handoff.md");
+    let mut drifted = fs::read(&handoff).expect("handoff");
+    drifted.extend_from_slice(b"\nAn edit made after acceptance.\n");
+    write(&handoff, &drifted);
+    let observed = assert_parity(&fixture.state, "a READY journal whose output drifted");
+    assert_eq!(observed["status"], json!("FAIL"));
+    assert_eq!(
+        issue(&observed),
+        "current output bytes differ from the accepted Focus snapshot"
+    );
 }
 
 #[test]
