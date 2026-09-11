@@ -44,7 +44,7 @@ Repeat these checks after that prerequisite is satisfied. CI installs its own
 toolchain explicitly; this guide does not.
 
 Python 3.12 and bubblewrap are not needed for anything below. They belong to
-the legacy tests, gates, `devforge isolate`, and `scripts/verify_poc.py`.
+the legacy tests, gates, `devforge isolate`, and `devforge verify-poc`.
 
 ## 3. Build and locate the executable
 
@@ -59,8 +59,37 @@ The executable is `$DEVFORGE_SRC/target/debug/devforge`. Nothing puts it on
 the full path, which works from any directory.
 
 Building the CLI does not install DevForgeAI skills, agents or hooks into any
-project. Installation is a separate, evidence-gated action; see
+project. Installation is a separate, explicit action, and nothing in this guide
+performs it. For reference only, that action is now the compiled command:
+
+```bash
+# Not part of this guide: it writes into $PROJECT.
+# The project must already exist and be outside $FRAMEWORK, and Cargo
+# hard-links the built binary, so --runtime needs a single-link copy.
+install -m 755 "$DEVFORGE_SRC/target/debug/devforge" /tmp/devforge-runtime
+"$DEVFORGE_SRC/target/debug/devforge" --project "$PROJECT" install framework \
+  --framework "$FRAMEWORK" --provider claude --runtime /tmp/devforge-runtime
+```
+
+`--runtime` is needed only when the selected provider package declares
+`hooks/runtime-requirements.json`; the executable you invoke is the validating
+authority that probes it, so there is no `--validator`. Promoted Codex expert
+packages are refused by this command and installed only through
 [manual expert adoption](integration/manual-expert-adoption.md).
+[Project-local framework installation](integration/framework-installation.md)
+documents the destinations, refusals and parity exceptions, along with
+`install export-plugin`, the compiled runtime-only plugin export:
+
+```bash
+# Also not part of this guide: it creates $EXPORT_PARENT/devforgeai.
+"$DEVFORGE_SRC/target/debug/devforge" install export-plugin \
+  --framework "$FRAMEWORK" --provider claude --output "$EXPORT_PARENT/devforgeai"
+```
+
+The output directory must be named `devforgeai` and must not already exist. The
+unchanged `scripts/install_framework.py` remains the legacy baseline that both
+compiled commands are tested against; its `--manual-evidence` /
+`--manual-experts-only` refresh is the only installation mode still Python.
 
 ## 4. Harmless checks
 
@@ -100,6 +129,19 @@ skill sources are resolved two levels above it. Outcomes:
 The report, `--report`, and the checks are documented in
 [MVP document validation](integration/mvp-document-validation.md).
 
+The structural framework check, over the whole checkout:
+
+```bash
+"$DEVFORGE_SRC/target/debug/devforge" validate framework --framework "$FRAMEWORK"
+```
+
+`--framework` selects a DevForgeAI root. It prints the legacy `PASS` object and
+exits 0, or refuses the first defect with `BLOCKED: <reason>` on stderr, empty
+stdout and exit 2; there is no `FAIL` report. The checks, the bounded Python
+syntax inspection and the known differences from `scripts/validate_framework.py`
+are documented in
+[framework structure validation](integration/framework-structure-validation.md).
+
 ## What this does and does not establish
 
 A `PASS` means the selected `docs/mvp` tree is structurally consistent. It
@@ -108,9 +150,18 @@ behavior, acceptance, qualification, MVP completion or installation, and it
 does not satisfy the adoption prerequisites in
 [manual expert adoption](integration/manual-expert-adoption.md).
 
-## Legacy verification
+## Full verification and demonstration
 
-`scripts/verify_poc.py` and `scripts/demo.py` are the legacy Python full
-verification and demonstration. They require Python 3.12 and bubblewrap and
-write evidence under `docs/validation/` and `.poc/`. Nothing above launches
-them. The [terminal runbook](POC.md) covers the gate and isolation workflow.
+```bash
+"$DEVFORGE_SRC/target/debug/devforge" verify-poc --framework "$FRAMEWORK" \
+  --repo "$DEVFORGE_SRC" --cargo "$(rustup which --toolchain 1.94.0 cargo)"
+"$DEVFORGE_SRC/target/debug/devforge" demo --framework "$FRAMEWORK" \
+  --policies "$DEVFORGE_SRC/policies" --output-root "$DEVFORGE_SRC/.poc" --prepare-only
+```
+
+These need Python 3.12 and bubblewrap, run the legacy suites as one of their
+stages, and write evidence under `docs/validation/` and the output root.
+Nothing else above launches them, and both stop on the defects recorded in
+[demonstration and verification](integration/demo-and-verification.md).
+`scripts/verify_poc.py` and `scripts/demo.py` remain as the unchanged legacy
+baseline. The [terminal runbook](POC.md) covers the gate and isolation workflow.

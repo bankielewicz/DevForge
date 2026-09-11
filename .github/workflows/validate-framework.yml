@@ -39,7 +39,7 @@ jobs:
           persist-credentials: false
           path: candidate
       - name: Validate without executing candidate code
-        run: python3 authority/scripts/validate_framework.py --framework candidate
+        run: authority/target/debug/devforge validate framework --framework candidate
       - name: Validate authoring document references
         run: authority/target/debug/devforge validate mvp --mvp candidate/docs/mvp
       - name: Record check scope

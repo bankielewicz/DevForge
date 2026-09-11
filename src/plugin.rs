@@ -8,7 +8,6 @@
 //!
 //! Every refusal keeps the exact legacy message so callers ported from the
 //! Python scripts preserve their observable `BLOCKED` reasons.
-#![allow(dead_code)] // Consumed by the `validate framework` and `install framework` slices.
 use crate::delivery::StrictJson;
 use anyhow::{Result, bail, ensure};
 use serde_json::{Value, json};

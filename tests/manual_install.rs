@@ -10,6 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 const BIN: &str = env!("CARGO_BIN_EXE_devforge");
 const EVALUATOR: &str = "devforge-evaluate-expert";
@@ -33,6 +34,26 @@ const CHECKS: [(&str, &str); 9] = [
     ("evaluator_to_creator", "N"),
 ];
 static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Writing a file this suite later executes races with forking in another test
+/// thread: the forked child inherits the writer's descriptor, and its exec then
+/// fails with ETXTBSY. Every executable write takes this lock exclusively and
+/// every spawn takes it shared, so no fork is in flight while a descriptor to
+/// one of them is open for writing, while spawns still run in parallel.
+static EXECUTABLES: RwLock<()> = RwLock::new(());
+
+fn spawning() -> RwLockReadGuard<'static, ()> {
+    // A failed test already reports itself; poisoning must not hide it behind a panic.
+    EXECUTABLES
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+fn writing_executable() -> RwLockWriteGuard<'static, ()> {
+    EXECUTABLES
+        .write()
+        .unwrap_or_else(|error| error.into_inner())
+}
 
 fn sha(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -80,7 +101,10 @@ struct Run {
 }
 
 fn run(bin: &str, args: &[&str]) -> Run {
-    let out = Command::new(bin).args(args).output().unwrap();
+    let out = {
+        let _guard = spawning();
+        Command::new(bin).args(args).output().unwrap()
+    };
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     Run {
@@ -1663,7 +1687,10 @@ fn changed_source_identity_is_refused_before_writes() {
 fn copied_executable_at_another_path_is_not_the_pinned_authority() {
     let fixture = Adoption::new("Full");
     let copy = fixture.ws.root.join("devforge-copy");
-    fs::copy(BIN, &copy).unwrap();
+    {
+        let _guard = writing_executable();
+        fs::copy(BIN, &copy).unwrap();
+    }
     fs::set_permissions(&copy, fs::Permissions::from_mode(0o755)).unwrap();
     fixture.ws.refused_with(
         copy.to_str().unwrap(),
@@ -3477,7 +3504,10 @@ fn preflight_requires_the_pinned_authority_and_never_installs() {
         &authority_record(&id["executable"], &id["source_sha256"]),
     );
     let copy = fixture.ws.root.join("devforge-copy");
-    fs::copy(BIN, &copy).unwrap();
+    {
+        let _guard = writing_executable();
+        fs::copy(BIN, &copy).unwrap();
+    }
     fs::set_permissions(&copy, fs::Permissions::from_mode(0o755)).unwrap();
     let args = [
         "install",
