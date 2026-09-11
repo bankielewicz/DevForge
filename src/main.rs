@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 mod delivery;
 mod install;
+mod plugin;
 mod validate_mvp;
 
 const RUNNER: &str = include_str!("../runners/unittest_runner.py");
