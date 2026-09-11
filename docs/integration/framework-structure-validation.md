@@ -182,7 +182,7 @@ Cases with no legacy counterpart:
 | `valid_python_and_json_in_retained_evidence_stay_inspectable_and_pass` | A valid `.py` artifact must pass the bounded inspection, not only fail it. |
 | `python_syntax_inspection_refuses_what_the_legacy_parser_refuses` | Records the exit-status difference for a `SyntaxError` (below). |
 | `matches_the_legacy_validator_on_synthetic_trees` | Eighteen synthetic trees compared with the unchanged Python script: exit status and stdout bytes always, stderr bytes except the JSON-decoder wording case. |
-| `matches_the_legacy_validator_on_the_real_framework_checkout` | Compares both validators on the companion checkout. |
+| `refuses_the_real_framework_checkout_like_the_legacy_script` | Compares the refusal contract of both validators on the companion checkout: equal exit status, empty stdout and a single `BLOCKED` line each. It is deliberately not byte parity, because the checkout holds several independent defects and neither validator promises which one is named; the byte evidence is the two cases above. |
 | `the_real_authored_hook_packages_validate_byte_for_byte_like_the_legacy_script` | Copies the two real `hooks/` and `.{provider}-plugin/` directories into a synthetic root and compares byte for byte, including the emitted `runtime_requirements`. |
 | `a_missing_framework_root_is_refused_like_the_legacy_script` | The `[Errno 2]` refusal text. |
 
@@ -207,6 +207,12 @@ evidence name patterns, the front-matter helpers and the Python JSON dialect.
 - **Non-object plugin manifest.** `json.loads(manifest)["name"]` on a JSON array
   raised an uncaught `TypeError` (exit 1). This command refuses with
   `BLOCKED: plugin manifest must be an object: <path>` and exit 2.
+- **Strict plugin manifest decoding.** `.{provider}-plugin/plugin.json` is decoded
+  with `serde_json`, which refuses the `NaN` and `Infinity` constants that the
+  legacy `json.loads(manifest.read_text())` accepted. A manifest carrying one is
+  `BLOCKED` with exit 2 where the legacy script returned `PASS`. This is stricter
+  and so cannot weaken a refusal. Duplicate keys (last wins) and very large
+  integers still behave as they did.
 - **Diagnostic wording.** Malformed `.json` and `.toml` documents keep Python's
   positional message shape but are prefixed with the relative path, which the
   legacy `BLOCKED:` line omitted. TOML parse errors use the `toml` crate's text.

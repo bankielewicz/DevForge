@@ -1529,7 +1529,7 @@ fn companion_framework() -> Option<PathBuf> {
 }
 
 #[test]
-fn matches_the_legacy_validator_on_the_real_framework_checkout() {
+fn refuses_the_real_framework_checkout_like_the_legacy_script() {
     let Some(framework) = companion_framework() else {
         eprintln!("companion framework absent; real-tree oracle NOT_RUN");
         return;
