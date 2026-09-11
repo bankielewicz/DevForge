@@ -26,11 +26,14 @@ this command refuses the same way. The `PASS` object is
 ```json
 {
   "status": "PASS",
-  "skills": 58,
+  "skills": 8,
   "scope": "structure only",
   "behavior": "NOT_EVALUATED"
 }
 ```
+
+(`skills` is the count for that tree; the example above is a small synthetic
+root with the two provider packages and their four core skills.)
 
 with `runtime_requirements` (provider to sidecar) and `runtime_host`
 (`NOT_VERIFIED`) appended, in that order, when at least one provider package
