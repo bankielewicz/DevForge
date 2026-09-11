@@ -8,7 +8,16 @@ import shutil
 import subprocess
 import sys
 
-from install_framework import install
+
+def install(binary, framework, project, provider="both"):
+    """Install through the compiled CLI; the running executable is the validator."""
+    argv = [str(binary), "--project", str(project), "install", "framework",
+            "--framework", str(framework), "--provider", provider, "--include-experts",
+            "--runtime", str(binary)]
+    p = subprocess.run(argv, text=True, capture_output=True, timeout=120)
+    if p.returncode != 0:
+        raise RuntimeError(f"Installation failed: {argv}\n{p.stdout}\n{p.stderr}")
+    return json.loads(p.stdout)
 
 
 def main():
@@ -33,8 +42,12 @@ def main():
         policy = cli_root / "policies" / f"{slug}.json"
         state = authority / slug
         shutil.copytree(fixture / "seed", project)
-        # The same built CLI is selected explicitly as the runtime and as the validating authority.
-        install(framework, project, "both", include_experts=True, runtime=binary, validator=binary)
+        # The same built CLI is selected explicitly as the runtime; running it makes it
+        # the validating authority. Installation is COULD_NOT_RUN for this layout: the
+        # compiled command requires the project to be outside the framework, and these
+        # candidates live under the framework's .poc/. See
+        # docs/integration/framework-installation.md.
+        install(binary, framework, project)
         events = []
 
         def call(*command, success=True):
