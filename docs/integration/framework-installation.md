@@ -268,16 +268,20 @@ These are the only known observable differences from
    `if runtime_evidence is not None:` (line 319), which nothing but that first
    block can reach. A package with no `hooks/runtime-requirements.json`
    therefore reaches the legacy write loop with no placement or self-protection
-   check at all. The compiled command refuses
-   first, before any write and before the framework is read, with exit 2 and the
-   project byte-identical. Observable divergence, exercised by
+   check at all — established by inspection of those three lines, not by running
+   it. The compiled command refuses first, before any write and before the
+   framework is read, with exit 2 and the project byte-identical.
+
+   What was observed, and is now pinned by
    `installer_inside_managed_destination_without_requirement_refuses_before_writes`:
    with no requirement declared and the running `devforge` sitting at the managed
-   destination `<project>/.claude/skills/demo/SKILL.md`, the **legacy installer
-   writes** (it placed `.claude/agents/first.md` and then failed with
-   `Text file busy (os error 26)`), while the **compiled command refuses** with
-   `validating executable must be outside the installation project`. Runtime
-   capability probing itself is unchanged and still conditional.
+   destination `<project>/.claude/skills/demo/SKILL.md`, the compiled command
+   **at 1cd38a1** wrote `.claude/agents/first.md` and only then failed, with
+   `{"reason":"Text file busy (os error 26)","status":"BLOCKED"}` — a refusal
+   that did not precede its writes. It now answers
+   `{"reason":"validating executable must be outside the installation
+   project","status":"BLOCKED"}` with the project unchanged. Runtime capability
+   probing itself is unchanged and still conditional.
 
 ## Still Python
 

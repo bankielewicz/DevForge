@@ -2066,6 +2066,45 @@ fn a_float_hook_identity_survives_a_cross_refresh_and_an_edit_is_still_refused()
     );
     assert_eq!(f.inventory()["managed_hooks"]["claude"], recorded);
     assert_eq!(fs::read(&settings).unwrap(), settings_bytes);
+    // The other direction: a settings document `serde_json` wrote, which lays the
+    // same float out as `1e-6`, is read back by the legacy installer, which must
+    // derive the same identity from it and rewrite nothing.
+    let second = f.root().join("second-project");
+    fs::create_dir_all(&second).unwrap();
+    let fresh = spawn(
+        Path::new(BIN),
+        &[
+            "--project",
+            second.to_str().unwrap(),
+            "install",
+            "framework",
+            "--framework",
+            f.framework.to_str().unwrap(),
+            "--provider",
+            "claude",
+        ],
+        &[],
+    );
+    assert_eq!(
+        fresh.code, 0,
+        "compiled install: {} {}",
+        fresh.stdout, fresh.stderr
+    );
+    let compiled = second.join(".claude/settings.local.json");
+    let compiled_bytes = fs::read(&compiled).unwrap();
+    let refreshed = legacy_install(&second);
+    assert_eq!(
+        refreshed.code, 0,
+        "legacy refresh of the compiled tree: {} {}",
+        refreshed.stdout, refreshed.stderr
+    );
+    assert_eq!(fs::read(&compiled).unwrap(), compiled_bytes);
+    assert_eq!(
+        read_json(&second.join(".devforge-install.json"))["managed_hooks"]["claude"]["owned"][0]
+            ["sha256"]
+            .as_str(),
+        Some(sha(PYTHON_GROUP.as_bytes()).as_str()),
+    );
     // A genuine local edit of the owned group is still refused, before any write.
     let mut document = read_json(&settings);
     document["hooks"]["Stop"][0]["hooks"][0]["timeout"] = json!(0.000002);
