@@ -14,8 +14,8 @@ Existing Python framework logic, tooling and tests **must be ported into DevForg
 
 ## First run
 
-1. In DevForge, run `cargo build --locked` and `python3 scripts/verify_poc.py --framework ../DevForgeAI`.
-2. Run `python3 scripts/demo.py --framework ../DevForgeAI --prepare-only`. This creates initialized copies of the SQLite and JSON-file examples, with local skills and agents for both providers.
+1. In DevForge, run `cargo build --locked` and `target/debug/devforge verify-poc --framework ../DevForgeAI --repo "$PWD" --cargo "$(rustup which --toolchain 1.94.0 cargo)"`.
+2. Run `target/debug/devforge demo --framework ../DevForgeAI --policies policies --output-root .poc --prepare-only`. This creates initialized copies of the SQLite and JSON-file examples under `.poc/<run id>/candidates`, with the Claude provider package installed. Both steps currently stop on defects recorded in [demonstration and verification](integration/demo-and-verification.md).
 3. Select one generated project and read its external policy, story, expert specification, and current expert skill. Keep its report available in the authority terminal.
 4. Start one protected interactive client from DevForge:
 
@@ -121,7 +121,7 @@ The synthetic policies use a small `dependencies.json` contract and literal proh
 
 | Work | Owner | Status / completion check |
 | --- | --- | --- |
-| Local Rust gates, installation, two project fixtures | POC builder | Implemented; rerun `scripts/verify_poc.py` for exact evidence. |
+| Local Rust gates, installation, two project fixtures | POC builder | Implemented; rerun `devforge verify-poc` for exact evidence. |
 | Native package structure and isolated binary smoke checks | POC builder | Checked locally; see validation notes. |
 | Subscribed interactive expert creation and behavioral evaluation | User + terminal AI | Next: sign in within a prepared project and run the expert-creator task above. |
 | Production enforcement and hosted governance | Framework owner | Not established by this POC. |
