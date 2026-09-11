@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 mod delivery;
 mod install;
+mod phase_state;
 mod plugin;
 mod validate_framework;
 mod validate_mvp;

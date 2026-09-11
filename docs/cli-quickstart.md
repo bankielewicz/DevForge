@@ -59,8 +59,27 @@ The executable is `$DEVFORGE_SRC/target/debug/devforge`. Nothing puts it on
 the full path, which works from any directory.
 
 Building the CLI does not install DevForgeAI skills, agents or hooks into any
-project. Installation is a separate, evidence-gated action; see
+project. Installation is a separate, explicit action, and nothing in this guide
+performs it. For reference only, that action is now the compiled command:
+
+```bash
+# Not part of this guide: it writes into $PROJECT.
+# The project must already exist and be outside $FRAMEWORK, and Cargo
+# hard-links the built binary, so --runtime needs a single-link copy.
+install -m 755 "$DEVFORGE_SRC/target/debug/devforge" /tmp/devforge-runtime
+"$DEVFORGE_SRC/target/debug/devforge" --project "$PROJECT" install framework \
+  --framework "$FRAMEWORK" --provider claude --runtime /tmp/devforge-runtime
+```
+
+`--runtime` is needed only when the selected provider package declares
+`hooks/runtime-requirements.json`; the executable you invoke is the validating
+authority that probes it, so there is no `--validator`. Promoted Codex expert
+packages are refused by this command and installed only through
 [manual expert adoption](integration/manual-expert-adoption.md).
+[Project-local framework installation](integration/framework-installation.md)
+documents the destinations, refusals and parity exceptions. The unchanged
+`scripts/install_framework.py` remains the legacy baseline and is still the
+only implementation of runtime-only plugin export (`--export-plugin`).
 
 ## 4. Harmless checks
 
