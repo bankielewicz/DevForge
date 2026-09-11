@@ -75,7 +75,7 @@ Snapshots exclude root `.git`, root `.devforge-runtime`, and `__pycache__` direc
 | `runners/` | Fixed harness embedded into the executable |
 | `policies/` | Synthetic example policies; real projects need their own accepted policy |
 | `scripts/` | Legacy Python baselines for the compiled `devforge install framework`, `devforge validate` and `devforge demo`/`verify-poc`, plus the unported `--export-plugin`; retirement is a separate decision |
-| `tests/` | Independent black-box gate and installer cases |
+| `tests/` | Independent black-box gate and installer cases; Rust suites plus the remaining legacy Python ones ([retirement record](docs/integration/legacy-test-retirement.md)) |
 | `.github/workflows/` | CLI CI and external framework structure checks |
 
 The [framework repository](../DevForgeAI/README.md) owns the skills and examples. The detailed [POC contract](docs/POC.md) records operational boundaries and recovery behavior.
