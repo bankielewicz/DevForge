@@ -888,12 +888,15 @@ fn inspect_python(path: &Path, relative: &Path) -> Result<()> {
         .env("LANG", "C.UTF-8")
         .spawn()
         .map_err(|error| anyhow!("{label}: Python syntax inspection unavailable: {error}"))?;
+    // The deadline covers the write as well as the parse: a hypothetical
+    // interpreter that never drained stdin would otherwise block here, past a
+    // pipe buffer's worth of source, without the deadline ever starting.
+    let started = Instant::now();
     if let Some(mut stdin) = child.stdin.take() {
         // The inspector reads every byte before parsing; a closed pipe means it
         // has already failed, which the exit status reports.
         let _ = stdin.write_all(&source);
     }
-    let started = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
