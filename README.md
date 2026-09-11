@@ -48,6 +48,7 @@ Read the printed `demo-report.json` for exact project, policy, state, and prompt
 - Exact external hash/mode pins for immutable installed helper files outside editable application roots.
 - Compiled runtime probing (`devforge install probe-runtime`): a delivery-aware installation names the validating executable with `--validator` and the probed runtime with `--runtime`, and the Rust CLI alone admits the reported capabilities; the Python installer performs no validation of its own. The probe is bound to the installation project, which the validating executable must be outside of, and the validator's own destination-overlap, alias and pre-write digest protections are decided by `devforge install guard-validator` in that same selected executable, which the Python installer only invokes with the installation inputs before writing.
 - A compiled Rust manual-only installation path for the promoted Codex expert workflows (`devforge install manual-experts`) that validates owner-selected adoption evidence and verifies the pinned executable and embedded source identity before writing; other installation modes remain legacy Python.
+- Compiled deterministic handoff receipt checks (`devforge receipt check`): byte-identity and format verification, plus a separate digest listing that is explicitly a listing and not a verdict. See [handoff receipt checks](docs/integration/receipt-check.md).
 - CI definitions in this repository, including manual structural validation of an exact DevForgeAI commit.
 
 ## Limits

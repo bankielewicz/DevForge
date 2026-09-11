@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 mod delivery;
 mod install;
 mod plugin;
+mod receipt;
 mod validate_mvp;
 
 const RUNNER: &str = include_str!("../runners/unittest_runner.py");
@@ -49,6 +50,12 @@ enum Action {
     Install {
         #[command(subcommand)]
         action: install::Action,
+    },
+    /// Deterministic receipt checks for a checkpoint/transfer handoff; a listing
+    /// and a byte-identity guarantee, never semantic acceptance.
+    Receipt {
+        #[command(subcommand)]
+        action: receipt::Action,
     },
     /// Structural document validation; reports only, never behavioral acceptance.
     Validate {
@@ -997,6 +1004,7 @@ fn execute(cli: Cli) -> Result<Value> {
         Action::Isolate { .. }
         | Action::Delivery { .. }
         | Action::Install { .. }
+        | Action::Receipt { .. }
         | Action::Validate { .. } => unreachable!(),
     }
 }
@@ -1004,6 +1012,10 @@ fn main() {
     let cli = Cli::parse();
     if let Action::Delivery { action } = &cli.command {
         delivery::main(action, cli.state.as_deref());
+        return;
+    }
+    if let Action::Receipt { action } = &cli.command {
+        receipt::main(action);
         return;
     }
     if let Action::Validate { action } = &cli.command {
