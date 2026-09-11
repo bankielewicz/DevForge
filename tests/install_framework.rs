@@ -2386,61 +2386,6 @@ fn export_accepts_one_provider_and_no_adoption_inputs() {
 /// the same reported digests and runtime declaration.
 #[test]
 fn the_legacy_exporter_and_the_compiled_command_agree() {
-// ---- legacy float hook identities -----------------------------------------
-
-/// Reproduction of PR #14 review finding P2, copied from
-/// `tests/review_install.rs::review_legacy_float_hook_inventory_can_be_refreshed`
-/// in the review worktree with its assertions unchanged: a valid floating-point
-/// `timeout` the legacy installer recorded must not make the installation
-/// unrefreshable by the compiled command.
-#[test]
-fn legacy_float_hook_inventory_can_be_refreshed() {
-    let f = fixture();
-    let group = json!({"hooks":[{"type":"command","command":"true","timeout":0.000001}]});
-    f.hook_source("claude", &group, true);
-    let legacy = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/install_framework.py");
-    let first = spawn(
-        Path::new(PYTHON),
-        &[
-            legacy.to_str().unwrap(),
-            "--project",
-            f.project.to_str().unwrap(),
-            "--framework",
-            f.framework.to_str().unwrap(),
-            "--provider",
-            "claude",
-        ],
-        &[],
-    );
-    assert_eq!(first.code, 0, "legacy: {}", first.stdout);
-    let before = f.snapshot();
-    let refresh = install(&f, &["--provider", "claude"]);
-    eprintln!(
-        "Rust refresh: code={} {}; unchanged={}",
-        refresh.code,
-        refresh.stdout,
-        before == f.snapshot()
-    );
-    assert_eq!(
-        refresh.code, 0,
-        "valid legacy hook must remain refreshable: {}",
-        refresh.stdout
-    );
-}
-
-/// The identity itself, in both directions. `group_digest` must hash the bytes
-/// `json.dumps(group, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-/// allow_nan=False)` produces, whose float layout is `repr(float)`:
-///
-/// ```text
-/// /usr/bin/python3 -c 'import json; print(json.dumps({"hooks":[{"type":"command",
-///   "command":"true","timeout":0.000001}]},sort_keys=True,separators=(",",":"),
-///   ensure_ascii=False))'
-/// {"hooks":[{"command":"true","timeout":1e-06,"type":"command"}]}
-/// ```
-#[test]
-fn a_float_hook_identity_survives_a_cross_refresh_and_an_edit_is_still_refused() {
-    const PYTHON_GROUP: &str = r#"{"hooks":[{"command":"true","timeout":1e-06,"type":"command"}]}"#;
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let legacy = manifest.join("scripts/install_framework.py");
     assert!(
@@ -2503,6 +2448,67 @@ fn a_float_hook_identity_survives_a_cross_refresh_and_an_edit_is_still_refused()
         assert_eq!(legacy_result["output"], json!(python_out));
         assert_eq!(result["output"], json!(rust_out));
     }
+}
+
+// ---- legacy float hook identities -----------------------------------------
+
+/// Reproduction of PR #14 review finding P2, copied from
+/// `tests/review_install.rs::review_legacy_float_hook_inventory_can_be_refreshed`
+/// in the review worktree with its assertions unchanged: a valid floating-point
+/// `timeout` the legacy installer recorded must not make the installation
+/// unrefreshable by the compiled command.
+#[test]
+fn legacy_float_hook_inventory_can_be_refreshed() {
+    let f = fixture();
+    let group = json!({"hooks":[{"type":"command","command":"true","timeout":0.000001}]});
+    f.hook_source("claude", &group, true);
+    let legacy = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/install_framework.py");
+    let first = spawn(
+        Path::new(PYTHON),
+        &[
+            legacy.to_str().unwrap(),
+            "--project",
+            f.project.to_str().unwrap(),
+            "--framework",
+            f.framework.to_str().unwrap(),
+            "--provider",
+            "claude",
+        ],
+        &[],
+    );
+    assert_eq!(first.code, 0, "legacy: {}", first.stdout);
+    let before = f.snapshot();
+    let refresh = install(&f, &["--provider", "claude"]);
+    eprintln!(
+        "Rust refresh: code={} {}; unchanged={}",
+        refresh.code,
+        refresh.stdout,
+        before == f.snapshot()
+    );
+    assert_eq!(
+        refresh.code, 0,
+        "valid legacy hook must remain refreshable: {}",
+        refresh.stdout
+    );
+}
+
+/// The identity itself, in both directions. `group_digest` must hash the bytes
+/// `json.dumps(group, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+/// allow_nan=False)` produces, whose float layout is `repr(float)`:
+///
+/// ```text
+/// /usr/bin/python3 -c 'import json; print(json.dumps({"hooks":[{"type":"command",
+///   "command":"true","timeout":0.000001}]},sort_keys=True,separators=(",",":"),
+///   ensure_ascii=False))'
+/// {"hooks":[{"command":"true","timeout":1e-06,"type":"command"}]}
+/// ```
+#[test]
+fn a_float_hook_identity_survives_a_cross_refresh_and_an_edit_is_still_refused() {
+    const PYTHON_GROUP: &str = r#"{"hooks":[{"command":"true","timeout":1e-06,"type":"command"}]}"#;
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let legacy = manifest.join("scripts/install_framework.py");
+    assert!(
+        Path::new(PYTHON).is_file() && legacy.is_file(),
         "the legacy baseline must be present: {PYTHON} and {}",
         legacy.display()
     );
