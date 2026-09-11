@@ -17,6 +17,17 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      # Legacy oracle for tests/receipt.rs: the unchanged DevForgeAI helper
+      # project-experts/claude/devforgeai-contribution-context/scripts/check_receipt.py
+      # (sha256 c5a63d535b3dada638854c832f41bdccdf7835e4db3cce5f579b9f7c8f537136),
+      # pinned by revision here and by digest in the test. Nothing from this
+      # checkout is executed except that script, by the Rust test, as an oracle.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: bankielewicz/DevForgeAI
+          ref: f6833318fc72f0559288d0b845e89ceb5bee3251
+          path: DevForgeAI-oracle
+          persist-credentials: false
       - name: Install isolated-runner prerequisites
         run: |
           # Only Ubuntu packages are needed; unrelated third-party indexes can be inconsistent.
@@ -40,6 +51,8 @@ jobs:
       - name: Verify filesystem isolation is available
         run: bwrap --ro-bind / / --unshare-pid --die-with-parent /usr/bin/true
       - name: Rust checks
+        env:
+          DEVFORGE_FRAMEWORK_SOURCE: ${{ github.workspace }}/DevForgeAI-oracle
         run: |
           cargo +1.94.0 fmt --check
           cargo +1.94.0 clippy --locked --all-targets -- -D warnings
