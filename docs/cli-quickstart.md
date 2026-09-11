@@ -44,7 +44,7 @@ Repeat these checks after that prerequisite is satisfied. CI installs its own
 toolchain explicitly; this guide does not.
 
 Python 3.12 and bubblewrap are not needed for anything below. They belong to
-the legacy tests, gates, `devforge isolate`, and `scripts/verify_poc.py`.
+the legacy tests, gates, `devforge isolate`, and `devforge verify-poc`.
 
 ## 3. Build and locate the executable
 
@@ -150,9 +150,18 @@ behavior, acceptance, qualification, MVP completion or installation, and it
 does not satisfy the adoption prerequisites in
 [manual expert adoption](integration/manual-expert-adoption.md).
 
-## Legacy verification
+## Full verification and demonstration
 
-`scripts/verify_poc.py` and `scripts/demo.py` are the legacy Python full
-verification and demonstration. They require Python 3.12 and bubblewrap and
-write evidence under `docs/validation/` and `.poc/`. Nothing above launches
-them. The [terminal runbook](POC.md) covers the gate and isolation workflow.
+```bash
+"$DEVFORGE_SRC/target/debug/devforge" verify-poc --framework "$FRAMEWORK" \
+  --repo "$DEVFORGE_SRC" --cargo "$(rustup which --toolchain 1.94.0 cargo)"
+"$DEVFORGE_SRC/target/debug/devforge" demo --framework "$FRAMEWORK" \
+  --policies "$DEVFORGE_SRC/policies" --output-root "$DEVFORGE_SRC/.poc" --prepare-only
+```
+
+These need Python 3.12 and bubblewrap, run the legacy suites as one of their
+stages, and write evidence under `docs/validation/` and the output root.
+Nothing else above launches them, and both stop on the defects recorded in
+[demonstration and verification](integration/demo-and-verification.md).
+`scripts/verify_poc.py` and `scripts/demo.py` remain as the unchanged legacy
+baseline. The [terminal runbook](POC.md) covers the gate and isolation workflow.

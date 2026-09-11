@@ -14,11 +14,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 mod delivery;
+mod demo;
 mod install;
 mod phase_state;
 mod plugin;
 mod validate_framework;
 mod validate_mvp;
+mod verify_poc;
 
 const RUNNER: &str = include_str!("../runners/unittest_runner.py");
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -57,6 +59,10 @@ enum Action {
         #[command(subcommand)]
         action: validate_mvp::Action,
     },
+    /// Drive the example fixtures through the real gates; calls no model.
+    Demo(demo::Options),
+    /// Run the bounded local check list and save evidence; not acceptance.
+    VerifyPoc(verify_poc::Options),
     /// Prepare expertise context, inspect freshness, or bind an AI-authored skill.
     Expert {
         #[command(subcommand)]
@@ -998,8 +1004,10 @@ fn execute(cli: Cli) -> Result<Value> {
         }
         Action::Isolate { .. }
         | Action::Delivery { .. }
+        | Action::Demo(..)
         | Action::Install { .. }
-        | Action::Validate { .. } => unreachable!(),
+        | Action::Validate { .. }
+        | Action::VerifyPoc(..) => unreachable!(),
     }
 }
 fn main() {
@@ -1010,6 +1018,14 @@ fn main() {
     }
     if let Action::Validate { action } = &cli.command {
         validate_mvp::main(action);
+        return;
+    }
+    if let Action::Demo(options) = &cli.command {
+        demo::main(options);
+        return;
+    }
+    if let Action::VerifyPoc(options) = &cli.command {
+        verify_poc::main(options);
         return;
     }
     match execute(cli) {
