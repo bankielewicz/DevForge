@@ -468,7 +468,14 @@ fn an_unexpected_gate_status_stops_the_run_and_writes_no_report() {
         "fixed-unexpected",
         "--prepare-only",
     ]);
-    blocked(&output, "unexpected gate result");
+    blocked(
+        &output,
+        "unexpected gate result: check exited 2 where success=true",
+    );
+    // The refusal names the corrupted policy's effect and carries the refusing
+    // command's own captured output, not just "something failed".
+    blocked(&output, "source outside approved layout");
+    blocked(&output, "\"status\":\"BLOCKED\"");
     assert!(
         !root.join("fixed-unexpected/demo-report.json").exists(),
         "a stopped run must not leave a report claiming PASS"
