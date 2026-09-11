@@ -44,6 +44,6 @@ cargo test --locked --all-targets
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-CI and local verification both require `cargo test`. CI rejects empty or skipped Python suites. Validate changed companion artifacts with `scripts/validate_framework.py` and applicable MVP checks. Exercise `scripts/demo.py` for gate-lifecycle changes. Demo and `scripts/verify_poc.py` create evidence and fixtures; select permitted output roots first. Documentation-only edits need content, link, and diff review, not a runtime campaign.
+CI and local verification both require `cargo test`. CI rejects empty or skipped Python suites. Validate changed companion artifacts with `devforge validate framework` and `devforge validate mvp`. Exercise `devforge demo` for gate-lifecycle changes. The demo and `devforge verify-poc` create evidence and fixtures; select permitted output roots first. The legacy `scripts/validate_framework.py`, `scripts/demo.py` and `scripts/verify_poc.py` remain unchanged baselines, not the instructed path. Documentation-only edits need content, link, and diff review, not a runtime campaign.
 
 Preserve no-fallback isolation and precise failure statuses. Report exact changes, executed checks, remaining failures, and evidence boundaries. Structural checks, fixtures, native behavior, admission, and human acceptance are separate results; an accepted local snapshot is not a Git merge or release.

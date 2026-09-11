@@ -23,8 +23,8 @@ def main():
         ("build", ["cargo", "build", "--locked"]),
         ("tests", ["python3", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"]),
         ("framework-structure", ["target/debug/devforge", "validate", "framework", "--framework", str(framework)]),
-        ("mvp-documents", ["python3", "scripts/validate_mvp.py", "--mvp", str(framework / "docs/mvp")]),
-        ("fixture-demo", ["python3", "scripts/demo.py", "--framework", str(framework)]),
+        ("mvp-documents", ["target/debug/devforge", "validate", "mvp", "--mvp", str(framework / "docs/mvp")]),
+        ("fixture-demo", ["target/debug/devforge", "demo", "--framework", str(framework), "--policies", "policies", "--output-root", ".poc"]),
     ]
     results = []
     for name, command in stages:

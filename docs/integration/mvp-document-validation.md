@@ -78,9 +78,12 @@ the MVP-document check. The build finishes before the candidate is checked out,
 only authority source is compiled, and candidate code, scripts, Cargo files,
 tests and hooks are never executed. A `FAIL` or `BLOCKED` exit fails that
 workflow step; there is no Python fallback. The separate framework-structure
-step still runs the legacy `scripts/validate_framework.py`.
+step runs the compiled `devforge validate framework` (see
+[framework structure validation](framework-structure-validation.md)).
 
-`scripts/verify_poc.py` remains a legacy caller of `scripts/validate_mvp.py`.
+`scripts/verify_poc.py` now calls the compiled command for its `mvp-documents`
+stage, and `devforge verify-poc` is its compiled port (see
+[demonstration and verification](demo-and-verification.md)).
 The Python script itself is unchanged and stays the regression baseline:
 `tests/validate_mvp.rs` compares the compiled command with it on synthetic
 trees. Installers and operational skills are unchanged.
