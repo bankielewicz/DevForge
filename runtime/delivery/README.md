@@ -214,9 +214,12 @@ value is refused, and the installer writes nothing on refusal; Python performs n
 capability validation. The probe is bound to the installation project: the
 compiled CLI refuses, before reading or executing the runtime, a validating
 executable that is not outside that project, and reports the project it was bound
-to. Before any write the installer then applies the runtime's protections to the
-validator as well: a planned destination that equals it or aliases its inode, or a
-changed validator digest, blocks the whole installation. Compatibility is
+to. Before any write the installer hands that report and every planned destination
+back to the same executable through `devforge install guard-validator`, which
+decides the validator's own protections: a planned destination that names it, an
+existing destination that already aliases its inode, or a digest that no longer
+equals the identity the report bound, blocks the whole installation. That guard
+writes nothing, and Python only invokes it and propagates its refusal. Compatibility is
 mechanical only: native activation stays unverified. Export preserves the requirement; export and structural validation
 report the eventual host runtime as unverified.
 

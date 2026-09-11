@@ -718,14 +718,18 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(self.snapshot(), before)
 
     def test_delivery_selected_validator_cannot_be_overwritten_by_installation(self):
-        # Defense in depth behind the compiled refusal above: the installer refuses a
-        # validator that is itself a planned destination, here a retired authoring file.
+        # Defense in depth behind the compiled refusal above: the compiled guard refuses
+        # a validator that is itself a planned destination, here a retired authoring file.
+        # Only the probe is mocked, because it refuses an inside-project validator before
+        # the guard could ever run: it returns the real report of the outside authority
+        # rebound to the inside copy's own path and digest, which is exactly the identity
+        # that copy reports when the installer then invokes it as the guard.
         self.delivery_requirement()
         runtime = self.explicit_runtime()
         relative = ".agents/skills/demo/evals/evals.json"
         destination = self.project / relative
         destination.parent.mkdir(parents=True)
-        destination.write_bytes(b"#!/bin/sh\nexit 0\n")
+        shutil.copy(self.validator, destination)
         destination.chmod(0o755)
         (self.project / ".devforge-install.json").write_text(json.dumps(
             {"schema": 1, "files": {relative: installer.digest(destination.read_bytes())}}))
@@ -744,6 +748,51 @@ class InstallerTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,
                                         "selected validator binary overlaps an installation destination"):
                 self.install_delivery(runtime=runtime, validator=destination)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_delivery_guard_receives_the_resolved_project_and_every_sorted_destination(self):
+        # Python passes the installation inputs to the compiled guard and nothing else:
+        # the resolved project, the single probe report, and every planned destination.
+        # The real guard still decides; the wrapper only records what it was handed.
+        _, requirement = self.delivery_requirement()
+        runtime = self.explicit_runtime()
+        real = installer.runtime_requirements.guard_validator
+        calls = []
+
+        def recording(validator, project, report, write_paths):
+            calls.append((validator, project, report, write_paths))
+            return real(validator, project, report, write_paths)
+
+        with mock.patch.object(installer.runtime_requirements, "guard_validator",
+                               side_effect=recording):
+            result = self.install_delivery(runtime=runtime)
+        self.assertEqual(result["status"], "INSTALLED")
+        self.assertEqual(len(calls), 1)
+        validator, project, report, write_paths = calls[0]
+        self.assertEqual(validator, self.validator)
+        self.assertEqual(project, self.project.resolve())
+        self.assertEqual(write_paths, sorted([".agents/skills/demo/SKILL.md", ".codex/hooks.json",
+                                              ".devforge-install.json"]))
+        # The guard receives the probe report itself, and the recorded evidence is that
+        # same report plus the package requirement: the guard changes neither.
+        evidence = self.inventory()["runtime_evidence"]["codex"]
+        self.assertEqual(report, {k: v for k, v in evidence.items() if k != "requirement"})
+        self.assertEqual(evidence["requirement"], requirement)
+        self.assertEqual(report["validator"], self.validator_identity())
+        self.assertEqual(report["project"], str(self.project.resolve()))
+        self.assertEqual((self.project / ".agents/skills/demo/SKILL.md").read_text(), "codex skill")
+
+    def test_delivery_guard_refusal_blocks_every_installation_write(self):
+        # Whatever the compiled guard refuses, Python propagates without writing.
+        self.delivery_requirement()
+        runtime = self.explicit_runtime()
+        before = self.snapshot()
+        refusal = "installation would overwrite the selected validator binary through an alias"
+        with mock.patch.object(installer.runtime_requirements, "guard_validator",
+                               side_effect=ValueError(refusal)):
+            with self.assertRaisesRegex(ValueError, refusal):
+                self.install_delivery(runtime=runtime)
+        self.assertEqual(list(self.project.iterdir()), [])
         self.assertEqual(self.snapshot(), before)
 
     def test_delivery_validator_aliased_by_a_destination_blocks_all_installation_writes(self):

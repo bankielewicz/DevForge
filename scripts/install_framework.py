@@ -322,16 +322,12 @@ def install(framework, project, provider, include_experts=False, runtime=None, m
             raise ValueError("selected runtime binary overlaps an installation destination")
         if runtime_requirements.runtime_digest(runtime) != runtime_evidence["sha256_after"]:
             raise ValueError("selected runtime binary changed before installation writes")
-        # The validating authority is protected exactly like the runtime it admitted:
-        # no destination may name it, alias its inode, or replace it before the writes.
-        if any(project / relative == Path(validator) for relative in write_paths):
-            raise ValueError("selected validator binary overlaps an installation destination")
-        for relative in write_paths:
-            destination = project / relative
-            if destination.is_file() and destination.samefile(validator):
-                raise ValueError("installation would overwrite the selected validator binary through an alias")
-        if runtime_requirements.runtime_digest(validator) != runtime_evidence["validator"]["executable"]["sha256"]:
-            raise ValueError("selected validator binary changed before installation writes")
+        # The validating authority is protected exactly like the runtime it admitted,
+        # and decides that itself: the compiled CLI refuses a destination that names it,
+        # one that already aliases its inode, or a digest that no longer matches the
+        # identity its probe report bound. This script only hands over the installation
+        # inputs and propagates the refusal; it decides nothing here.
+        runtime_requirements.guard_validator(validator, project, runtime_evidence, sorted(write_paths))
     if adoption is not None:
         replacements = {**planned, **hook_writes, ".devforge-install.json": record_bytes}
         overwritten_inodes = {}

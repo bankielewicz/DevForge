@@ -8,10 +8,12 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 const BIN: &str = env!("CARGO_BIN_EXE_devforge");
 
@@ -33,6 +35,19 @@ const EXTENSION_FIELDS: [&str; 7] = [
 const SCOPE: &str = "phase evidence and persisted artifact verification; no semantic acceptance";
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Writing a file this suite later executes races with forking in another test
+/// thread: the forked child inherits the writer's descriptor, and its exec then
+/// fails with ETXTBSY. Every such write and every spawn takes this lock, so no
+/// fork is ever in flight while a descriptor to one of them is open for writing.
+static EXECUTABLES: Mutex<()> = Mutex::new(());
+
+fn executables() -> MutexGuard<'static, ()> {
+    // A failed test already reports itself; poisoning must not hide it behind a panic.
+    EXECUTABLES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
 
 // ---- fixtures ------------------------------------------------------------
 
@@ -70,8 +85,10 @@ fn quote(text: &str) -> String {
 /// Write an executable `/bin/sh` stand-in runtime.
 fn standin(dir: &Path, name: &str, body: &str) -> PathBuf {
     let path = dir.join(name);
+    let lock = executables();
     fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    drop(lock);
     assert_eq!(fs::metadata(&path).unwrap().nlink(), 1);
     path
 }
@@ -103,8 +120,10 @@ fn marking(dir: &Path, marker: &Path) -> PathBuf {
 fn copied(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
     fs::create_dir_all(dir).unwrap();
+    let lock = executables();
     fs::copy(BIN, &path).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    drop(lock);
     assert_eq!(fs::metadata(&path).unwrap().nlink(), 1);
     path
 }
@@ -179,7 +198,16 @@ struct Run {
 /// Invoke an explicitly selected DevForge executable, which is the validating
 /// authority for that run: its own location decides the project refusals below.
 fn run_with(binary: &Path, args: &[&str]) -> Run {
-    let output = Command::new(binary).args(args).output().unwrap();
+    let lock = executables();
+    let child = Command::new(binary)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(lock);
+    let output = child.wait_with_output().unwrap();
     Run {
         code: output.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -219,6 +247,19 @@ fn refused(result: &Run, reason: &str) {
     let report: Value = serde_json::from_str(&result.stdout).expect("refusal must be JSON");
     assert_eq!(report["status"], "BLOCKED", "report={report}");
     assert_eq!(report["reason"], reason, "report={report}");
+}
+
+/// A refusal whose reason carries a parser detail the test does not pin exactly.
+fn refused_starting(result: &Run, prefix: &str) {
+    assert_eq!(
+        result.code, 2,
+        "expected refusal {prefix}; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    let report: Value = serde_json::from_str(&result.stdout).expect("refusal must be JSON");
+    assert_eq!(report["status"], "BLOCKED", "report={report}");
+    let reason = report["reason"].as_str().unwrap_or_default();
+    assert!(reason.starts_with(prefix), "report={report}");
 }
 
 fn refuses(dir: &Path, body: &str, providers: &[&str], reason: &str) {
@@ -771,4 +812,525 @@ fn an_unbound_probe_reports_no_project_and_a_canonical_validator_identity() {
         sha(&fs::read(path).unwrap()),
         "the reported digest must be the running executable's own bytes"
     );
+}
+
+// ---- the selected validating executable's own protections -----------------
+//
+// Immediately before the installation writes, the executable that probed decides
+// whether an installation destination names it, whether an existing destination is
+// another name for its inode, and whether its own bytes still are the ones the
+// probe report bound. `install guard-validator` reads one strict-JSON request from
+// stdin, writes nothing, and refuses instead of returning. A refusal proves the
+// mechanical predicate it names, never that an installation is otherwise correct.
+
+const GUARD_REQUEST: &str = "devforge.validator-guard-request/v1";
+const GUARD_REPORT: &str = "devforge.validator-guard/v1";
+
+fn guard_request(report: &Value, write_paths: &[&str]) -> Value {
+    json!({
+        "schema_version": GUARD_REQUEST,
+        "report": report,
+        "write_paths": write_paths,
+    })
+}
+
+/// Run `binary` with `args` and `input` on stdin. A refusal that precedes reading
+/// the request closes the pipe, which is a refusal to observe, not a test failure.
+fn piped(binary: &Path, args: &[&str], input: &[u8]) -> Run {
+    let lock = executables();
+    let mut child = Command::new(binary)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(lock);
+    let _ = child.stdin.take().unwrap().write_all(input);
+    let output = child.wait_with_output().unwrap();
+    Run {
+        code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// `<validator> --project P install guard-validator` with `input` on stdin.
+fn guard_input(binary: &Path, project: &Path, input: &[u8]) -> Run {
+    piped(
+        binary,
+        &[
+            "--project",
+            project.to_str().unwrap(),
+            "install",
+            "guard-validator",
+        ],
+        input,
+    )
+}
+
+fn guard(binary: &Path, project: &Path, request: &Value) -> Run {
+    guard_input(binary, project, request.to_string().as_bytes())
+}
+
+/// The probe report of `binary` bound to `project`, which that same binary guards.
+fn probed(binary: &Path, project: &Path, runtime: &Path, providers: &[&str]) -> Value {
+    let result = probe_bound(binary, project, runtime, providers);
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    serde_json::from_str(&result.stdout).expect("probe report must be JSON")
+}
+
+/// An installation project holding a stand-in runtime and a validating copy outside it.
+struct Guarded {
+    /// Owns the fixture tree: dropping it removes everything below `root`.
+    _dir: Temp,
+    root: PathBuf,
+    project: PathBuf,
+    runtime: PathBuf,
+    authority: PathBuf,
+}
+
+fn guarded() -> Guarded {
+    let dir = temp();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let project = root.join("project");
+    fs::create_dir(&project).unwrap();
+    let runtime = serving(&root, OBSERVED);
+    let authority = copied(&root, "devforge-authority");
+    Guarded {
+        _dir: dir,
+        root,
+        project,
+        runtime,
+        authority,
+    }
+}
+
+impl Guarded {
+    fn report(&self) -> Value {
+        probed(&self.authority, &self.project, &self.runtime, &["claude"])
+    }
+    /// An ordinary existing installation destination that is not the validator.
+    fn place(&self, relative: &str, bytes: &[u8]) -> PathBuf {
+        let destination = self.project.join(relative);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(&destination, bytes).unwrap();
+        destination
+    }
+}
+
+const DESTINATIONS: [&str; 3] = [
+    ".claude/skills/devforge-brainstorm/SKILL.md",
+    ".claude/settings.json",
+    ".devforge-install.json",
+];
+
+#[test]
+fn the_guard_admits_its_own_bound_report_and_ordinary_destinations() {
+    let fixture = guarded();
+    let report = fixture.report();
+    // Two destinations already exist as ordinary regular files; none aliases the validator.
+    fixture.place(DESTINATIONS[0], b"installed skill\n");
+    fixture.place(DESTINATIONS[1], b"{\"hooks\":{}}\n");
+
+    let result = guard(
+        &fixture.authority,
+        &fixture.project,
+        &guard_request(&report, &DESTINATIONS),
+    );
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    let decision: Value = serde_json::from_str(&result.stdout).expect("decision must be JSON");
+    assert_eq!(decision.as_object().unwrap().len(), 4, "{decision}");
+    assert_eq!(decision["schema_version"], GUARD_REPORT);
+    assert_eq!(decision["project"], fixture.project.to_str().unwrap());
+    assert_eq!(decision["write_paths"], json!(DESTINATIONS.len()));
+    // The decision names the running executable itself, which is what the probe bound.
+    assert_eq!(
+        decision["validator"]["executable"],
+        report["validator"]["executable"]
+    );
+    assert_eq!(
+        decision["validator"]["executable"]["path"],
+        fs::canonicalize(&fixture.authority)
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    assert_eq!(
+        decision["validator"]["executable"]["sha256"],
+        sha(&fs::read(&fixture.authority).unwrap())
+    );
+}
+
+#[test]
+fn a_destination_that_names_the_validating_executable_is_refused() {
+    let dir = temp();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let project = root.join("project");
+    fs::create_dir(&project).unwrap();
+    let runtime = serving(&root, OBSERVED);
+    // `probe-runtime` refuses a validator inside the project outright, so the report
+    // is taken from an unbound probe by the copy already at its final path and the
+    // bound project is patched in. That keeps `validator.executable.path` equal to
+    // the guard's own identity, which is the only way a forged request reaches the
+    // overlap decision at all.
+    let inside = copied(&project.join("tools"), "devforge");
+    let result = run_with(
+        &inside,
+        &[
+            "install",
+            "probe-runtime",
+            "--runtime",
+            runtime.to_str().unwrap(),
+            "--provider",
+            "claude",
+        ],
+    );
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    let mut report: Value = serde_json::from_str(&result.stdout).unwrap();
+    report
+        .as_object_mut()
+        .unwrap()
+        .insert("project".into(), json!(project.to_str().unwrap()));
+    assert_eq!(
+        report["validator"]["executable"]["path"],
+        fs::canonicalize(&inside).unwrap().to_str().unwrap()
+    );
+
+    refused(
+        &guard(
+            &inside,
+            &project,
+            &guard_request(&report, &[".devforge-install.json", "tools/devforge"]),
+        ),
+        "selected validator binary overlaps an installation destination",
+    );
+    // The same file reached through a symlinked parent is the same destination: the
+    // canonical form decides, not the spelling. That is an overlap, not an alias.
+    std::os::unix::fs::symlink(project.join("tools"), project.join("link")).unwrap();
+    refused(
+        &guard(
+            &inside,
+            &project,
+            &guard_request(&report, &["link/devforge"]),
+        ),
+        "selected validator binary overlaps an installation destination",
+    );
+    // Only the destination that named it was refused.
+    let result = guard(
+        &inside,
+        &project,
+        &guard_request(&report, &[".devforge-install.json"]),
+    );
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+}
+
+#[test]
+fn an_existing_destination_that_aliases_the_validator_is_refused() {
+    let fixture = guarded();
+    let report = fixture.report();
+    // A managed destination becomes a second name for the validator's inode after
+    // the probe admitted it; the bytes, and so the digest, never change.
+    let record = fixture.project.join(DESTINATIONS[2]);
+    fs::hard_link(&fixture.authority, &record).unwrap();
+    assert_eq!(fs::metadata(&record).unwrap().nlink(), 2);
+    assert_eq!(
+        sha(&fs::read(&record).unwrap()),
+        report["validator"]["executable"]["sha256"]
+            .as_str()
+            .unwrap()
+    );
+
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&report, &DESTINATIONS),
+        ),
+        "installation would overwrite the selected validator binary through an alias",
+    );
+    // Naming only the unrelated destinations is admitted, so the alias decided it.
+    let result = guard(
+        &fixture.authority,
+        &fixture.project,
+        &guard_request(&report, &DESTINATIONS[..2]),
+    );
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    assert!(record.exists(), "the guard removes nothing");
+}
+
+#[test]
+fn a_validator_whose_bytes_changed_since_the_probe_is_refused() {
+    let fixture = guarded();
+    let report = fixture.report();
+    let mut patched = report.clone();
+    patched["validator"]["executable"]["sha256"] = json!("0".repeat(64));
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&patched, &DESTINATIONS),
+        ),
+        "selected validator binary changed before installation writes",
+    );
+    // The real replacement: the selected bytes change between the probe and the writes.
+    let lock = executables();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&fixture.authority)
+        .unwrap()
+        .write_all(b"\n# changed after the probe\n")
+        .unwrap();
+    drop(lock);
+    assert_ne!(
+        sha(&fs::read(&fixture.authority).unwrap()),
+        report["validator"]["executable"]["sha256"]
+            .as_str()
+            .unwrap()
+    );
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&report, &DESTINATIONS),
+        ),
+        "selected validator binary changed before installation writes",
+    );
+}
+
+#[test]
+fn a_report_bound_to_another_executable_or_project_is_refused() {
+    let fixture = guarded();
+    let elsewhere = fixture.root.join("other-project");
+    fs::create_dir(&elsewhere).unwrap();
+    // Identical bytes at a different path: only the path binding can refuse this.
+    let stranger = copied(&fixture.root, "devforge-stranger");
+    assert_eq!(
+        fs::read(&stranger).unwrap(),
+        fs::read(&fixture.authority).unwrap()
+    );
+    let strange = probed(&stranger, &fixture.project, &fixture.runtime, &["claude"]);
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&strange, &DESTINATIONS),
+        ),
+        "guard invoked by a different executable than the validator that probed",
+    );
+
+    let other = probed(
+        &fixture.authority,
+        &elsewhere,
+        &fixture.runtime,
+        &["claude"],
+    );
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&other, &DESTINATIONS),
+        ),
+        "runtime validation bound a different project",
+    );
+    // An unbound probe report claims no installation at all.
+    let unbound = accepted(&fixture.runtime, &["claude"]);
+    let mut rebound = unbound.clone();
+    rebound["validator"]["executable"] = fixture.report()["validator"]["executable"].clone();
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&rebound, &DESTINATIONS),
+        ),
+        "runtime validation bound a different project",
+    );
+    // A record that is not a probe report is refused before any project comparison.
+    let mut wrong = fixture.report();
+    wrong["schema_version"] = json!("devforge.runtime-probe/v2");
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&wrong, &DESTINATIONS),
+        ),
+        "runtime validation did not report devforge.runtime-probe/v1",
+    );
+}
+
+#[test]
+fn malformed_guard_requests_are_refused_before_any_decision() {
+    let fixture = guarded();
+    let report = fixture.report();
+    let valid = guard_request(&report, &DESTINATIONS);
+    let mut unknown = valid.clone();
+    unknown
+        .as_object_mut()
+        .unwrap()
+        .insert("extra".into(), json!(true));
+    let mut short = valid.clone();
+    short.as_object_mut().unwrap().remove("write_paths");
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        (b"[]".to_vec(), "malformed validator guard request"),
+        (b"\"request\"".to_vec(), "malformed validator guard request"),
+        (b"null".to_vec(), "malformed validator guard request"),
+        (unknown.to_string().into_bytes(), "malformed validator guard request"),
+        (short.to_string().into_bytes(), "malformed validator guard request"),
+        (
+            guard_request(&report, &[]).to_string().into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            guard_request(&report, &["", ".devforge-install.json"])
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            guard_request(&report, &[".devforge-install.json", ".devforge-install.json"])
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            guard_request(&report, &["/etc/devforge"]).to_string().into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            guard_request(&report, &["../devforge-authority"])
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            guard_request(&report, &["./devforge"]).to_string().into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            json!({"schema_version": GUARD_REQUEST, "report": report, "write_paths": ".devforge-install.json"})
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            json!({"schema_version": GUARD_REQUEST, "report": report, "write_paths": [".devforge-install.json", 7]})
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            json!({"schema_version": "devforge.validator-guard-request/v2", "report": report, "write_paths": DESTINATIONS})
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            json!({"schema_version": GUARD_REQUEST, "report": [], "write_paths": DESTINATIONS})
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            json!({"schema_version": GUARD_REQUEST, "report": {"schema_version": "devforge.runtime-probe/v1"}, "write_paths": DESTINATIONS})
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+    ];
+    for (raw, reason) in cases {
+        let result = guard_input(&fixture.authority, &fixture.project, &raw);
+        refused(&result, reason);
+    }
+    // A parser refusal names its own cause and decides nothing either.
+    for raw in [b"".to_vec(), b"{".to_vec()] {
+        refused(
+            &guard_input(&fixture.authority, &fixture.project, &raw),
+            "malformed validator guard request: invalid JSON",
+        );
+    }
+    let duplicated = format!(
+        "{{\"schema_version\":{GUARD_REQUEST:?},\"schema_version\":{GUARD_REQUEST:?},\"report\":{report},\"write_paths\":[\".devforge-install.json\"]}}"
+    );
+    refused_starting(
+        &guard_input(&fixture.authority, &fixture.project, duplicated.as_bytes()),
+        "malformed validator guard request: duplicate JSON key: schema_version",
+    );
+}
+
+#[test]
+fn the_guard_refuses_a_missing_or_unusable_project() {
+    let fixture = guarded();
+    let request = guard_request(&fixture.report(), &DESTINATIONS)
+        .to_string()
+        .into_bytes();
+    refused(
+        &piped(
+            &fixture.authority,
+            &["install", "guard-validator"],
+            &request,
+        ),
+        "--project is required",
+    );
+    let file = fixture.root.join("project-file");
+    fs::write(&file, b"not a project directory\n").unwrap();
+    for candidate in [
+        fixture.root.join("absent-project"),
+        file,
+        fixture.root.join("absent/deeper"),
+    ] {
+        refused(
+            &guard_input(&fixture.authority, &candidate, &request),
+            "project must already exist",
+        );
+    }
+}
+
+#[test]
+fn the_guard_writes_nothing_whether_it_admits_or_refuses() {
+    let fixture = guarded();
+    let report = fixture.report();
+    fixture.place(DESTINATIONS[0], b"installed skill\n");
+    let mut patched = report.clone();
+    patched["validator"]["executable"]["sha256"] = json!("1".repeat(64));
+
+    let before = snapshot(&fixture.root);
+    let admitted = guard(
+        &fixture.authority,
+        &fixture.project,
+        &guard_request(&report, &DESTINATIONS),
+    );
+    assert_eq!(
+        admitted.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        admitted.stdout, admitted.stderr
+    );
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&patched, &DESTINATIONS),
+        ),
+        "selected validator binary changed before installation writes",
+    );
+    assert_eq!(snapshot(&fixture.root), before);
 }

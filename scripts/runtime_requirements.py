@@ -16,6 +16,8 @@ import subprocess
 REQUIRED_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]
 REQUIREMENT_PATH = "hooks/runtime-requirements.json"
 PROBE_SCHEMA = "devforge.runtime-probe/v1"
+GUARD_REQUEST_SCHEMA = "devforge.validator-guard-request/v1"
+GUARD_SCHEMA = "devforge.validator-guard/v1"
 PROBE_DEADLINE = 30
 
 
@@ -194,3 +196,34 @@ def probe_runtime(validator, runtime, providers, project):
     if report.get("project") != str(project):
         raise ValueError("runtime validation bound a different project")
     return report
+
+
+def guard_validator(validator, project, report, write_paths):
+    """Delegate the selected validator's pre-write protections to that executable.
+
+    Whether an installation destination names the validating authority, aliases its
+    inode, or whether its bytes still are the ones its probe report bound, is decided
+    by the compiled CLI about itself. This module only carries the installation inputs
+    in and the refusal out; it re-checks nothing and has no fallback.
+    """
+    request = {"schema_version": GUARD_REQUEST_SCHEMA, "report": report,
+               "write_paths": list(write_paths)}
+    command = [str(validator), "--project", str(project), "install", "guard-validator"]
+    try:
+        completed = subprocess.run(command, input=json.dumps(request, allow_nan=False).encode("utf-8"),
+                                   capture_output=True, timeout=PROBE_DEADLINE)
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(f"runtime validation timed out after {PROBE_DEADLINE} seconds") from error
+    if completed.returncode != 0:
+        reason = f"runtime validation exited with status {completed.returncode}"
+        try:
+            refusal = strict_json(completed.stdout)
+        except ValueError:
+            refusal = None
+        if isinstance(refusal, dict) and isinstance(refusal.get("reason"), str):
+            reason = refusal["reason"]
+        raise ValueError(reason)
+    decision = strict_json(completed.stdout)
+    if not isinstance(decision, dict) or decision.get("schema_version") != GUARD_SCHEMA:
+        raise ValueError(f"validator guard did not report {GUARD_SCHEMA}")
+    return decision

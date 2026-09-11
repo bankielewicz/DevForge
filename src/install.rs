@@ -60,6 +60,10 @@ const AUTHORITY_SCHEMA: &str = "devforge.manual-install-authority/v1";
 const LOCAL_BASELINE_V1: &str = "devforge.manual-expert-local-baseline/v1";
 /// The `v1` record plus a `test_destination` selected for the actual installation.
 const LOCAL_BASELINE_V2: &str = "devforge.manual-expert-local-baseline/v2";
+/// The report `probe-runtime` returns and `guard-validator` requires as its evidence.
+const PROBE_SCHEMA: &str = "devforge.runtime-probe/v1";
+const GUARD_REQUEST_SCHEMA: &str = "devforge.validator-guard-request/v1";
+const GUARD_SCHEMA: &str = "devforge.validator-guard/v1";
 static EMPTY_OBJECT: LazyLock<Value> = LazyLock::new(|| Value::Object(Map::new()));
 static EMPTY_LIST: LazyLock<Value> = LazyLock::new(|| Value::Array(Vec::new()));
 
@@ -106,12 +110,19 @@ pub enum Action {
         // The global `--project` optionally names the installation this probe admits;
         // the validating executable must then be outside that project.
     },
+    /// Decide, immediately before the installation writes, whether the planned
+    /// destinations may proceed against this validating executable: none may name
+    /// it, none may already alias its inode, and its own bytes must still be the
+    /// ones its probe report bound. Reads one `devforge.validator-guard-request/v1`
+    /// object from stdin, requires the global --project, and writes nothing.
+    GuardValidator,
 }
 
 pub fn run(action: &Action, project: Option<&Path>) -> Result<Value> {
     match action {
         Action::Identity => identity(),
         Action::ProbeRuntime { runtime, provider } => probe_runtime(runtime, provider, project),
+        Action::GuardValidator => guard_validator(project.context("--project is required")?),
         Action::ManualExperts {
             framework,
             evidence,
@@ -3610,6 +3621,116 @@ fn probe_runtime(runtime: &Path, providers: &[String], project: Option<&Path>) -
             .insert("project".into(), json!(project));
     }
     Ok(report)
+}
+
+/// The pre-write protections owed to the selected validating executable.
+///
+/// The caller names the installation and the destinations it is about to write;
+/// this executable decides, about itself, whether that installation may proceed.
+/// Nothing is written, nothing is executed, and a refusal is final: the reasons
+/// below are the installer's, carried out verbatim, never re-decided in Python.
+fn guard_validator(project: &Path) -> Result<Value> {
+    let project = crate::resolved(project)?;
+    ensure!(project.is_dir(), "project must already exist");
+    let mut raw = Vec::new();
+    std::io::stdin()
+        .lock()
+        .take(MAX_BYTES + 1)
+        .read_to_end(&mut raw)
+        .context("cannot read the validator guard request")?;
+    ensure!(
+        raw.len() as u64 <= MAX_BYTES,
+        "validator guard request exceeds size limit"
+    );
+    let request = strict_json(&raw)
+        .map_err(|reason| anyhow!("malformed validator guard request: {reason}"))?;
+    const MALFORMED: &str = "malformed validator guard request";
+    let map = request.as_object().ok_or_else(|| anyhow!(MALFORMED))?;
+    ensure!(
+        map.len() == 3
+            && map.get("schema_version").and_then(Value::as_str) == Some(GUARD_REQUEST_SCHEMA)
+            && map.contains_key("report")
+            && map.contains_key("write_paths"),
+        MALFORMED
+    );
+    // Every destination is a nonempty, unique, plainly relative path in the project.
+    let entries = map["write_paths"]
+        .as_array()
+        .filter(|values| !values.is_empty())
+        .ok_or_else(|| anyhow!(MALFORMED))?;
+    let mut relatives: Vec<&str> = Vec::new();
+    for entry in entries {
+        let relative = entry.as_str().unwrap_or_default();
+        ensure!(
+            !relative.is_empty()
+                && Path::new(relative).is_relative()
+                && !Path::new(relative)
+                    .components()
+                    .any(|part| matches!(part, Component::CurDir | Component::ParentDir))
+                && !relatives.contains(&relative),
+            MALFORMED
+        );
+        relatives.push(relative);
+    }
+    // Bind the request to this executable and this installation before deciding.
+    let (running, digest) = executable_identity()?;
+    let report = &map["report"];
+    let reported = report
+        .pointer("/validator/executable/path")
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .ok_or_else(|| anyhow!(MALFORMED))?;
+    ensure!(
+        fs::canonicalize(reported).unwrap_or_else(|_| reported.to_path_buf()) == running,
+        "guard invoked by a different executable than the validator that probed"
+    );
+    ensure!(
+        report.pointer("/schema_version").and_then(Value::as_str) == Some(PROBE_SCHEMA),
+        "runtime validation did not report {PROBE_SCHEMA}"
+    );
+    ensure!(
+        report
+            .pointer("/project")
+            .and_then(Value::as_str)
+            .map(Path::new)
+            == Some(project.as_path()),
+        "runtime validation bound a different project"
+    );
+    // 1. No destination may name this executable, however the caller spells it.
+    for relative in &relatives {
+        let destination = project.join(relative);
+        ensure!(
+            destination != running
+                && !fs::canonicalize(&destination).is_ok_and(|real| real == running),
+            "selected validator binary overlaps an installation destination"
+        );
+    }
+    // 2. No existing destination may already be another name for its inode.
+    let identity = fs::metadata(&running)?;
+    for relative in &relatives {
+        let Ok(destination) = fs::metadata(project.join(relative)) else {
+            continue;
+        };
+        ensure!(
+            !destination.is_file()
+                || (destination.dev(), destination.ino()) != (identity.dev(), identity.ino()),
+            "installation would overwrite the selected validator binary through an alias"
+        );
+    }
+    // 3. The bytes that probed must still be the bytes about to be protected.
+    ensure!(
+        report
+            .pointer("/validator/executable/sha256")
+            .and_then(Value::as_str)
+            == Some(digest.as_str()),
+        "selected validator binary changed before installation writes"
+    );
+    Ok(json!({
+        "schema_version": GUARD_SCHEMA,
+        "project": project,
+        "validator": {"executable": {"path": running, "sha256": digest}},
+        "write_paths": relatives.len(),
+    }))
 }
 
 // ---- installer -----------------------------------------------------------
