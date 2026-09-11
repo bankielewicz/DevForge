@@ -18,19 +18,21 @@ First use: follow the [WSL CLI quickstart](docs/cli-quickstart.md) to build with
 
 Requirements for the legacy full verification below: Linux/WSL2, Rust/Cargo (tested with 1.94.0), Python 3.12, and bubblewrap with usable filesystem/PID namespaces. No model API key is required.
 
-Legacy full verification and demonstration (Python; not the first-use check), from this directory:
+Full verification and demonstration (not the first-use check), from this directory:
 
 ```bash
 cargo build --locked
-python3 scripts/verify_poc.py --framework ../DevForgeAI
+target/debug/devforge verify-poc --framework ../DevForgeAI --repo "$PWD" \
+  --cargo "$(rustup which --toolchain 1.94.0 cargo)"
 ```
 
-The verification command runs Rust checks, black-box acceptance and installer tests, framework structure checks, and both example projects. It writes a source manifest and logs under `docs/validation/`. The demonstration creates collision-safe working copies under the sibling framework's `.poc/`, with external state here in `.poc/`.
+The verification command runs the Rust checks, the legacy Python acceptance and installer suites, the framework structure and MVP document checks, and the fixture demonstration, stopping at the first failure. It writes a source manifest and per-stage logs under `docs/validation/`. The demonstration writes candidates, authority state and its runtime copy under the output root it is given; the framework checkout is only read.
 
 For a prepared project to use interactively:
 
 ```bash
-python3 scripts/demo.py --framework ../DevForgeAI --prepare-only
+target/debug/devforge demo --framework ../DevForgeAI --policies policies \
+  --output-root .poc --prepare-only
 ```
 
 Read the printed `demo-report.json` for exact project, policy, state, and prompt values. See the [terminal runbook](docs/POC.md) for the two-terminal workflow and subscription login.
@@ -44,11 +46,13 @@ Read the printed `demo-report.json` for exact project, policy, state, and prompt
 - SHA-256 and filesystem-mode binding of candidate files, tests, upstream inputs, and policy.
 - External state locks, exclusive initialization, snapshot readback, and durable state-file replacement.
 - A filesystem/PID-isolated command launcher with private per-project Codex or Claude state.
-- Compiled provider-specific project-local installation (`devforge install framework`), preserving local edits, merging hook groups by ownership and excluding authoring evals. Runtime-only plugin export (`--export-plugin`) is still legacy Python. See [project-local framework installation](docs/integration/framework-installation.md).
+- Compiled provider-specific project-local installation (`devforge install framework`), preserving local edits, merging hook groups by ownership and excluding authoring evals, and compiled runtime-only plugin export (`devforge install export-plugin`), which builds a new single-provider `devforgeai` directory, never overwrites one, and reports `adoption: NOT_ACCEPTED_STAGING`. See [project-local framework installation](docs/integration/framework-installation.md).
 - Exact external hash/mode pins for immutable installed helper files outside editable application roots.
 - Compiled runtime probing (`devforge install probe-runtime`): a delivery-aware installation names the probed runtime with `--runtime`, and the Rust CLI alone admits the reported capabilities. The probe is bound to the installation project, which the validating executable must be outside of, and that executable decides its own destination-overlap, alias and pre-write digest protections. `devforge install framework` is the validating executable itself and applies them in process; the unchanged `scripts/install_framework.py` still selects one with `--validator` and invokes `devforge install guard-validator` before writing.
-- A compiled Rust manual-only installation path for the promoted Codex expert workflows (`devforge install manual-experts`) that validates owner-selected adoption evidence and verifies the pinned executable and embedded source identity before writing. `devforge install framework` refuses those packages and preserves any `manual_expert_adoption` record already in the project inventory. Runtime-only plugin export and the legacy script's `--manual-evidence`/`--manual-experts-only` refresh remain Python.
+- A compiled Rust manual-only installation path for the promoted Codex expert workflows (`devforge install manual-experts`) that validates owner-selected adoption evidence and verifies the pinned executable and embedded source identity before writing. `devforge install framework` refuses those packages and preserves any `manual_expert_adoption` record already in the project inventory. The legacy script's `--manual-evidence`/`--manual-experts-only` refresh is the only installation mode that remains Python.
 - Compiled structural validation of a DevForgeAI checkout (`devforge validate framework --framework <path>`), the Rust port of `scripts/validate_framework.py`: traversal, retained-evidence exemptions, JSON/TOML/`SKILL.md` inspection, plugin manifests, runtime-requirement sidecars, bounded hook sources and authored eval declarations. It reports structure only and never executes a candidate skill, hook or runtime host.
+- Compiled fixture demonstration and local verification (`devforge demo`, `devforge verify-poc`), the Rust ports of `scripts/demo.py` and `scripts/verify_poc.py`. The demonstration calls no model and reports `model_calls: 0`; the verification report keeps `hosted_ci: NOT_RUN`. See [demonstration and verification](docs/integration/demo-and-verification.md), which records the `policies/` drift that currently blocks both.
+- Compiled deterministic handoff receipt checks (`devforge receipt check`): byte-identity and format verification, plus a separate digest listing that is explicitly a listing and not a verdict. See [handoff receipt checks](docs/integration/receipt-check.md).
 - CI definitions in this repository, including manual structural validation of an exact DevForgeAI commit.
 
 ## Limits
@@ -70,7 +74,7 @@ Snapshots exclude root `.git`, root `.devforge-runtime`, and `__pycache__` direc
 | `src/main.rs` | CLI, policy checks, provenance, phase state, isolation, and snapshots |
 | `runners/` | Fixed harness embedded into the executable |
 | `policies/` | Synthetic example policies; real projects need their own accepted policy |
-| `scripts/` | Project-local installation, demo, and verification; `validate_framework.py` and `validate_mvp.py` remain as the legacy regression baselines for the compiled `devforge validate` subcommands |
+| `scripts/` | Legacy Python baselines for the compiled `devforge install framework`, `devforge validate` and `devforge demo`/`verify-poc`, plus the unported `--export-plugin`; retirement is a separate decision |
 | `tests/` | Independent black-box gate and installer cases |
 | `.github/workflows/` | CLI CI and external framework structure checks |
 

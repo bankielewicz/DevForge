@@ -1,9 +1,11 @@
-# Project-local framework installation (`devforge install framework`)
+# Project-local framework installation and plugin export
 
 Compiled Rust owns project-local installation of the DevForgeAI provider
-packages. `devforge install framework` replaces the project-installation modes
-of `scripts/install_framework.py`'s `install()`. That script is unchanged and
-remains the legacy baseline; `tests/test_installer.py` still runs against it.
+packages and the runtime-only plugin export. `devforge install framework`
+replaces the project-installation modes of `scripts/install_framework.py`'s
+`install()`, and `devforge install export-plugin` replaces its
+`export_plugin()`. That script is unchanged and remains the legacy baseline;
+`tests/test_installer.py` still runs against it.
 
 Nothing here is behavioral acceptance. A successful install proves which bytes
 were placed and which mechanical predicates passed. Native activation stays
@@ -90,13 +92,66 @@ removed. Editing, deleting or duplicating an owned group refuses the whole
 installation. A settings document whose content is already semantically
 identical is not rewritten at all.
 
+## Runtime-only plugin export
+
+```bash
+devforge install export-plugin \
+  --framework <ABS DevForgeAI checkout> \
+  --provider codex|claude \
+  --output <ABS new directory named devforgeai>
+```
+
+This is **unaccepted staging**: the result says so, in `adoption:
+"NOT_ACCEPTED_STAGING"`. It builds a fresh runtime-only plugin directory from
+one provider's source and never overwrites an existing export. It reads only
+declarative files, runs nothing, and probes no runtime even when the package
+declares one.
+
+- `--provider` takes exactly one provider; `both` is rejected by the parser.
+  There is no `--include-experts` and no adoption input, so a plugin export can
+  never carry project experts or adoption evidence.
+- `--output` must be named `devforgeai`, must not already exist (a dangling
+  symlink counts as existing), must have no symlinked or non-directory parent,
+  and must lie outside the source plugin.
+- Only `.{provider}-plugin/`, `skills/`, `agents/` and `hooks/` may appear at
+  the plugin's top level; anything else refuses the export by name.
+  `__pycache__/` and `*.pyc` are skipped wherever they appear, before that
+  check. Skill and hook authoring material (`evals/`, `history/`,
+  `provenance.json`) is excluded.
+- The plugin manifest must declare `"name": "devforgeai"`.
+- Every refusal precedes creating anything: after one the output directory does
+  not exist and no parent directory was created for it. A parent that already
+  existed is left exactly as it was; the export never modifies anything outside
+  the new directory it creates.
+
+Success prints, on stdout with exit 0:
+
+```json
+{
+  "status": "EXPORTED",
+  "provider": "codex",
+  "output": "...",
+  "files_sha256": {"skills/demo/SKILL.md": "..."},
+  "behavior": "NOT_EVALUATED",
+  "adoption": "NOT_ACCEPTED_STAGING",
+  "authority": "compiled Rust CLI; no Python consulted",
+  "runtime_requirements": {"codex": {...}},
+  "runtime_host": "NOT_VERIFIED"
+}
+```
+
+`runtime_requirements` and `runtime_host` appear only when the provider's plugin
+declares `hooks/runtime-requirements.json`. The sidecar is copied into the export
+and reported, never satisfied: `runtime_host: "NOT_VERIFIED"` means no host was
+probed or admitted.
+
 ## Callers
 
 | Caller | Status |
 | --- | --- |
 | `scripts/demo.py` | Switched to `subprocess.run` of the compiled command; fails loudly on a nonzero exit. See "Known defect" below. |
 | `README.md`, `docs/cli-quickstart.md` | Name the compiled command. |
-| `scripts/install_framework.py` | Unchanged legacy baseline; still the only implementation of `--export-plugin`. |
+| `scripts/install_framework.py` | Unchanged legacy baseline and the legacy oracle both Rust commands are tested against. Its remaining unported modes are `--manual-evidence` / `--manual-experts-only`. |
 | `scripts/verify_poc.py` | Unchanged; it invokes `demo.py`, so it inherits the defect below. |
 
 ## Legacy test mapping
@@ -126,13 +181,13 @@ half of `tests/test_installer.py`, which stays in place and passing.
 | `test_symlink_settings_preserves_target_and_does_not_install_skills` | `symlink_settings_preserves_target_and_does_not_install_skills` |
 | `test_skill_collision_does_not_update_hooks` | `skill_collision_does_not_update_hooks` |
 | `test_parent_file_collision_preflights_before_other_writes` | `parent_file_collision_preflights_before_other_writes` |
-| `test_hook_default_and_exact_declarations_export_runtime_only` | `hook_default_and_exact_declarations_are_both_read` (install half only; the export half moves with export) |
-| `test_unsupported_hook_declarations_fail_install_and_export_before_writes` | `unsupported_hook_declarations_fail_install_before_writes` (install half only) |
-| `test_missing_malformed_duplicate_or_symlink_hook_source_is_rejected` | `missing_malformed_duplicate_or_symlink_hook_source_is_rejected` (install half only) |
+| `test_hook_default_and_exact_declarations_export_runtime_only` | `hook_default_and_exact_declarations_are_both_read` (install half) and `hook_default_and_exact_declarations_export_runtime_only` (export half) |
+| `test_unsupported_hook_declarations_fail_install_and_export_before_writes` | `unsupported_hook_declarations_fail_install_before_writes` (install half) and `unsupported_hook_declarations_fail_export_before_writes` (export half) |
+| `test_missing_malformed_duplicate_or_symlink_hook_source_is_rejected` | `missing_malformed_duplicate_or_symlink_hook_source_is_rejected` (install half) and `malformed_hook_sources_and_sidecars_fail_export_before_writes` (export half) |
 | `test_empty_default_hook_directory_and_duplicate_manifest_are_rejected` | `empty_default_hook_directory_and_duplicate_manifest_are_rejected` |
 | `test_legacy_absence_never_probes_a_runtime` | `legacy_absence_never_probes_a_runtime` |
 | `test_delivery_install_requires_explicit_runtime_even_with_path_and_environment` | `delivery_install_requires_explicit_runtime_even_with_path_and_environment` (the `--validator` half is not applicable) |
-| `test_delivery_sidecar_rejects_malformed_duplicate_unknown_and_unsupported_values` | `delivery_sidecar_rejects_malformed_duplicate_unknown_and_unsupported_values` (install half only) |
+| `test_delivery_sidecar_rejects_malformed_duplicate_unknown_and_unsupported_values` | `delivery_sidecar_rejects_malformed_duplicate_unknown_and_unsupported_values` (install half) and `malformed_hook_sources_and_sidecars_fail_export_before_writes` (export half) |
 | `test_delivery_requires_complete_unique_synchronous_hook_selection` | `delivery_requires_complete_unique_synchronous_hook_selection` |
 | `test_delivery_runtime_must_be_absolute_canonical_regular_and_executable` | `delivery_runtime_must_be_absolute_canonical_regular_and_executable` |
 | `test_delivery_incompatible_capabilities_block_all_installation_writes` | `delivery_incompatible_capabilities_block_all_installation_writes` |
@@ -151,8 +206,8 @@ half of `tests/test_installer.py`, which stays in place and passing.
 | `test_delivery_binary_mutation_after_probe_blocks_all_installation_writes` | NOT_RUN, and the rule is **not covered** by the Rust suite. The rule is implemented: `install_framework` recomputes `runtime_digest(selected)` and compares it to the probe report's `sha256_after` immediately before the writes, refusing with `selected runtime binary changed before installation writes` (`src/install.rs`, in `install_framework`, just after the runtime-overlap loop). That is verified by inspection only; deleting it leaves the whole suite GREEN. The legacy case mutated the runtime from inside a mocked `plan_hook_merge`, and no black-box reproduction can land in that window deterministically, so no timing test is added. `delivery_binary_mutation_during_probe_blocks_all_installation_writes` exercises the different, in-probe `before == after` check. The validator half of the same rule is covered directly, through the shared `guard_writes`, by `tests/probe_runtime.rs::a_validator_whose_bytes_changed_since_the_probe_is_refused`. |
 | `test_delivery_validator_mutation_after_probe_blocks_all_installation_writes` | NOT_RUN: same reason. `tests/probe_runtime.rs::a_validator_whose_bytes_changed_since_the_probe_is_refused` covers the compiled decision directly. |
 | `test_delivery_selected_validator_cannot_be_overwritten_by_installation` | NOT_APPLICABLE: guard check 1 (a destination naming the validator) is unreachable from `install framework`, because the probe refuses a validating executable inside the project first. That refusal is `a_validating_executable_inside_the_project_is_refused_before_execution`; `tests/probe_runtime.rs::a_destination_that_names_the_validating_executable_is_refused` covers check 1 itself. |
-| `test_export_preserves_runtime_and_excludes_authoring_material` | NOT_RUN: export is unported |
-| `test_delivery_export_retains_dependency_without_executing_runtime` | NOT_RUN: export is unported |
+| `test_export_preserves_runtime_and_excludes_authoring_material` | `export_preserves_runtime_and_excludes_authoring_material` |
+| `test_delivery_export_retains_dependency_without_executing_runtime` | `delivery_export_retains_the_dependency_without_executing_a_runtime`. The copied sidecar, `runtime_requirements`, `runtime_host`, the `files_sha256` entry and `behavior` are asserted. The **no-probe half is verified by inspection, not by execution**: the legacy case mocked `runtime_requirements.probe_runtime` to raise if called, which has no black-box equivalent, and the Rust case's execution-marker assertion cannot fail because the export takes no `--runtime` and performs no discovery. `export_plugin` contains no `Command::new` and no `probe_runtime` call; the CLI's only spawn is `capability_output`, inside `probe_runtime`, unreachable from this action. |
 
 Added beyond the legacy suite:
 
@@ -161,6 +216,15 @@ Added beyond the legacy suite:
 - `a_recorded_manual_expert_adoption_is_preserved_and_its_flags_are_not_offered` —
   an existing `manual_expert_adoption` record survives an install unchanged, and
   `--manual-evidence` / `--manual-experts-only` are rejected by the parser.
+- Export cases: `export_output_selection_is_refused_before_anything_is_created`
+  (name, existing entry, dangling symlink, symlinked parent, non-directory
+  parent, output inside the source plugin),
+  `unsupported_components_and_manifest_names_refuse_before_writes`,
+  `a_symlinked_plugin_source_refuses_the_export`,
+  `export_accepts_one_provider_and_no_adoption_inputs`, and the export oracle
+  `the_legacy_exporter_and_the_compiled_command_agree` (byte-identical trees and
+  identical `files_sha256`, `runtime_requirements` and `runtime_host` against
+  `python3 scripts/install_framework.py --export-plugin`, for both providers).
 - `only_the_providers_that_declared_a_requirement_are_probed` — `--provider both`
   with a requirement on one provider only admits a runtime that supports just
   that provider, records `providers` as only the declaring one, and records no
@@ -206,16 +270,30 @@ These are the only known observable differences from
 6. **Path resolution.** `crate::resolved` refuses any symlinked component of
    `--project` or `--framework`; Python's `Path.resolve()` followed them. This
    matches `install manual-experts`.
-7. **Refusal wording for malformed JSON.** The exact decoder message differs
-   (`serde_json` versus Python's `json`); the status, the exit code and the
-   absence of writes do not.
+7. **Refusal wording for malformed or unreadable input.** Both the decoder
+   message (`serde_json` versus Python's `json`) and the reader/io message
+   differ. The one reachable io case is a missing plugin manifest during an
+   export: the legacy script reports `[Errno 2] No such file or directory:
+   '<path>'`, and the compiled command reports `cannot read the plugin manifest
+   <path>: No such file or directory (os error 2)` — the path is attached
+   deliberately so the operator still learns which file was missing, but the
+   wording is not the legacy wording. The status, the exit code and the absence
+   of writes are identical in every such case.
+8. **Export and the global `--project`.** The legacy parser put `--project` and
+   `--export-plugin` in one mutually exclusive group, so passing both was an
+   argparse error. `--project` is a global flag of this CLI, so
+   `install export-plugin` accepts and ignores it, exactly as `install identity`
+   does. Nothing is written under the named project; the export goes only to
+   `--output`. `export_accepts_one_provider_and_no_adoption_inputs` pins this.
+9. **The legacy combination refusal is unreachable.** `export is unaccepted
+   staging; requires one provider and excludes project experts/adoption
+   evidence` guarded `--export-plugin` combined with `--provider both`,
+   `--include-experts`, `--manual-evidence` or `--manual-experts-only`. The
+   compiled action offers none of those: the parser rejects each with exit 2 and
+   empty stdout, so no input can reach that message.
 
 ## Still Python
 
-- `--export-plugin` (runtime-only plugin export) is unported. Use
-  `python3 scripts/install_framework.py --framework <dir> --provider <one>
-  --export-plugin <parent>/devforgeai`. Its planned compiled form is
-  `devforge install export-plugin`.
 - `--manual-evidence` / `--manual-experts-only` remain legacy Python; the
   compiled replacement for that path is `devforge install manual-experts`.
 - `scripts/install_framework.py`, `scripts/runtime_requirements.py` and
