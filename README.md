@@ -48,6 +48,7 @@ Read the printed `demo-report.json` for exact project, policy, state, and prompt
 - Exact external hash/mode pins for immutable installed helper files outside editable application roots.
 - Compiled runtime probing (`devforge install probe-runtime`): a delivery-aware installation names the probed runtime with `--runtime`, and the Rust CLI alone admits the reported capabilities. The probe is bound to the installation project, which the validating executable must be outside of, and that executable decides its own destination-overlap, alias and pre-write digest protections. `devforge install framework` is the validating executable itself and applies them in process; the unchanged `scripts/install_framework.py` still selects one with `--validator` and invokes `devforge install guard-validator` before writing.
 - A compiled Rust manual-only installation path for the promoted Codex expert workflows (`devforge install manual-experts`) that validates owner-selected adoption evidence and verifies the pinned executable and embedded source identity before writing. `devforge install framework` refuses those packages and preserves any `manual_expert_adoption` record already in the project inventory. The legacy script's `--manual-evidence`/`--manual-experts-only` refresh is the only installation mode that remains Python.
+- Compiled structural validation of a DevForgeAI checkout (`devforge validate framework --framework <path>`), the Rust port of `scripts/validate_framework.py`: traversal, retained-evidence exemptions, JSON/TOML/`SKILL.md` inspection, plugin manifests, runtime-requirement sidecars, bounded hook sources and authored eval declarations. It reports structure only and never executes a candidate skill, hook or runtime host.
 - CI definitions in this repository, including manual structural validation of an exact DevForgeAI commit.
 
 ## Limits
@@ -69,7 +70,7 @@ Snapshots exclude root `.git`, root `.devforge-runtime`, and `__pycache__` direc
 | `src/main.rs` | CLI, policy checks, provenance, phase state, isolation, and snapshots |
 | `runners/` | Fixed harness embedded into the executable |
 | `policies/` | Synthetic example policies; real projects need their own accepted policy |
-| `scripts/` | Project-local installation, demo, structural validation, and verification |
+| `scripts/` | Project-local installation, demo, and verification; `validate_framework.py` and `validate_mvp.py` remain as the legacy regression baselines for the compiled `devforge validate` subcommands |
 | `tests/` | Independent black-box gate and installer cases |
 | `.github/workflows/` | CLI CI and external framework structure checks |
 

@@ -29,7 +29,13 @@ devforge --project <ABS project dir> install framework \
   a regular executable file and have exactly one hard link.
 - There is no `--validator`. The executable you invoke **is** the validating
   authority: it probes the selected runtime in process and applies its own
-  pre-write protections. It must be outside the installation project.
+  pre-write protections. It must be outside the installation project **and
+  outside the framework**, and that is checked on **every** run — before the
+  framework is read, whether or not any provider declared a runtime requirement.
+  Its self-protections (no destination may name it, no existing destination may
+  already alias its inode, its bytes must not change before the writes) also run
+  on every install. Only the runtime *capability probe* stays conditional, so no
+  `--runtime` is needed when nothing declares a requirement.
 - `--manual-evidence` and `--manual-experts-only` are not offered. Promoted
   Codex expert packages (`devforge-project-expert-creator`,
   `devforge-evaluate-expert`) are refused here and installed only by
@@ -205,7 +211,7 @@ half of `tests/test_installer.py`, which stays in place and passing.
 | `test_delivery_validator_must_be_an_absolute_canonical_single_link_executable` | NOT_APPLICABLE: there is no `--validator` to select |
 | `test_delivery_binary_mutation_after_probe_blocks_all_installation_writes` | NOT_RUN, and the rule is **not covered** by the Rust suite. The rule is implemented: `install_framework` recomputes `runtime_digest(selected)` and compares it to the probe report's `sha256_after` immediately before the writes, refusing with `selected runtime binary changed before installation writes` (`src/install.rs`, in `install_framework`, just after the runtime-overlap loop). That is verified by inspection only; deleting it leaves the whole suite GREEN. The legacy case mutated the runtime from inside a mocked `plan_hook_merge`, and no black-box reproduction can land in that window deterministically, so no timing test is added. `delivery_binary_mutation_during_probe_blocks_all_installation_writes` exercises the different, in-probe `before == after` check. The validator half of the same rule is covered directly, through the shared `guard_writes`, by `tests/probe_runtime.rs::a_validator_whose_bytes_changed_since_the_probe_is_refused`. |
 | `test_delivery_validator_mutation_after_probe_blocks_all_installation_writes` | NOT_RUN: same reason. `tests/probe_runtime.rs::a_validator_whose_bytes_changed_since_the_probe_is_refused` covers the compiled decision directly. |
-| `test_delivery_selected_validator_cannot_be_overwritten_by_installation` | NOT_APPLICABLE: guard check 1 (a destination naming the validator) is unreachable from `install framework`, because the probe refuses a validating executable inside the project first. That refusal is `a_validating_executable_inside_the_project_is_refused_before_execution`; `tests/probe_runtime.rs::a_destination_that_names_the_validating_executable_is_refused` covers check 1 itself. |
+| `test_delivery_selected_validator_cannot_be_overwritten_by_installation` | NOT_APPLICABLE: guard check 1 (a destination naming the validator) is still unreachable from `install framework`, and now for a stronger reason — `install_framework` refuses a validating executable inside the project before it reads the framework, on every run, not only when a probe happens. Those refusals are `a_validating_executable_inside_the_project_is_refused_before_execution` (delivery-aware) and `the_validating_executable_placement_is_checked_without_any_requirement` (no requirement); `tests/probe_runtime.rs::a_destination_that_names_the_validating_executable_is_refused` covers check 1 itself, through the same shared `protect_validator`. |
 | `test_export_preserves_runtime_and_excludes_authoring_material` | `export_preserves_runtime_and_excludes_authoring_material` |
 | `test_delivery_export_retains_dependency_without_executing_runtime` | `delivery_export_retains_the_dependency_without_executing_a_runtime`. The copied sidecar, `runtime_requirements`, `runtime_host`, the `files_sha256` entry and `behavior` are asserted. The **no-probe half is verified by inspection, not by execution**: the legacy case mocked `runtime_requirements.probe_runtime` to raise if called, which has no black-box equivalent, and the Rust case's execution-marker assertion cannot fail because the export takes no `--runtime` and performs no discovery. `export_plugin` contains no `Command::new` and no `probe_runtime` call; the CLI's only spawn is `capability_output`, inside `probe_runtime`, unreachable from this action. |
 
@@ -230,6 +236,37 @@ Added beyond the legacy suite:
   that provider, records `providers` as only the declaring one, and records no
   evidence for the other; the unchanged legacy installer is asserted to accept
   the same selection identically.
+- `legacy_float_hook_inventory_can_be_refreshed` — the PR #14 review
+  reproduction of finding P2, copied unchanged from
+  `tests/review_install.rs::review_legacy_float_hook_inventory_can_be_refreshed`:
+  the legacy installer records a hook whose `timeout` is `0.000001`, and the
+  compiled refresh of that unchanged installation must not answer
+  `BLOCKED: managed hook definition digest mismatch`.
+- `a_float_hook_identity_survives_a_cross_refresh_and_an_edit_is_still_refused` —
+  the identity itself: the recorded `sha256` is the digest of the Python
+  encoding `{"hooks":[{"command":"true","timeout":1e-06,"type":"command"}]}`, the
+  compiled refresh records it unchanged and does not rewrite a semantically
+  identical settings document, the legacy installer then accepts what the
+  compiled command wrote back, and a genuine edit of the owned group is still
+  refused with `local edit/collision in owned claude hook: Stop` before any write.
+- `installer_inside_managed_destination_without_requirement_refuses_before_writes`
+  — the PR #14 review reproduction of finding P1, copied unchanged from
+  `tests/review_install.rs::review_installer_inside_managed_destination_without_requirement_refuses_before_writes`:
+  with no runtime requirement declared, an installer sitting at one of the
+  installation's own managed destinations refuses with exit 2 and the project
+  byte-identical. See parity exception 10 (numbered 8 on the #14 branch).
+- `the_validating_executable_placement_is_checked_without_any_requirement` — the
+  same check, named: `validating executable must be outside the installation
+  project` and `validating executable must be outside the framework`, both on a
+  run where nothing declares a runtime requirement.
+- `an_aliased_destination_is_refused_without_any_requirement` — the no-requirement
+  path reaches `protect_validator`, not only the placement check: an executable
+  *outside* the project, reached through a managed destination that is a hard
+  link to it, is refused with `installation would overwrite the selected
+  validator binary through an alias` before any write. Added for review J
+  finding J1: without it, skipping `protect_validator` on that arm left all 186
+  tests green while reproducing the original P1 symptom (a write, then
+  `Text file busy (os error 26)`).
 - `the_legacy_installer_and_the_compiled_command_agree_and_cross_refresh` — the
   legacy oracle: `/usr/bin/python3 scripts/install_framework.py` and the compiled
   command install the same delivery-aware fixture into two projects with one
@@ -246,9 +283,11 @@ These are the only known observable differences from
 1. **`--validator` is gone.** The running executable is the validator. The
    legacy selection hygiene for `--validator` (absolute, canonical, regular,
    executable, exactly one hard link) is replaced by `executable_identity()`
-   plus the existing refusal of a validating executable inside the project. A
-   practical consequence: `target/debug/devforge`, which Cargo hard-links, can
-   run the installation, though it still cannot be passed as `--runtime`.
+   plus the refusal of a validating executable inside the project or inside the
+   framework. A practical consequence: `target/debug/devforge`, which Cargo
+   hard-links, can run the installation, though it still cannot be passed as
+   `--runtime`. The framework half of that placement check is new: the legacy
+   installer never compared `--validator` to `--framework`.
 2. **`--project` and `--framework` must be separate directories.** The legacy
    installer never compared them. This is new, and it is what stops
    `scripts/demo.py` (see below).
@@ -261,12 +300,52 @@ These are the only known observable differences from
    source's document order; the compiled one follows sorted event names. The
    set of rows, their digests and their `owned`/`reused` classification are
    identical.
-5. **Float formatting in a hook group digest.** `group_digest` matches Python
-   byte for byte for strings, objects, arrays, booleans, integers and ordinary
-   decimals (`2.5`). Exponent-form floats can print differently
-   (`1e+300` versus `1e300`), which would change that group's digest. No hook
-   definition in either provider package contains a float; a package that
-   introduced one would need this checked.
+5. **Float formatting in a hook group digest — fixed; two residuals remain.**
+   `group_digest` no longer hashes `serde_json`'s compact encoding. It hashes the
+   bytes `json.dumps(group, sort_keys=True, separators=(",", ":"),
+   ensure_ascii=False, allow_nan=False)` produces, floats included: `python_float`
+   reproduces CPython's `float.__repr__` (positional, always with a fractional
+   part, when the scientific exponent is in `-4..16`; otherwise
+   `d[.ddd]e<sign><at least two exponent digits>`). A valid floating `timeout`
+   that the legacy installer recorded — `0.000001`, which Python writes `1e-06`
+   and ryu wrote `1e-6` — no longer makes the installation unrefreshable. Both
+   directions are covered by
+   `a_float_hook_identity_survives_a_cross_refresh_and_an_edit_is_still_refused`
+   and by the unit test `install::tests::hook_identities_reproduce_the_python_encoding`,
+   whose expectations are the captured output of
+   `/usr/bin/python3 -c 'import json; print(json.dumps([0.000001,1e16,1.5e-7,0.0001,123456789012345.0,12345678901234567.0,1e100,-0.0,1.0,5],separators=(",",":")))'`
+   → `[1e-06,1e+16,1.5e-07,0.0001,123456789012345.0,1.2345678901234568e+16,1e+100,-0.0,1.0,5]`
+   (Python 3.12.3). Two differences are introduced by the *decoder*, before any
+   encoding, and no encoder can recover them from a `serde_json::Value`
+   (`serde_json` is pinned without `arbitrary_precision`, so the original digits
+   are gone by the time `group_digest` sees the value). They do **not** have the
+   same consequence:
+   - **An integer literal outside `i64`/`u64` range hard-blocks a refresh.** It
+     decodes to an `f64` and encodes in float form
+     (`12345678901234567890123` → `1.2345678901234568e+22`) where Python's
+     arbitrary-precision `int` writes every digit, so the two installers derive
+     different identities for the same group. A valid inventory the legacy
+     installer wrote for such a hook is then unrefreshable by the compiled
+     command: exit 2, `managed hook definition digest mismatch`, project
+     unchanged — the same shape as the P2 defect this exception otherwise
+     records as fixed. Non-delivery hook handlers are validated only for a
+     nonempty `type` and a nonempty `command` (`src/plugin.rs`,
+     `validate_hook_groups`); the key whitelist and the positive-`timeout` rule
+     belong to `validate_delivery_hooks` alone, so an integer-valued field of any
+     size is accepted into an ordinary hook group.
+   - **`-0` never blocks, but makes cross-installer refreshes non-idempotent.**
+     The integer literal `-0` decodes to the float `-0.0` and encodes as `-0.0`,
+     where Python keeps an `int` and writes `0`. Both installers still accept
+     each other's inventory — the recorded digest always matches the document
+     each one just read — but each rewrites the settings document, so a
+     legacy → compiled → legacy sequence flips `"timeout": 0` ⇄
+     `"timeout": -0.0` forever. Every step exits 0 and each installer is
+     idempotent with itself; only the alternation churns.
+
+   Both are unchanged by this repair — 1cd38a1 hashed `serde_json`'s compact
+   encoding and was equally divergent from Python for these inputs — and both are
+   pinned by the same unit test. Neither appears in any provider hook definition;
+   a package that introduced one would need this checked.
 6. **Path resolution.** `crate::resolved` refuses any symlinked component of
    `--project` or `--framework`; Python's `Path.resolve()` followed them. This
    matches `install manual-experts`.
@@ -291,6 +370,28 @@ These are the only known observable differences from
    `--include-experts`, `--manual-evidence` or `--manual-experts-only`. The
    compiled action offers none of those: the parser rejects each with exit 2 and
    empty stdout, so no input can reach that message.
+10. **The validating executable is checked on every run, not only the
+   delivery-aware ones.** This is an intentional divergence, requested by the
+   owner after the PR #14 review. `scripts/install_framework.py` selects and
+   checks its `--validator` only under `if requirements:` (line 257), and calls
+   `runtime_requirements.guard_validator` (line 330) only under
+   `if runtime_evidence is not None:` (line 319), which nothing but that first
+   block can reach. A package with no `hooks/runtime-requirements.json`
+   therefore reaches the legacy write loop with no placement or self-protection
+   check at all — established by inspection of those three lines, not by running
+   it. The compiled command refuses first, before any write and before the
+   framework is read, with exit 2 and the project byte-identical.
+
+   What was observed, and is now pinned by
+   `installer_inside_managed_destination_without_requirement_refuses_before_writes`:
+   with no requirement declared and the running `devforge` sitting at the managed
+   destination `<project>/.claude/skills/demo/SKILL.md`, the compiled command
+   **at 1cd38a1** wrote `.claude/agents/first.md` and only then failed, with
+   `{"reason":"Text file busy (os error 26)","status":"BLOCKED"}` — a refusal
+   that did not precede its writes. It now answers
+   `{"reason":"validating executable must be outside the installation
+   project","status":"BLOCKED"}` with the project unchanged. Runtime capability
+   probing itself is unchanged and still conditional.
 
 ## Still Python
 
