@@ -36,12 +36,6 @@ const NOT_CHECKED: [&str; 4] = [
 ];
 const SYMLINK_HOP_LIMIT: usize = 64;
 
-// The sibling structural validator. `src/main.rs` is owned by another slice, so
-// the module is declared here; moving it to `mod validate_framework;` in the
-// crate root would be equivalent.
-#[path = "validate_framework.rs"]
-mod validate_framework;
-
 #[derive(Subcommand)]
 pub enum Action {
     /// Check authored document links, indexes and source hashes; never run model evaluations.
@@ -229,7 +223,7 @@ pub fn main(action: &Action) {
     let (mvp, report) = match action {
         Action::Mvp { mvp, report } => (mvp, report),
         Action::Framework { framework } => {
-            validate_framework::main(framework);
+            crate::validate_framework::main(framework);
             return;
         }
     };
