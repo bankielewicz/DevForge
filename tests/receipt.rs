@@ -146,7 +146,7 @@ fn legacy(args: &[&str]) -> Run {
 fn legacy_oracle() -> &'static Path {
     static ORACLE: OnceLock<PathBuf> = OnceLock::new();
     ORACLE.get_or_init(|| {
-        let root = match std::env::var_os(FRAMEWORK_SOURCE_VAR) {
+        let root = match std::env::var_os(FRAMEWORK_SOURCE_VAR).filter(|value| !value.is_empty()) {
             Some(value) => PathBuf::from(value),
             None => {
                 let common = Command::new("git")
@@ -155,7 +155,11 @@ fn legacy_oracle() -> &'static Path {
                     .stdin(Stdio::null())
                     .output()
                     .expect("git is required to locate the DevForgeAI oracle");
-                assert!(common.status.success(), "git rev-parse failed");
+                assert!(
+                    common.status.success(),
+                    "git rev-parse --git-common-dir failed (git 2.31 or newer is required, or set {FRAMEWORK_SOURCE_VAR}): {}",
+                    String::from_utf8_lossy(&common.stderr)
+                );
                 let common = String::from_utf8(common.stdout).unwrap();
                 Path::new(common.trim())
                     .parent()
