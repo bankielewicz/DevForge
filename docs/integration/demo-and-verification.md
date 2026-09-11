@@ -195,10 +195,12 @@ Beyond the three corrections and the policy blocker above:
    target. Every symlink in either checkout today lives under `.poc/`, which both
    implementations exclude. The inventory is evidence, never an admission
    decision.
-9. **`verify-poc` omits an unreadable source instead of aborting.** An
-   unreadable directory or file is skipped and the run continues; the legacy
+9. **`verify-poc` omits an unreadable source file instead of aborting.** An
+   unreadable file is skipped and the run continues; the legacy
    `path.read_bytes()` raised and stopped the whole verification. That makes a
-   manifest quietly incomplete where the legacy script failed loudly.
+   manifest quietly incomplete where the legacy script failed loudly. An
+   unreadable directory is not a divergence: `pathlib.rglob` skips its contents
+   silently, as the Rust walk does.
 
 ## Test mapping
 
