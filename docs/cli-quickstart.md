@@ -100,6 +100,19 @@ skill sources are resolved two levels above it. Outcomes:
 The report, `--report`, and the checks are documented in
 [MVP document validation](integration/mvp-document-validation.md).
 
+The structural framework check, over the whole checkout:
+
+```bash
+"$DEVFORGE_SRC/target/debug/devforge" validate framework --framework "$FRAMEWORK"
+```
+
+`--framework` selects a DevForgeAI root. It prints the legacy `PASS` object and
+exits 0, or refuses the first defect with `BLOCKED: <reason>` on stderr, empty
+stdout and exit 2; there is no `FAIL` report. The checks, the bounded Python
+syntax inspection and the known differences from `scripts/validate_framework.py`
+are documented in
+[framework structure validation](integration/framework-structure-validation.md).
+
 ## What this does and does not establish
 
 A `PASS` means the selected `docs/mvp` tree is structurally consistent. It
