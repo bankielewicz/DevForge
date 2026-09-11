@@ -731,40 +731,125 @@ fn a_replaced_or_unusable_lock_is_refused_exactly_as_before() {
 }
 
 #[test]
-fn a_held_exclusive_lock_is_refused_by_the_legacy_acquisition() {
+fn a_held_exclusive_lock_is_refused_exactly_as_before() {
     let fixture = Fixture::active("lock-held");
-    let lock = fixture.state.join("LOCK");
-    // `flock(1)` holds LOCK_EX on the same inode for the duration of `sleep`.
-    let mut holder = Command::new("/usr/bin/flock")
-        .arg("--exclusive")
-        .arg(&lock)
-        .arg("/usr/bin/sleep")
-        .arg("5")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("flock(1) runs");
-    // Wait until the kernel actually records the lock before observing.
-    let deadline = Instant::now() + Duration::from_secs(4);
-    while Instant::now() < deadline {
-        if fs::read_to_string("/proc/locks")
-            .map(|table| table.contains("FLOCK"))
-            .unwrap_or(false)
-        {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let (observed, code) = compiled(&fixture.state);
-    let _ = holder.kill();
-    let _ = holder.wait();
-    assert_eq!(code, 2, "a contended journal must not be read: {observed}");
-    let value: Value = serde_json::from_str(&observed).expect("JSON result");
+    // A second fixture whose contract the reader does not decide, so the same
+    // binary must hand the call to Python. Both sides pay the identical CLI
+    // boundary and runtime-cache verification; only the spawn differs.
+    let delegated = Fixture::active("lock-held-delegated");
+    let mut value: Value =
+        serde_json::from_slice(&fs::read(&delegated.delivery_path).expect("contract"))
+            .expect("contract JSON");
+    value["schema_version"] = json!("devforge.delivery-task/v2");
+    write(&delegated.delivery_path, &json_bytes(&value));
+    assert_eq!(compiled(&delegated.state).1, 2);
+
+    let holder = LockHolder::take(&fixture.state.join("LOCK"));
+    let observed = assert_parity(&fixture.state, "a journal whose exclusive lock is held");
+    assert_eq!(observed["status"], json!("COULD_NOT_RUN"));
     assert_eq!(
-        issue(&value),
+        issue(&observed),
         "another protected phase operation owns the exclusive lock"
     );
+
+    // The contended refusal is decided in Rust: it must not pay a Python spawn.
+    let sample = |state: &Path| {
+        (0..5)
+            .map(|_| {
+                let started = Instant::now();
+                let _ = compiled(state);
+                started.elapsed()
+            })
+            .min()
+            .expect("one sample")
+    };
+    let contended = sample(&fixture.state);
+    let with_python = sample(&delegated.state);
+    drop(holder);
+    assert!(
+        contended * 2 < with_python,
+        "the contended refusal should not pay Python start-up: \
+{contended:?} answered in Rust vs {with_python:?} delegated"
+    );
+}
+
+#[test]
+fn the_exclusive_lock_is_released_after_every_read() {
+    let fixture = Fixture::active("lock-release");
+    // A successful compiled read must leave the journal immediately readable by
+    // the compiled reader and by the legacy controller.
+    let before = manifest_of(&fixture.state);
+    assert_eq!(compiled(&fixture.state).1, 0);
+    assert_eq!(compiled(&fixture.state).1, 0);
+    assert_eq!(legacy(&fixture.state).1, 0);
+    assert_eq!(manifest_of(&fixture.state), before);
+    assert!(
+        LockHolder::try_take(&fixture.state.join("LOCK")),
+        "the compiled reader left the exclusive lock held"
+    );
+
+    // A delegated read takes the same lock and must release it before the
+    // Python controller acquires it, or the controller would refuse.
+    let ready = Fixture::active("lock-release-delegated");
+    ready.drive_to_ready();
+    let observed = assert_parity(&ready.state, "a delegated READY journal");
+    assert_eq!(observed["status"], json!("READY"));
+    assert_ne!(
+        observed["issues"][0],
+        json!("another protected phase operation owns the exclusive lock")
+    );
+    assert!(
+        LockHolder::try_take(&ready.state.join("LOCK")),
+        "the delegating reader left the exclusive lock held"
+    );
+}
+
+/// An external `flock(1)` holder, killed on drop.
+struct LockHolder(std::process::Child);
+
+impl LockHolder {
+    fn take(lock: &Path) -> LockHolder {
+        let holder = LockHolder(
+            Command::new("/usr/bin/flock")
+                .arg("--exclusive")
+                .arg(lock)
+                .arg("/usr/bin/sleep")
+                .arg("30")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("flock(1) runs"),
+        );
+        // Wait until this exact inode is actually locked before observing.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if !LockHolder::try_take(lock) {
+                return holder;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("flock(1) never acquired the exclusive lock");
+    }
+
+    /// True when this process can take the exclusive lock right now.
+    fn try_take(lock: &Path) -> bool {
+        let file = fs::File::open(lock).expect("the lock file is readable");
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => {
+                rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock).expect("unlock");
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+impl Drop for LockHolder {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 #[test]

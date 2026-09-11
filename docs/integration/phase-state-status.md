@@ -32,7 +32,7 @@ or `STALE`, otherwise `0`. Neither the rendering nor the exit rule changed.
 | `phase_state._view` / `_result` / `_applicability` | `view` / `result_value` / `applicability` |
 | `phase_state._configuration` (v1, non-initial) | `configuration` |
 | `phase_state._read_at` / `_external` / `_object_directory` | `read_at` / `external` / `object_directory` |
-| `phase_state._lock` (everything except `flock`) | `lock` |
+| `phase_state._lock` | `lock` / `acquire` |
 | `delivery_core._directory` / `_parent` / `_read_at` / `_read_external` | `directory` / `parent` / `core_read_at` / `core_external` |
 | `delivery_core._inspect_destination` | `inspect_destination` |
 | `delivery_core._load_contract` (`devforge.delivery-task/v1`) | `load_contract` |
@@ -47,6 +47,9 @@ The compiled reader answers a `status` call when all of the following hold:
 * the replayed status is `ACTIVE`, `WAITING_USER` or `FAIL`;
 * every refusal it reaches has wording this port reproduces exactly.
 
+It holds the journal's exclusive `flock` for the whole read, so a contended
+journal is now refused in Rust rather than handed to Python.
+
 Otherwise `phase_state::status` returns `None` and `src/delivery.rs` runs the
 unchanged `runtime/delivery/controller.py` exactly as before. No refusal is
 weakened, skipped or reworded: an unported condition is answered by the legacy
@@ -60,43 +63,44 @@ authority, not by a Rust approximation.
 | `status` on a `READY` or `COMPLETED` journal (`_current_final`, `_verified_receipt`) | Needs `delivery_core.check` / `verify` / `finalize`: the Markdown heading parser, the YAML frontmatter envelope, `_ledger_binding` and the receipt schema. Roughly 900 further lines of `delivery_core.py`. |
 | `status` on a `devforge.delivery-task/v2` journal | Needs `_catalog_contract`, `catalog_sources`, `_reference_coverage`, `_v2_markdown`, `validate_assignment_reference` — the whole v2 reference-coverage engine. |
 | `status` on a `devforge.utility-state/...` journal | Needs `runtime/delivery/utility_state.py` (1318 lines). |
-| Acquiring the exclusive `LOCK` (`fcntl.flock(LOCK_EX \| LOCK_NB)`) | **Blocking dependency outside this packet's fence.** See below. |
 | CPython JSON decoder diagnostics quoted by `delivery_core._json`, and `strerror` text quoted by `delivery_core._os_problem` | Byte-identical wording would require reimplementing CPython's `json` error positions and the libc message table. The reader delegates instead. |
 
-### The exclusive lock (blocking dependency)
+### The exclusive lock
 
-`phase_state._lock` acquires `flock(LOCK_EX | LOCK_NB)` on `<state>/LOCK` and
-refuses with `COULD_NOT_RUN: another protected phase operation owns the
-exclusive lock` when another operation holds it. The compiled reader reproduces
-every other check in `_lock` (empty regular single-link file, stable identity
-across the open, identity re-check) but **cannot acquire the lock**:
+`phase_state._lock` opens `<state>/LOCK` through the state-root directory
+descriptor with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC`, checks that it
+is an empty regular single-link file whose identity did not change across the
+open, takes `fcntl.flock(LOCK_EX | LOCK_NB)`, and re-checks the identity
+afterwards. `phase_state::lock` performs exactly that sequence in the same
+order, and `phase_state::acquire` takes the lock with
+`rustix::fs::flock(&file, FlockOperation::NonBlockingLockExclusive)`:
 
-* `Cargo.toml` sets `unsafe_code = "forbid"`, so `flock(2)` cannot be called
-  directly;
-* the pinned `rustix = "=1.1.4"` enables only the `process` feature, so
-  `rustix::fs::flock` is not compiled in;
-* `std::fs::File::try_lock` is stable since Rust 1.89, above the declared
-  `rust-version = "1.85"`; using it fails `cargo clippy -- -D warnings` with
-  `clippy::incompatible_msrv` (verified).
+* `EWOULDBLOCK` (`EAGAIN`) reproduces the legacy `BlockingIOError` branch:
+  `COULD_NOT_RUN` with `another protected phase operation owns the exclusive
+  lock`, exit code `2`. Contention is now decided in Rust and no longer
+  delegates to Python.
+* `EINTR` is retried, matching CPython's PEP 475 behaviour.
+* Every other `errno` falls through to the reader's `os_problem` mapping, which
+  is `delivery_core._os_problem(exc, "protected state lock", "FAIL")`: the
+  `ELOOP`/`ENOTDIR`/`ENOENT` wordings are reproduced exactly and anything else
+  takes the unexpected-errno branch and delegates so that the `strerror` text
+  stays exact.
 
-Until one of those changes, the reader detects contention by matching the
-`LOCK` inode against the `FLOCK` rows of `/proc/locks` and **delegates to the
-legacy controller**, which performs the real acquisition and emits the real
-refusal. `tests/phase_state.rs::a_held_exclusive_lock_is_refused_by_the_legacy_acquisition`
-pins that behaviour with a real `flock(1)` holder.
+The acquired lock is held by the `std::fs::File` returned from `lock` for the
+whole of `context`, so mutual exclusion covers the entire read, and it is
+released when that file is dropped on **every** exit path. That includes the
+paths that hand the call back to the legacy controller (a `READY`/`COMPLETED`
+journal, a v2 contract): `context` returns, its lock file drops, and only then
+does `src/delivery.rs` spawn `controller.py`, which takes the same lock itself.
+`tests/phase_state.rs::the_exclusive_lock_is_released_after_every_read` pins
+both the successful and the delegating case by re-acquiring the lock from the
+test process afterwards.
 
-Residual gap: the compiled reader does not *hold* mutual exclusion while it
-reads, so a mutation starting after the `/proc/locks` probe is not refused. The
-journal commit protocol keeps that read consistent (objects are published and
-fsynced before `HEAD.json` is replaced by an atomic rename, and every object is
-content-addressed and re-hashed on read), and `status` grants nothing, so no
-gate is weakened — but this is a real behavioural difference from the Python
-path and is recorded here rather than waived.
-
-**To close it:** add `"fs"` to the `rustix` feature list in `Cargo.toml`
-(`rustix = { version = "=1.1.4", features = ["process", "fs"] }`) and replace
-the `/proc/locks` probe with `rustix::fs::flock`. That file is outside this
-packet's fence, so the change is proposed, not made.
+This uses the `fs` feature of the already pinned `rustix = "=1.1.4"`, enabled
+in `Cargo.toml` by commit `ea22280`; `Cargo.lock` is unchanged. It needs no
+`unsafe` and no `rust-version` above the declared `1.85` floor
+(`std::fs::File::try_lock` would have required 1.89 and fails
+`clippy::incompatible_msrv`).
 
 ## Reading through held directory descriptors
 
@@ -136,7 +140,6 @@ Each exception below is pinned by a test in `tests/phase_state.rs`.
 | A state root that is not absolute | `NOT_APPLICABLE` at the CLI: `--state` is absolutised by `crate::resolved` before either implementation sees it. `phase_state::absolute` still applies the `delivery_core._absolute` rules to the resolved value. | — |
 | Unparsable JSON in any read object | Delegated, so the CPython decoder message is emitted verbatim. | `a_malformed_manifest_or_head_is_refused_exactly_as_before` |
 | An unexpected `errno` (anything but `ENOENT`, `ELOOP`, `ENOTDIR`) | Delegated, so `strerror` wording stays exact. | — (no deterministic fixture) |
-| A held `LOCK` | Delegated; the legacy `flock` produces the refusal. Mutual exclusion is not held during the compiled read. | `a_held_exclusive_lock_is_refused_by_the_legacy_acquisition` |
 | `_configuration`'s `implementation` collision check | Python binds `Path(__file__).parent`, the materialised module cache; Rust binds the same `package` directory computed by `src/delivery.rs`. Identical under the CLI. When the legacy controller is run directly from the source tree (as the test oracle does), its `implementation` is `runtime/delivery` instead, so a state root or receipt placed inside either directory would diverge. No fixture does that. | — |
 
 ## Legacy-to-Rust test mapping
@@ -191,12 +194,22 @@ ported (the read view is ported, the mutation the case also drives is not),
 case that does not call `context`. No Python test was retired, skipped or
 changed.
 
+Neither `tests/test_phase_state.py` nor `tests/test_phase_references.py`
+exercises lock contention, so porting the acquisition does not move any row of
+the table above and the 16/5/9/3 split over the 33 legacy read-path cases is
+unchanged. What it changes is the reader's own delegation set, which drops from
+five conditions to four: `READY`/`COMPLETED` journals, `devforge.delivery-task/v2`
+contracts, non-phase state schemas, and CPython JSON/`strerror` diagnostics. A
+held exclusive lock moved from that set into the ported set and is now pinned by
+a parity test rather than by a delegation test.
+
 Additional Rust coverage with no single legacy counterpart:
 `a_symlinked_journal_component_is_refused_exactly_as_before`,
 `a_state_root_reached_through_a_symlink_component_is_refused`,
 `an_unexpected_or_oversized_journal_object_is_refused`,
 `a_replaced_or_unusable_lock_is_refused_exactly_as_before`,
-`a_held_exclusive_lock_is_refused_by_the_legacy_acquisition`,
+`a_held_exclusive_lock_is_refused_exactly_as_before`,
+`the_exclusive_lock_is_released_after_every_read`,
 `an_existing_receipt_without_a_completion_intent_is_refused`,
 `a_leftover_partial_publication_is_inspected_without_recovery`,
 `an_unsupported_workflow_state_schema_is_still_answered_by_the_controller`,
@@ -219,6 +232,13 @@ not installed in this environment):
    `python(&package, "controller.py")` command is constructed, so the reader is
    consulted first and returns without building the controller command.
 
+`a_held_exclusive_lock_is_refused_exactly_as_before` repeats observation 1 for
+the contended refusal: with a real `flock(1)` holder in place, the minimum of
+five compiled runs against the locked journal must be under half the minimum of
+five compiled runs against a delegating fixture. Before the lock was ported this
+assertion failed at a ratio of about 1.15 (`w3a/lock-red.log`), because the
+contended path was itself spawning Python.
+
 `other_delivery_actions_still_reach_the_python_controller` asserts that
 `delivery check` still produces the legacy `delivery_core` result and that
 `delivery advance` still commits through the Python controller.
@@ -239,6 +259,10 @@ cargo +1.94.0 build --locked
 cargo +1.94.0 test --locked --all-targets
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
+
+RED/GREEN evidence for the slice is in
+`tmp/rust-migration-20260911/w3a/` (`red.log`/`green.log` for the reader,
+`lock-red.log`/`lock-green.log` for the exclusive lock).
 
 `tests/phase_state.rs` builds every fixture with the legacy runtime only
 (`devforge delivery init`, then `devforge delivery advance` against authored

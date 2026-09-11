@@ -2180,43 +2180,13 @@ record actual evidence and explicit unknowns. Runtime performs mechanical checks
 // The exclusive lock
 // ---------------------------------------------------------------------------
 
-/// True when any `flock` is recorded against this inode in `/proc/locks`, or
-/// when that table cannot be read. The legacy runtime then answers, because
-/// acquiring `LOCK_EX | LOCK_NB` needs `flock(2)`, which this crate cannot
-/// reach without `unsafe`, a new dependency feature, or an MSRV above the
-/// pinned `rust-version`. See `docs/integration/phase-state-status.md`.
-fn lock_contended(meta: &Metadata) -> bool {
-    let Ok(table) = fs::read_to_string("/proc/locks") else {
-        return true;
-    };
-    let device = meta.dev();
-    let major = ((device >> 8) & 0xfff) | ((device >> 32) & !0xfffu64);
-    let minor = (device & 0xff) | ((device >> 12) & !0xffu64);
-    for line in table.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        let Some(locator) = fields.get(5) else {
-            continue;
-        };
-        let parts: Vec<&str> = locator.split(':').collect();
-        if parts.len() != 3 {
-            continue;
-        }
-        let (Ok(observed_major), Ok(observed_minor), Ok(inode)) = (
-            u64::from_str_radix(parts[0], 16),
-            u64::from_str_radix(parts[1], 16),
-            parts[2].parse::<u64>(),
-        ) else {
-            continue;
-        };
-        if observed_major == major && observed_minor == minor && inode == meta.ino() {
-            return true;
-        }
-    }
-    false
-}
-
-/// `phase_state._lock` without the acquisition itself.
-fn lock(root: &Path) -> R<Dir> {
+/// `phase_state._lock`: the same open, the same checks, the same acquisition.
+///
+/// The returned `File` owns the open file description that holds
+/// `LOCK_EX | LOCK_NB`; the lock is released when it is dropped, which happens
+/// on every exit path from [`context`], including the paths that hand the call
+/// back to the legacy controller so that it can take the same lock.
+fn lock(root: &Path) -> R<(Dir, fs::File)> {
     let dir = directory(root, "protected state_root", "FAIL")?;
     let path = dir.path("LOCK");
     let before = fs::symlink_metadata(&path)
@@ -2235,15 +2205,36 @@ fn lock(root: &Path) -> R<Dir> {
     if identity(&before) != identity(&opened) {
         return fail("protected lock identity changed");
     }
-    if lock_contended(&before) {
-        return delegate();
-    }
+    acquire(&file)?;
     let current = fs::symlink_metadata(&path)
         .map_err(|error| os_problem(&error, "protected state lock", "FAIL"))?;
     if identity(&before) != identity(&current) {
         return fail("protected lock was replaced");
     }
-    Ok(dir)
+    Ok((dir, file))
+}
+
+/// `fcntl.flock(descriptor, LOCK_EX | LOCK_NB)` with the legacy refusals.
+///
+/// CPython retries an interrupted `flock` (PEP 475), reports `EWOULDBLOCK` as
+/// `BlockingIOError`, which `_lock` converts to its own operational refusal,
+/// and lets every other `OSError` fall through to `_os_problem`.
+fn acquire(file: &fs::File) -> R<()> {
+    loop {
+        return match rustix::fs::flock(file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => Ok(()),
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(rustix::io::Errno::WOULDBLOCK) => problem(
+                "COULD_NOT_RUN",
+                "another protected phase operation owns the exclusive lock".to_owned(),
+            ),
+            Err(errno) => Err(os_problem(
+                &std::io::Error::from_raw_os_error(errno.raw_os_error()),
+                "protected state lock",
+                "FAIL",
+            )),
+        };
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2271,7 +2262,7 @@ fn phase_engine(state: &Path) -> R<()> {
 /// `phase_state.context` under `_guard`.
 fn context(state: &Path, package: &Path, info: &mut Info) -> R<Value> {
     let root = absolute(&json!(display(state)?), "state_root")?;
-    let dir = lock(&root)?;
+    let (dir, _held) = lock(&root)?;
     let state = State::load(&root, &dir, info)?;
     if state.reference_v2 {
         return delegate();
