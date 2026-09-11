@@ -25,4 +25,3 @@ all = "warn"
 
 [build-dependencies]
 sha2 = "=0.10.9"
-toml = { version = "=0.8.23", default-features = false, features = ["parse"] }
