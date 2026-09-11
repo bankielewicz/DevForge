@@ -120,3 +120,22 @@ the nearest Rust idiom:
 2. **Argument-parsing errors** come from `clap` rather than `argparse`, so a
    missing `--file` or an unknown flag produces different usage text on stderr.
    Both exit 2, and neither is part of the checked vocabulary.
+3. **Word-character class for the token boundaries.** The compiled scan uses
+   `char::is_alphanumeric()`, which is a strict superset of CPython's
+   `isalnum()`: 11,171 code points (905 `Mn` and 423 `Mc` combining marks such
+   as U+0345, plus 130 `So` and 9,713 code points assigned after CPython 3.12's
+   Unicode tables) are word characters here and not there; nothing goes the
+   other way. So a 64-hex run directly abutting one of them is not a standalone
+   token for the compiled command while the legacy script lists it: the compiled
+   listing can only under-report, and for such a file it prints
+   `no_digest_present outcome=PASS` and exits 0 where the legacy printed
+   `COULD_NOT_RUN` and exited 5. An exact `isalnum()` reproduction needs a
+   Unicode category table that std-only Rust does not carry, and the
+   unassigned-code-point share cannot match across two Unicode versions. The
+   test `a_digest_abutting_a_combining_mark_is_the_recorded_word_class_divergence`
+   pins the direction so the exception is retired if the two ever agree.
+4. **A claim ending in a newline.** Python's `$` also matches before a single
+   trailing `\n`, so the legacy `digest_format` reports PASS for a 65-character
+   claim `<64 hex>\n`; the compiled check requires exactly 64 characters and
+   reports FAIL. The compiled command is the stricter of the two, and the exit
+   code is identical (2) because `digest_matches_bytes` fails in both.
