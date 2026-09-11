@@ -647,6 +647,7 @@ class InstallerTest(unittest.TestCase):
                 "path": str(runtime), "sha256_before": expected_hash, "sha256_after": expected_hash,
                 "capabilities": self.capabilities(), "contract": "base",
                 "providers": ["codex", "claude"], "native_activation": "NOT_VERIFIED",
+                "project": str(self.project.resolve()),
                 "validator": self.validator_identity(), "requirement": requirement})
         self.assertEqual(result["runtime_compatibility"], "VERIFIED")
         self.assertEqual(result["native_activation"], "NOT_VERIFIED")
@@ -692,6 +693,97 @@ class InstallerTest(unittest.TestCase):
         with mock.patch.object(installer, "plan_hook_merge", side_effect=mutate_after_probe):
             with self.assertRaisesRegex(ValueError, "binary changed before installation writes"):
                 self.install_delivery(runtime=runtime)
+        self.assertEqual(list(self.project.iterdir()), [])
+
+    def validator_copy(self, name="validator-selected"):
+        """A single-link copy of the compiled CLI, selectable as the validating authority."""
+        copy = self.root / name
+        shutil.copy(self.validator, copy)
+        copy.chmod(0o755)
+        return copy
+
+    def test_delivery_validator_inside_the_project_is_refused_by_the_compiled_authority(self):
+        # The compiled validator is told which project the installer is about to write.
+        self.delivery_requirement()
+        marker, runtime = self.execution_marker()
+        inside = self.project / "tools/devforge"
+        inside.parent.mkdir()
+        shutil.copy(self.validator, inside)
+        inside.chmod(0o755)
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError,
+                                    "validating executable must be outside the installation project"):
+            self.install_delivery(runtime=runtime, validator=inside)
+        self.assertFalse(marker.exists())  # The refusal precedes executing the runtime.
+        self.assertEqual(self.snapshot(), before)
+
+    def test_delivery_selected_validator_cannot_be_overwritten_by_installation(self):
+        # Defense in depth behind the compiled refusal above: the installer refuses a
+        # validator that is itself a planned destination, here a retired authoring file.
+        self.delivery_requirement()
+        runtime = self.explicit_runtime()
+        relative = ".agents/skills/demo/evals/evals.json"
+        destination = self.project / relative
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"#!/bin/sh\nexit 0\n")
+        destination.chmod(0o755)
+        (self.project / ".devforge-install.json").write_text(json.dumps(
+            {"schema": 1, "files": {relative: installer.digest(destination.read_bytes())}}))
+        real = installer.runtime_requirements.probe_runtime
+
+        def bound_to_the_destination(_selected, probed, providers, *rest):
+            # Probe with the outside authority, then report the destination as the validator.
+            report = real(self.validator, probed, providers, *rest)
+            executable = {"path": str(destination),
+                          "sha256": hashlib.sha256(destination.read_bytes()).hexdigest()}
+            return {**report, "validator": {**report["validator"], "executable": executable}}
+
+        before = self.snapshot()
+        with mock.patch.object(installer.runtime_requirements, "probe_runtime",
+                               side_effect=bound_to_the_destination):
+            with self.assertRaisesRegex(ValueError,
+                                        "selected validator binary overlaps an installation destination"):
+                self.install_delivery(runtime=runtime, validator=destination)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_delivery_validator_aliased_by_a_destination_blocks_all_installation_writes(self):
+        self.delivery_requirement()
+        runtime = self.explicit_runtime()
+        validator = self.validator_copy()
+        digest = hashlib.sha256(validator.read_bytes()).hexdigest()
+        record = self.project / ".devforge-install.json"
+        original = installer.plan_hook_merge
+
+        def alias_after_probe(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if not record.exists():  # A managed destination now names the validator's inode.
+                record.hardlink_to(validator)
+            return result
+
+        with mock.patch.object(installer, "plan_hook_merge", side_effect=alias_after_probe):
+            with self.assertRaisesRegex(
+                    ValueError, "installation would overwrite the selected validator binary through an alias"):
+                self.install_delivery(runtime=runtime, validator=validator)
+        self.assertEqual([p.name for p in self.project.iterdir()], [".devforge-install.json"])
+        self.assertTrue(record.samefile(validator))
+        self.assertEqual(hashlib.sha256(validator.read_bytes()).hexdigest(), digest)
+
+    def test_delivery_validator_mutation_after_probe_blocks_all_installation_writes(self):
+        self.delivery_requirement()
+        runtime = self.explicit_runtime()
+        validator = self.validator_copy()
+        original = installer.plan_hook_merge
+
+        def mutate_after_probe(*args, **kwargs):
+            result = original(*args, **kwargs)
+            with validator.open("ab") as stream:
+                stream.write(b"# changed during preflight\n")
+            return result
+
+        with mock.patch.object(installer, "plan_hook_merge", side_effect=mutate_after_probe):
+            with self.assertRaisesRegex(ValueError,
+                                        "selected validator binary changed before installation writes"):
+                self.install_delivery(runtime=runtime, validator=validator)
         self.assertEqual(list(self.project.iterdir()), [])
 
     def test_delivery_runtime_hardlink_to_managed_destination_blocks_before_probe(self):
@@ -752,6 +844,7 @@ class InstallerTest(unittest.TestCase):
             "schema_version": "devforge.runtime-probe/v1", "path": str(runtime),
             "sha256_before": digest, "sha256_after": digest, "capabilities": reported,
             "contract": "extended", "providers": ["claude"], "native_activation": "NOT_VERIFIED",
+            "project": str(self.project.resolve()),
             "validator": self.validator_identity(), "requirement": requirement})
 
     def test_delivery_validator_refusal_blocks_every_installation_write(self):

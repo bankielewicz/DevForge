@@ -263,7 +263,7 @@ def install(framework, project, provider, include_experts=False, runtime=None, m
             runtime_requirements.runtime_digest(validator)  # Identical selection hygiene.
         except ValueError as error:
             raise ValueError(str(error).replace("--runtime", "--validator")) from error
-        runtime_evidence = runtime_requirements.probe_runtime(validator, runtime, requirements)
+        runtime_evidence = runtime_requirements.probe_runtime(validator, runtime, requirements, project)
     record_path = safe_destination(project, ".devforge-install.json")
     previous = read_json(record_path) if record_path.exists() else {"schema": 1, "files": {}}
     if (not isinstance(previous, dict) or previous.get("schema", 1) != 1
@@ -322,6 +322,16 @@ def install(framework, project, provider, include_experts=False, runtime=None, m
             raise ValueError("selected runtime binary overlaps an installation destination")
         if runtime_requirements.runtime_digest(runtime) != runtime_evidence["sha256_after"]:
             raise ValueError("selected runtime binary changed before installation writes")
+        # The validating authority is protected exactly like the runtime it admitted:
+        # no destination may name it, alias its inode, or replace it before the writes.
+        if any(project / relative == Path(validator) for relative in write_paths):
+            raise ValueError("selected validator binary overlaps an installation destination")
+        for relative in write_paths:
+            destination = project / relative
+            if destination.is_file() and destination.samefile(validator):
+                raise ValueError("installation would overwrite the selected validator binary through an alias")
+        if runtime_requirements.runtime_digest(validator) != runtime_evidence["validator"]["executable"]["sha256"]:
+            raise ValueError("selected validator binary changed before installation writes")
     if adoption is not None:
         replacements = {**planned, **hook_writes, ".devforge-install.json": record_bytes}
         overwritten_inodes = {}

@@ -211,8 +211,13 @@ admits either the eight-field `devforge.delivery-capabilities/v1` base contract 
 that base plus all seven declared extensions, and reports `base` or `extended`.
 A missing base field, an unknown field, a partial extension set or any malformed
 value is refused, and the installer writes nothing on refusal; Python performs no
-capability validation. Compatibility is mechanical only: native activation stays
-unverified. Export preserves the requirement; export and structural validation
+capability validation. The probe is bound to the installation project: the
+compiled CLI refuses, before reading or executing the runtime, a validating
+executable that is not outside that project, and reports the project it was bound
+to. Before any write the installer then applies the runtime's protections to the
+validator as well: a planned destination that equals it or aliases its inode, or a
+changed validator digest, blocks the whole installation. Compatibility is
+mechanical only: native activation stays unverified. Export preserves the requirement; export and structural validation
 report the eventual host runtime as unverified.
 
 Before integrated release, validate runtime compatibility, finish native launcher

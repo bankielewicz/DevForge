@@ -98,6 +98,17 @@ fn marking(dir: &Path, marker: &Path) -> PathBuf {
     )
 }
 
+/// A single-hard-link copy of the built CLI, selectable as a runtime or, when run
+/// directly, as the validating executable.
+fn copied(dir: &Path, name: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::create_dir_all(dir).unwrap();
+    fs::copy(BIN, &path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(fs::metadata(&path).unwrap().nlink(), 1);
+    path
+}
+
 fn base() -> Value {
     json!({
         "schema_version": "devforge.delivery-capabilities/v1",
@@ -165,13 +176,19 @@ struct Run {
     stderr: String,
 }
 
-fn run(args: &[&str]) -> Run {
-    let output = Command::new(BIN).args(args).output().unwrap();
+/// Invoke an explicitly selected DevForge executable, which is the validating
+/// authority for that run: its own location decides the project refusals below.
+fn run_with(binary: &Path, args: &[&str]) -> Run {
+    let output = Command::new(binary).args(args).output().unwrap();
     Run {
         code: output.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     }
+}
+
+fn run(args: &[&str]) -> Run {
+    run_with(Path::new(BIN), args)
 }
 
 fn probe(runtime: &str, providers: &[&str]) -> Run {
@@ -636,4 +653,122 @@ fn the_probe_writes_nothing_to_the_filesystem() {
         "malformed runtime capabilities fields",
     );
     assert_eq!(snapshot(dir.path()), before);
+}
+
+// ---- selected installation project ---------------------------------------
+//
+// A delivery-aware installation names the project it is about to write. The
+// validating executable must sit outside that project, or an installation
+// destination could overwrite the authority that admitted it. The refusal is
+// decided before the selected runtime is read or executed.
+
+/// `<validator> --project P install probe-runtime --runtime R --provider ...`.
+fn probe_bound(binary: &Path, project: &Path, runtime: &Path, providers: &[&str]) -> Run {
+    let mut args = vec![
+        "--project",
+        project.to_str().unwrap(),
+        "install",
+        "probe-runtime",
+        "--runtime",
+        runtime.to_str().unwrap(),
+    ];
+    for provider in providers {
+        args.push("--provider");
+        args.push(provider);
+    }
+    run_with(binary, &args)
+}
+
+#[test]
+fn a_validating_executable_inside_the_selected_project_is_refused_before_execution() {
+    let dir = temp();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let project = root.join("project");
+    fs::create_dir(&project).unwrap();
+    let marker = root.join("executed.marker");
+    let runtime = marking(&root, &marker);
+    // The same bytes, one copy inside the project and one outside it.
+    let inside = copied(&project.join("tools"), "devforge");
+    let outside = copied(&root, "devforge-authority");
+    assert_eq!(fs::read(&inside).unwrap(), fs::read(&outside).unwrap());
+
+    refused(
+        &probe_bound(&inside, &project, &runtime, &["codex"]),
+        "validating executable must be outside the installation project",
+    );
+    assert!(
+        !marker.exists(),
+        "the project refusal must precede executing the selected runtime"
+    );
+
+    // Only the validator's location was refused: the identical copy outside is admitted.
+    let result = probe_bound(&outside, &project, &runtime, &["codex"]);
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    let report: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(report["contract"], "extended");
+    assert_eq!(report["project"], project.to_str().unwrap());
+    assert_eq!(report["path"], runtime.to_str().unwrap());
+    // The report binds the running validator itself: canonical path, true digest.
+    let reported = report["validator"]["executable"]["path"].as_str().unwrap();
+    assert_eq!(Path::new(reported), fs::canonicalize(&outside).unwrap());
+    assert_eq!(
+        report["validator"]["executable"]["sha256"],
+        sha(&fs::read(&outside).unwrap())
+    );
+    assert_eq!(
+        report["validator"]["source_sha256"],
+        identity()["source_sha256"]
+    );
+    assert!(marker.exists(), "the admitted probe executes the runtime");
+}
+
+#[test]
+fn a_missing_or_non_directory_project_is_refused_before_execution() {
+    let dir = temp();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let marker = root.join("executed.marker");
+    let runtime = marking(&root, &marker);
+    let file = root.join("project-file");
+    fs::write(&file, b"not a project directory\n").unwrap();
+    for candidate in [
+        root.join("absent-project"),
+        file,
+        root.join("absent/deeper"),
+    ] {
+        refused(
+            &probe_bound(Path::new(BIN), &candidate, &runtime, &["codex"]),
+            "project must already exist",
+        );
+        assert!(
+            !marker.exists(),
+            "an unusable project must refuse before executing the runtime"
+        );
+    }
+}
+
+#[test]
+fn an_unbound_probe_reports_no_project_and_a_canonical_validator_identity() {
+    let dir = temp();
+    let runtime = serving(dir.path(), OBSERVED);
+    let report = accepted(&runtime, &["codex", "claude"]);
+    assert!(
+        report.as_object().unwrap().get("project").is_none(),
+        "an unbound probe must not claim a project; report={report}"
+    );
+    let reported = report["validator"]["executable"]["path"].as_str().unwrap();
+    let path = Path::new(reported);
+    assert!(
+        path.is_absolute(),
+        "validator path must be absolute: {reported}"
+    );
+    assert_eq!(path, fs::canonicalize(path).unwrap());
+    assert_eq!(
+        report["validator"]["executable"]["sha256"],
+        sha(&fs::read(path).unwrap()),
+        "the reported digest must be the running executable's own bytes"
+    );
 }

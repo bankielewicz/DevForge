@@ -160,17 +160,19 @@ def runtime_digest(runtime):
     return sha.hexdigest()
 
 
-def probe_runtime(validator, runtime, providers):
+def probe_runtime(validator, runtime, providers, project):
     """Delegate probing and validation to the explicitly selected DevForge executable.
 
     The validator is chosen by the operator, never discovered from PATH, an
     environment default or the runtime under test. Its refusal is final: this
     module neither re-validates the reported capabilities nor installs anything
-    when the probe fails.
+    when the probe fails. The already-resolved installation project is named so
+    the compiled CLI can refuse a validating executable inside it; the returned
+    report must carry that same project back.
     """
     if runtime is None:
         raise ValueError("delivery-aware project installation requires --runtime ABSOLUTE_PATH")
-    command = [str(validator), "install", "probe-runtime", "--runtime", str(runtime)]
+    command = [str(validator), "--project", str(project), "install", "probe-runtime", "--runtime", str(runtime)]
     command += [argument for provider in providers for argument in ("--provider", provider)]
     try:
         completed = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
@@ -189,4 +191,6 @@ def probe_runtime(validator, runtime, providers):
     report = strict_json(completed.stdout)
     if not isinstance(report, dict) or report.get("schema_version") != PROBE_SCHEMA:
         raise ValueError(f"runtime validation did not report {PROBE_SCHEMA}")
+    if report.get("project") != str(project):
+        raise ValueError("runtime validation bound a different project")
     return report

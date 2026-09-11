@@ -94,6 +94,8 @@ pub enum Action {
     },
     /// Probe an explicitly selected runtime executable and validate the delivery
     /// capabilities it reports. Reads and executes only that runtime; writes nothing.
+    /// The global --project, when given, binds the report to that installation and
+    /// requires this validating executable to be outside it.
     ProbeRuntime {
         /// Absolute, canonical, single-hard-link runtime executable to probe.
         #[arg(long)]
@@ -101,13 +103,15 @@ pub enum Action {
         /// Provider the installed package requires; repeat for each, codex or claude.
         #[arg(long)]
         provider: Vec<String>,
+        // The global `--project` optionally names the installation this probe admits;
+        // the validating executable must then be outside that project.
     },
 }
 
 pub fn run(action: &Action, project: Option<&Path>) -> Result<Value> {
     match action {
         Action::Identity => identity(),
-        Action::ProbeRuntime { runtime, provider } => probe_runtime(runtime, provider),
+        Action::ProbeRuntime { runtime, provider } => probe_runtime(runtime, provider, project),
         Action::ManualExperts {
             framework,
             evidence,
@@ -3543,7 +3547,23 @@ fn validate_capabilities(data: &Value, providers: &[String]) -> Result<&'static 
     Ok(contract)
 }
 
-fn probe_runtime(runtime: &Path, providers: &[String]) -> Result<Value> {
+fn probe_runtime(runtime: &Path, providers: &[String], project: Option<&Path>) -> Result<Value> {
+    // Bind the validating executable first. When an installation project is named,
+    // an executable inside it could be overwritten by the very installation this
+    // probe admits, so refuse before reading or executing anything.
+    let (validator, digest) = executable_identity()?;
+    let project = match project {
+        Some(selected) => {
+            let selected = crate::resolved(selected)?;
+            ensure!(selected.is_dir(), "project must already exist");
+            ensure!(
+                crate::separate(&validator, &selected),
+                "validating executable must be outside the installation project"
+            );
+            Some(selected)
+        }
+        None => None,
+    };
     ensure!(
         !providers.is_empty(),
         "--provider must select at least one provider"
@@ -3568,8 +3588,7 @@ fn probe_runtime(runtime: &Path, providers: &[String]) -> Result<Value> {
         before == after,
         "selected runtime binary changed during capability verification"
     );
-    let (validator, digest) = executable_identity()?;
-    Ok(json!({
+    let mut report = json!({
         "schema_version": "devforge.runtime-probe/v1",
         "path": runtime,
         "sha256_before": before,
@@ -3582,7 +3601,15 @@ fn probe_runtime(runtime: &Path, providers: &[String]) -> Result<Value> {
             "executable": {"path": validator, "sha256": digest},
             "source_sha256": SOURCE_SHA256,
         },
-    }))
+    });
+    // Record the bound project so the caller cannot present this report for another one.
+    if let Some(project) = project {
+        report
+            .as_object_mut()
+            .expect("probe report object")
+            .insert("project".into(), json!(project));
+    }
+    Ok(report)
 }
 
 // ---- installer -----------------------------------------------------------
