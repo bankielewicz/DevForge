@@ -77,9 +77,19 @@ authority that probes it, so there is no `--validator`. Promoted Codex expert
 packages are refused by this command and installed only through
 [manual expert adoption](integration/manual-expert-adoption.md).
 [Project-local framework installation](integration/framework-installation.md)
-documents the destinations, refusals and parity exceptions. The unchanged
-`scripts/install_framework.py` remains the legacy baseline and is still the
-only implementation of runtime-only plugin export (`--export-plugin`).
+documents the destinations, refusals and parity exceptions, along with
+`install export-plugin`, the compiled runtime-only plugin export:
+
+```bash
+# Also not part of this guide: it creates $EXPORT_PARENT/devforgeai.
+"$DEVFORGE_SRC/target/debug/devforge" install export-plugin \
+  --framework "$FRAMEWORK" --provider claude --output "$EXPORT_PARENT/devforgeai"
+```
+
+The output directory must be named `devforgeai` and must not already exist. The
+unchanged `scripts/install_framework.py` remains the legacy baseline that both
+compiled commands are tested against; its `--manual-evidence` /
+`--manual-experts-only` refresh is the only installation mode still Python.
 
 ## 4. Harmless checks
 
