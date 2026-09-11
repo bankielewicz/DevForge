@@ -1,7 +1,10 @@
 import importlib.util
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,8 +14,24 @@ spec = importlib.util.spec_from_file_location("installer", Path(__file__).parent
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 
+# The compiled CLI that owns runtime probing and capability validation.
+BINARY = Path(os.environ.get("DEVFORGE_BIN", Path(__file__).resolve().parents[1] / "target/debug/devforge"))
+SELECTED = object()
+
 
 class InstallerTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # A missing build is a failure, never a skip: no other component validates capabilities.
+        if not BINARY.is_file() or not os.access(BINARY, os.X_OK):
+            raise AssertionError(f"build the CLI first (cargo build --locked); missing {BINARY}")
+        holder = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(holder.cleanup)
+        # Cargo hard-links target/debug/devforge, so select a single-link copy of those bytes.
+        cls.validator = Path(holder.name) / "devforge"
+        shutil.copy(BINARY, cls.validator)
+        cls.validator.chmod(0o755)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -405,8 +424,19 @@ class InstallerTest(unittest.TestCase):
                 "native_admission": "NOT_VALIDATED",
                 "mechanical_scope": "phase evidence and persisted artifact verification; no semantic acceptance"}
 
-    def explicit_runtime(self, text=None, prefix=""):
-        path = self.root / "devforge-standin"
+    def extended_capabilities(self):
+        """The eight base fields plus every declared extension the CLI reports."""
+        return {**self.capabilities(),
+                "utility_workflows": ["skill-builder", "skill-validator"],
+                "utility_session_schema": "devforge.utility-session/v1",
+                "utility_native_schedule_schema": "devforge.utility-native-schedule/v1",
+                "native_execution_enabled": False,
+                "native_process_interface": "EXPLICIT_FROZEN_CONFIGURATION_REQUIRED",
+                "native_process_receipt_schema": "devforge.native-process-receipt/v1",
+                "native_semantic_review": "SEPARATE_SELECTED_OPERATOR_OR_INDEPENDENT_REVIEW"}
+
+    def explicit_runtime(self, text=None, prefix="", name="devforge-standin"):
+        path = self.root / name
         text = json.dumps(self.capabilities()) if text is None else text
         path.write_text(f"#!{sys.executable}\nimport sys\n"
                         "assert sys.argv[1:] == ['delivery', 'capabilities']\n"
@@ -414,8 +444,22 @@ class InstallerTest(unittest.TestCase):
         path.chmod(0o700)
         return path
 
-    def install_delivery(self, runtime=None, provider="codex"):
-        return installer.install(self.framework, self.project, provider, runtime=runtime)
+    def execution_marker(self):
+        """A stand-in that records the fact it ran, proving refusals precede execution."""
+        marker = self.root / "probe-executed.marker"
+        runtime = self.explicit_runtime(prefix=f"open({str(marker)!r}, 'w').write('executed')\n")
+        return marker, runtime
+
+    def validator_identity(self):
+        report = json.loads(subprocess.run([str(self.validator), "install", "identity"],
+                                           stdin=subprocess.DEVNULL, capture_output=True,
+                                           check=True).stdout)
+        return {"executable": report["executable"], "source_sha256": report["source_sha256"]}
+
+    def install_delivery(self, runtime=None, provider="codex", validator=SELECTED):
+        validator = self.validator if validator is SELECTED else validator
+        return installer.install(self.framework, self.project, provider, runtime=runtime,
+                                 validator=validator)
 
     def test_legacy_absence_never_probes_a_runtime(self):
         self.hook_source()
@@ -426,12 +470,49 @@ class InstallerTest(unittest.TestCase):
 
     def test_delivery_install_requires_explicit_runtime_even_with_path_and_environment(self):
         self.delivery_requirement()
-        runtime = self.explicit_runtime()
+        marker, runtime = self.execution_marker()
+        # A discoverable `devforge` becomes neither the runtime nor the validation authority.
+        discoverable = self.root / "devforge"
+        discoverable.write_bytes(runtime.read_bytes())
+        discoverable.chmod(0o700)
         with mock.patch.dict("os.environ", {"PATH": str(self.root),
-                                            "DEVFORGE_DELIVERY_EXECUTABLE": str(runtime)}):
+                                            "DEVFORGE_BIN": str(discoverable),
+                                            "DEVFORGE_DELIVERY_EXECUTABLE": str(discoverable)}):
+            with self.assertRaisesRegex(ValueError, "requires --validator"):
+                self.install_delivery(runtime=runtime, validator=None)
             with self.assertRaisesRegex(ValueError, "requires --runtime"):
                 self.install_delivery()
+        self.assertFalse(marker.exists())
         self.assertEqual(list(self.project.iterdir()), [])
+
+    def test_delivery_validator_must_be_an_absolute_canonical_single_link_executable(self):
+        self.delivery_requirement()
+        marker, runtime = self.execution_marker()
+        copy = self.root / "validator-copy"
+        shutil.copy(self.validator, copy)
+        copy.chmod(0o755)
+        link = self.root / "validator-link"
+        link.symlink_to(copy)
+        alias = self.root / "validator-alias"
+        alias.hardlink_to(copy)
+        folder = self.root / "validator-folder"
+        folder.mkdir()
+        plain = self.root / "validator-not-executable"
+        plain.write_bytes(b"#!/bin/sh\nexit 0\n")
+        for candidate in (Path("devforge"), link, alias, folder, plain):
+            with self.subTest(candidate=str(candidate)):
+                with self.assertRaisesRegex(ValueError, "^--validator must "):
+                    self.install_delivery(runtime=runtime, validator=candidate)
+                self.assertFalse(marker.exists())
+                self.assertEqual(list(self.project.iterdir()), [])
+        with self.assertRaises((ValueError, OSError)):  # An absent selection cannot be read.
+            self.install_delivery(runtime=runtime, validator=self.root / "absent")
+        self.assertFalse(marker.exists())
+        self.assertEqual(list(self.project.iterdir()), [])
+        # The same single-link copy is a valid authority, proving only selection was refused.
+        alias.unlink()
+        self.install_delivery(runtime=runtime, provider="codex", validator=copy)
+        self.assertTrue(marker.exists())
 
     def test_delivery_sidecar_rejects_malformed_duplicate_unknown_and_unsupported_values(self):
         path, requirement = self.delivery_requirement()
@@ -534,6 +615,22 @@ class InstallerTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.install_delivery(runtime=self.explicit_runtime(raw))
                 self.assertEqual(list(self.project.iterdir()), [])
+        # The extended contract is admitted only in full and only with well-formed values.
+        extended = self.extended_capabilities()
+        partial = dict(extended)
+        del partial["native_semantic_review"]
+        for raw, reason in (
+                (json.dumps(partial), "unsupported runtime capabilities extension combination"),
+                (json.dumps({**extended, "native_execution_enabled": "false"}),
+                 "malformed runtime capabilities extension: native_execution_enabled"),
+                (json.dumps({**extended, "utility_session_schema": "devforge.utility-session/v2"}),
+                 "malformed runtime capabilities extension: utility_session_schema"),
+                (json.dumps({**extended, "utility_workflows": []}),
+                 "malformed runtime capabilities extension: utility_workflows")):
+            with self.subTest(raw=raw):
+                with self.assertRaisesRegex(ValueError, reason):
+                    self.install_delivery(runtime=self.explicit_runtime(raw))
+                self.assertEqual(list(self.project.iterdir()), [])
 
     def test_delivery_compatible_explicit_runtime_records_exact_evidence_and_preserves_user_hooks(self):
         _, codex = self.delivery_requirement()
@@ -546,9 +643,11 @@ class InstallerTest(unittest.TestCase):
         evidence = self.inventory()["runtime_evidence"]
         for provider, requirement in (("codex", codex), ("claude", claude)):
             self.assertEqual(evidence[provider], {
+                "schema_version": "devforge.runtime-probe/v1",
                 "path": str(runtime), "sha256_before": expected_hash, "sha256_after": expected_hash,
-                "capabilities": self.capabilities(), "native_activation": "NOT_VERIFIED",
-                "requirement": requirement})
+                "capabilities": self.capabilities(), "contract": "base",
+                "providers": ["codex", "claude"], "native_activation": "NOT_VERIFIED",
+                "validator": self.validator_identity(), "requirement": requirement})
         self.assertEqual(result["runtime_compatibility"], "VERIFIED")
         self.assertEqual(result["native_activation"], "NOT_VERIFIED")
         settings = json.loads(self.settings_path().read_text())
@@ -596,7 +695,8 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(list(self.project.iterdir()), [])
 
     def test_delivery_runtime_hardlink_to_managed_destination_blocks_before_probe(self):
-        runtime = self.explicit_runtime()
+        # The stand-in records execution, so an absent marker proves nothing ran.
+        marker, runtime = self.execution_marker()
         self.skill.write_bytes(runtime.read_bytes())
         self.install()
         destination = self.project / ".agents/skills/demo/SKILL.md"
@@ -608,10 +708,9 @@ class InstallerTest(unittest.TestCase):
         self.skill.write_bytes(self.skill.read_bytes() + b"# updated candidate\n")
         before = self.snapshot()
         runtime_before = runtime.read_bytes()
-        with mock.patch.object(installer.runtime_requirements, "capability_output") as probe:
-            with self.assertRaisesRegex(ValueError, "exactly one hard link"):
-                self.install_delivery(runtime=runtime)
-            probe.assert_not_called()
+        with self.assertRaisesRegex(ValueError, "exactly one hard link"):
+            self.install_delivery(runtime=runtime)
+        self.assertFalse(marker.exists())  # Nothing was executed before the refusal.
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(runtime.read_bytes(), runtime_before)
 
@@ -623,12 +722,46 @@ class InstallerTest(unittest.TestCase):
                     ("sys.exit(7)\n", "status 7")]
         for prefix, error in prefixes:
             with self.subTest(error=error, prefix=prefix):
+                # The five-second deadline is the compiled CLI's and is not adjustable.
                 runtime = self.explicit_runtime(prefix=prefix)
-                timeout = 0.1 if "sleep" in prefix else 5
-                with mock.patch.object(installer.runtime_requirements, "PROBE_TIMEOUT", timeout):
-                    with self.assertRaisesRegex(ValueError, error):
-                        self.install_delivery(runtime=runtime)
+                with self.assertRaisesRegex(ValueError, error):
+                    self.install_delivery(runtime=runtime)
                 self.assertEqual(list(self.project.iterdir()), [])
+
+    def selected_runtime(self):
+        """The compiled CLI itself, as a single-link copy the installer may select."""
+        runtime = self.root / "devforge-runtime"
+        shutil.copy(self.validator, runtime)
+        runtime.chmod(0o755)
+        return runtime
+
+    def test_delivery_selected_validator_admits_the_real_extended_runtime_contract(self):
+        _, requirement = self.delivery_requirement("claude")
+        runtime = self.selected_runtime()
+        reported = json.loads(subprocess.run([str(runtime), "delivery", "capabilities"],
+                                             stdin=subprocess.DEVNULL, capture_output=True,
+                                             check=True).stdout)
+        self.assertEqual(len(reported), 15)  # Eight base fields plus the seven extensions.
+        result = self.install_delivery(runtime=runtime, provider="claude")
+        self.assertEqual(result["status"], "INSTALLED")
+        self.assertEqual(result["runtime_compatibility"], "VERIFIED")
+        self.assertEqual(result["native_activation"], "NOT_VERIFIED")
+        self.assertEqual((self.project / ".claude/skills/demo/SKILL.md").read_text(), "claude skill")
+        digest = hashlib.sha256(runtime.read_bytes()).hexdigest()
+        self.assertEqual(self.inventory()["runtime_evidence"]["claude"], {
+            "schema_version": "devforge.runtime-probe/v1", "path": str(runtime),
+            "sha256_before": digest, "sha256_after": digest, "capabilities": reported,
+            "contract": "extended", "providers": ["claude"], "native_activation": "NOT_VERIFIED",
+            "validator": self.validator_identity(), "requirement": requirement})
+
+    def test_delivery_validator_refusal_blocks_every_installation_write(self):
+        self.delivery_requirement("claude")
+        malformed = self.explicit_runtime(json.dumps({**self.extended_capabilities(),
+                                                      "native_process_interface": "  "}))
+        with self.assertRaisesRegex(ValueError,
+                                    "malformed runtime capabilities extension: native_process_interface"):
+            self.install_delivery(runtime=malformed, provider="claude")
+        self.assertEqual(list(self.project.iterdir()), [])
 
     def test_delivery_export_retains_dependency_without_executing_runtime(self):
         path, requirement = self.delivery_requirement()

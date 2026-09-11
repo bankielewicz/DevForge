@@ -201,11 +201,19 @@ grants native hook trust or demonstrates actual callback activation.
 
 A delivery-aware package declares `hooks/runtime-requirements.json` with the
 versioned `devforge.runtime-requirement/v1` contract and its provider. Installation
-then requires an explicit `--runtime` executable. Before writing, the installer
-checks `delivery capabilities`, binds the executable's bytes and records the
-reported compatibility. It does not discover an executable through PATH or infer
-native activation from the capability response. Export preserves the requirement;
-export and structural validation report the eventual host runtime as unverified.
+then requires an explicit `--runtime` executable to probe and an explicit
+`--validator` DevForge executable to probe it with; both must be absolute,
+canonical, regular executables with exactly one hard link, and the validator is
+never taken from `--runtime`'s value by default, an environment variable or PATH.
+The installer delegates to `devforge install probe-runtime`, which runs
+`delivery capabilities` under a five-second deadline and a 1 MiB output budget,
+admits either the eight-field `devforge.delivery-capabilities/v1` base contract or
+that base plus all seven declared extensions, and reports `base` or `extended`.
+A missing base field, an unknown field, a partial extension set or any malformed
+value is refused, and the installer writes nothing on refusal; Python performs no
+capability validation. Compatibility is mechanical only: native activation stays
+unverified. Export preserves the requirement; export and structural validation
+report the eventual host runtime as unverified.
 
 Before integrated release, validate runtime compatibility, finish native launcher
 admission and observe native task completion and message rendering, update the retained provider packages and shared
