@@ -112,9 +112,10 @@ starts.
 | [`README.md`](../../README.md) capability list | names the subcommand |
 | [`docs/cli-quickstart.md`](../cli-quickstart.md) | the structural framework check example |
 
-`scripts/validate_framework.py`, `scripts/runtime_requirements.py` and
-`tests/test_validation.py` are unchanged and remain the legacy regression
-baseline; `tests/validate_framework.rs` compares the compiled command with the
+`scripts/validate_framework.py` and `scripts/runtime_requirements.py` are
+unchanged and remain the legacy regression baseline (`tests/test_validation.py`
+was retired once this mapping was complete; see
+[legacy test retirement](legacy-test-retirement.md)); `tests/validate_framework.rs` compares the compiled command with the
 Python script on synthetic trees and on the companion checkout. Retiring the
 Python script is a separate later decision.
 
