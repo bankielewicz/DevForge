@@ -17,6 +17,7 @@ mod delivery;
 mod demo;
 mod install;
 mod plugin;
+mod receipt;
 mod validate_framework;
 mod validate_mvp;
 mod verify_poc;
@@ -52,6 +53,12 @@ enum Action {
     Install {
         #[command(subcommand)]
         action: install::Action,
+    },
+    /// Deterministic receipt checks for a checkpoint/transfer handoff; a listing
+    /// and a byte-identity guarantee, never semantic acceptance.
+    Receipt {
+        #[command(subcommand)]
+        action: receipt::Action,
     },
     /// Structural document validation; reports only, never behavioral acceptance.
     Validate {
@@ -1005,6 +1012,7 @@ fn execute(cli: Cli) -> Result<Value> {
         | Action::Delivery { .. }
         | Action::Demo(..)
         | Action::Install { .. }
+        | Action::Receipt { .. }
         | Action::Validate { .. }
         | Action::VerifyPoc(..) => unreachable!(),
     }
@@ -1013,6 +1021,10 @@ fn main() {
     let cli = Cli::parse();
     if let Action::Delivery { action } = &cli.command {
         delivery::main(action, cli.state.as_deref());
+        return;
+    }
+    if let Action::Receipt { action } = &cli.command {
+        receipt::main(action);
         return;
     }
     if let Action::Validate { action } = &cli.command {
