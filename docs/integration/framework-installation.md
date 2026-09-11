@@ -148,7 +148,7 @@ half of `tests/test_installer.py`, which stays in place and passing.
 | `test_delivery_validator_aliased_by_a_destination_blocks_all_installation_writes` | `a_destination_aliasing_the_validating_executable_blocks_all_installation_writes` |
 | `test_delivery_guard_refusal_blocks_every_installation_write` | `a_destination_aliasing_the_validating_executable_blocks_all_installation_writes` (a real guard refusal, not an injected one) |
 | `test_delivery_validator_must_be_an_absolute_canonical_single_link_executable` | NOT_APPLICABLE: there is no `--validator` to select |
-| `test_delivery_binary_mutation_after_probe_blocks_all_installation_writes` | NOT_RUN: the legacy case mutated the runtime from inside a mocked `plan_hook_merge`. A black-box reproduction cannot land inside that window deterministically. The rule itself is covered by the `sha256_after` comparison before writes, which `delivery_binary_mutation_during_probe_blocks_all_installation_writes` and the guard's digest check exercise. |
+| `test_delivery_binary_mutation_after_probe_blocks_all_installation_writes` | NOT_RUN, and the rule is **not covered** by the Rust suite. The rule is implemented: `install_framework` recomputes `runtime_digest(selected)` and compares it to the probe report's `sha256_after` immediately before the writes, refusing with `selected runtime binary changed before installation writes` (`src/install.rs`, in `install_framework`, just after the runtime-overlap loop). That is verified by inspection only; deleting it leaves the whole suite GREEN. The legacy case mutated the runtime from inside a mocked `plan_hook_merge`, and no black-box reproduction can land in that window deterministically, so no timing test is added. `delivery_binary_mutation_during_probe_blocks_all_installation_writes` exercises the different, in-probe `before == after` check. The validator half of the same rule is covered directly, through the shared `guard_writes`, by `tests/probe_runtime.rs::a_validator_whose_bytes_changed_since_the_probe_is_refused`. |
 | `test_delivery_validator_mutation_after_probe_blocks_all_installation_writes` | NOT_RUN: same reason. `tests/probe_runtime.rs::a_validator_whose_bytes_changed_since_the_probe_is_refused` covers the compiled decision directly. |
 | `test_delivery_selected_validator_cannot_be_overwritten_by_installation` | NOT_APPLICABLE: guard check 1 (a destination naming the validator) is unreachable from `install framework`, because the probe refuses a validating executable inside the project first. That refusal is `a_validating_executable_inside_the_project_is_refused_before_execution`; `tests/probe_runtime.rs::a_destination_that_names_the_validating_executable_is_refused` covers check 1 itself. |
 | `test_export_preserves_runtime_and_excludes_authoring_material` | NOT_RUN: export is unported |
@@ -161,6 +161,11 @@ Added beyond the legacy suite:
 - `a_recorded_manual_expert_adoption_is_preserved_and_its_flags_are_not_offered` —
   an existing `manual_expert_adoption` record survives an install unchanged, and
   `--manual-evidence` / `--manual-experts-only` are rejected by the parser.
+- `only_the_providers_that_declared_a_requirement_are_probed` — `--provider both`
+  with a requirement on one provider only admits a runtime that supports just
+  that provider, records `providers` as only the declaring one, and records no
+  evidence for the other; the unchanged legacy installer is asserted to accept
+  the same selection identically.
 - `the_legacy_installer_and_the_compiled_command_agree_and_cross_refresh` — the
   legacy oracle: `/usr/bin/python3 scripts/install_framework.py` and the compiled
   command install the same delivery-aware fixture into two projects with one
@@ -222,9 +227,13 @@ These are the only known observable differences from
 `scripts/demo.py` places each candidate at
 `<framework>/.poc/<run id>/<slug>` and installs with
 `--provider both --include-experts` and `target/debug/devforge` as both runtime
-and validator. That call has been failing before this migration, and it still
-fails after it. Observed on 2026-09-11 against
-`framework/DevForgeAI` with the demo's own layout and arguments:
+and validator. That call was already failing before this migration, and it still
+fails after it, but the three causes below are not all of the same age: causes 1
+and 2 predate this slice and refuse the legacy script today, while **cause 3 is
+introduced by this slice** — the `--project`/`--framework` separation check is
+parity exception 2, a predicate the legacy installer never applied. Observed on
+2026-09-11 against `framework/DevForgeAI` with the demo's own layout and
+arguments:
 
 | Tool | Observed refusal |
 | --- | --- |
@@ -240,7 +249,8 @@ Three independent causes, none of them fixed by a one-line change to the demo:
 2. Cargo hard-links `target/debug/devforge` (link count 2), which
    `--runtime` and the legacy `--validator` both refuse.
 3. The candidate project lives inside the framework, which the compiled
-   command refuses.
+   command refuses. This cause is new with this slice; the legacy script does
+   not compare the two paths.
 
 The demo's `install(...)` call is switched to the compiled command and fails
 loudly, so the defect is visible rather than silent. Repairing it is a

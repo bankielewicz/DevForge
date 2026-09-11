@@ -1420,6 +1420,66 @@ fn delivery_compatible_runtime_records_exact_evidence_and_preserves_user_hooks()
     assert_eq!(fixture.snapshot(), before);
 }
 
+/// Only the providers whose plugin declared a runtime requirement are probed,
+/// exactly as the legacy installer passed its `requirements` and not its whole
+/// provider selection. A runtime supporting only the declaring provider is
+/// therefore admitted, and the recorded evidence names only that provider.
+#[test]
+fn only_the_providers_that_declared_a_requirement_are_probed() {
+    let fixture = fixture();
+    let (_, requirement) = fixture.delivery_requirement("codex");
+    // Claude ships an ordinary command hook group and no runtime requirement.
+    fixture.hook_source("claude", &hook_group("claude-only"), false);
+    let mut capabilities = base_capabilities();
+    capabilities["supported_providers"] = json!(["codex"]);
+    let runtime = fixture.serving(&capabilities.to_string());
+    let result = installed(&fixture, &["--runtime", runtime.to_str().unwrap()]);
+    assert_eq!(result["providers"], json!(["codex", "claude"]));
+    assert_eq!(
+        result["runtime_requirements"],
+        json!({"codex": requirement})
+    );
+    let inventory = fixture.inventory();
+    assert_eq!(
+        inventory["runtime_evidence"]["codex"]["providers"],
+        json!(["codex"])
+    );
+    assert!(
+        inventory["runtime_evidence"].get("claude").is_none(),
+        "a provider without a requirement records no evidence: {inventory}"
+    );
+    // The unchanged legacy installer admits the same selection, into its own project.
+    let legacy = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/install_framework.py");
+    assert!(Path::new(PYTHON).is_file() && legacy.is_file());
+    let validator = copied(fixture.root(), "devforge-validator");
+    let project = fixture.root().join("legacy-project");
+    fs::create_dir(&project).unwrap();
+    let run = spawn(
+        Path::new(PYTHON),
+        &[
+            legacy.to_str().unwrap(),
+            "--framework",
+            fixture.framework.to_str().unwrap(),
+            "--project",
+            project.to_str().unwrap(),
+            "--provider",
+            "both",
+            "--runtime",
+            runtime.to_str().unwrap(),
+            "--validator",
+            validator.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run.code, 0, "legacy install: {} {}", run.stdout, run.stderr);
+    let legacy_inventory = read_json(&project.join(".devforge-install.json"));
+    assert_eq!(
+        legacy_inventory["runtime_evidence"]["codex"]["providers"],
+        json!(["codex"])
+    );
+    assert!(legacy_inventory["runtime_evidence"].get("claude").is_none());
+}
+
 fn validator_identity(binary: &Path) -> Value {
     let report = spawn(binary, &["install", "identity"], &[]);
     assert_eq!(report.code, 0, "{}", report.stderr);

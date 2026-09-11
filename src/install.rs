@@ -4215,7 +4215,14 @@ fn install_framework(
         false => {
             let selected = runtime
                 .context("delivery-aware project installation requires --runtime ABSOLUTE_PATH")?;
-            let names: Vec<String> = providers.iter().map(|name| (*name).to_string()).collect();
+            // Only the providers whose plugin declared a requirement are probed,
+            // in selection order, exactly as the legacy installer passed its
+            // `requirements` rather than its whole provider selection.
+            let names: Vec<String> = providers
+                .iter()
+                .filter(|name| requirements.contains_key(**name))
+                .map(|name| (*name).to_string())
+                .collect();
             Some(probe_runtime(selected, &names, Some(&project))?)
         }
     };
