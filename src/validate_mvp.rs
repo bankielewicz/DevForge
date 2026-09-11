@@ -47,6 +47,12 @@ pub enum Action {
         #[arg(long)]
         report: Option<PathBuf>,
     },
+    /// Check a DevForgeAI checkout's structure; never execute its code or hooks.
+    Framework {
+        /// Selected DevForgeAI framework root.
+        #[arg(long)]
+        framework: PathBuf,
+    },
 }
 
 /// Ordered JSON document. Object entries keep document order so findings are
@@ -214,7 +220,13 @@ struct Report {
 }
 
 pub fn main(action: &Action) {
-    let Action::Mvp { mvp, report } = action;
+    let (mvp, report) = match action {
+        Action::Mvp { mvp, report } => (mvp, report),
+        Action::Framework { framework } => {
+            crate::validate_framework::main(framework);
+            return;
+        }
+    };
     match run(mvp, report.as_deref()) {
         Ok(status) => std::process::exit(status),
         Err(error) => {
