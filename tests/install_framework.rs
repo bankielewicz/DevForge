@@ -2386,6 +2386,61 @@ fn export_accepts_one_provider_and_no_adoption_inputs() {
 /// the same reported digests and runtime declaration.
 #[test]
 fn the_legacy_exporter_and_the_compiled_command_agree() {
+// ---- legacy float hook identities -----------------------------------------
+
+/// Reproduction of PR #14 review finding P2, copied from
+/// `tests/review_install.rs::review_legacy_float_hook_inventory_can_be_refreshed`
+/// in the review worktree with its assertions unchanged: a valid floating-point
+/// `timeout` the legacy installer recorded must not make the installation
+/// unrefreshable by the compiled command.
+#[test]
+fn legacy_float_hook_inventory_can_be_refreshed() {
+    let f = fixture();
+    let group = json!({"hooks":[{"type":"command","command":"true","timeout":0.000001}]});
+    f.hook_source("claude", &group, true);
+    let legacy = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/install_framework.py");
+    let first = spawn(
+        Path::new(PYTHON),
+        &[
+            legacy.to_str().unwrap(),
+            "--project",
+            f.project.to_str().unwrap(),
+            "--framework",
+            f.framework.to_str().unwrap(),
+            "--provider",
+            "claude",
+        ],
+        &[],
+    );
+    assert_eq!(first.code, 0, "legacy: {}", first.stdout);
+    let before = f.snapshot();
+    let refresh = install(&f, &["--provider", "claude"]);
+    eprintln!(
+        "Rust refresh: code={} {}; unchanged={}",
+        refresh.code,
+        refresh.stdout,
+        before == f.snapshot()
+    );
+    assert_eq!(
+        refresh.code, 0,
+        "valid legacy hook must remain refreshable: {}",
+        refresh.stdout
+    );
+}
+
+/// The identity itself, in both directions. `group_digest` must hash the bytes
+/// `json.dumps(group, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+/// allow_nan=False)` produces, whose float layout is `repr(float)`:
+///
+/// ```text
+/// /usr/bin/python3 -c 'import json; print(json.dumps({"hooks":[{"type":"command",
+///   "command":"true","timeout":0.000001}]},sort_keys=True,separators=(",",":"),
+///   ensure_ascii=False))'
+/// {"hooks":[{"command":"true","timeout":1e-06,"type":"command"}]}
+/// ```
+#[test]
+fn a_float_hook_identity_survives_a_cross_refresh_and_an_edit_is_still_refused() {
+    const PYTHON_GROUP: &str = r#"{"hooks":[{"command":"true","timeout":1e-06,"type":"command"}]}"#;
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let legacy = manifest.join("scripts/install_framework.py");
     assert!(
@@ -2448,4 +2503,162 @@ fn the_legacy_exporter_and_the_compiled_command_agree() {
         assert_eq!(legacy_result["output"], json!(python_out));
         assert_eq!(result["output"], json!(rust_out));
     }
+        "the legacy baseline must be present: {PYTHON} and {}",
+        legacy.display()
+    );
+    let f = fixture();
+    let group = json!({"hooks": [{"type": "command", "command": "true", "timeout": 0.000001}]});
+    f.hook_source("claude", &group, true);
+    let legacy_install = |project: &Path| -> Run {
+        spawn(
+            Path::new(PYTHON),
+            &[
+                legacy.to_str().unwrap(),
+                "--project",
+                project.to_str().unwrap(),
+                "--framework",
+                f.framework.to_str().unwrap(),
+                "--provider",
+                "claude",
+            ],
+            &[],
+        )
+    };
+    let first = legacy_install(&f.project);
+    assert_eq!(first.code, 0, "legacy: {} {}", first.stdout, first.stderr);
+    let settings = f.settings_path("claude");
+    let settings_bytes = fs::read(&settings).unwrap();
+    let recorded = f.inventory()["managed_hooks"]["claude"].clone();
+    assert_eq!(
+        recorded["owned"][0]["sha256"].as_str(),
+        Some(sha(PYTHON_GROUP.as_bytes()).as_str()),
+        "the legacy identity is the digest of the Python encoding: {recorded}"
+    );
+    // The compiled refresh accepts that identity, records it unchanged, and does
+    // not rewrite a semantically identical settings document.
+    installed(&f, &["--provider", "claude"]);
+    assert_eq!(f.inventory()["managed_hooks"]["claude"], recorded);
+    assert_eq!(
+        fs::read(&settings).unwrap(),
+        settings_bytes,
+        "a semantically identical settings document is never rewritten"
+    );
+    // The legacy installer accepts the inventory the compiled command wrote back.
+    let back = legacy_install(&f.project);
+    assert_eq!(
+        back.code, 0,
+        "legacy refresh: {} {}",
+        back.stdout, back.stderr
+    );
+    assert_eq!(f.inventory()["managed_hooks"]["claude"], recorded);
+    assert_eq!(fs::read(&settings).unwrap(), settings_bytes);
+    // The other direction: a settings document `serde_json` wrote, which lays the
+    // same float out as `1e-6`, is read back by the legacy installer, which must
+    // derive the same identity from it and rewrite nothing.
+    let second = f.root().join("second-project");
+    fs::create_dir_all(&second).unwrap();
+    let fresh = spawn(
+        Path::new(BIN),
+        &[
+            "--project",
+            second.to_str().unwrap(),
+            "install",
+            "framework",
+            "--framework",
+            f.framework.to_str().unwrap(),
+            "--provider",
+            "claude",
+        ],
+        &[],
+    );
+    assert_eq!(
+        fresh.code, 0,
+        "compiled install: {} {}",
+        fresh.stdout, fresh.stderr
+    );
+    let compiled = second.join(".claude/settings.local.json");
+    let compiled_bytes = fs::read(&compiled).unwrap();
+    let refreshed = legacy_install(&second);
+    assert_eq!(
+        refreshed.code, 0,
+        "legacy refresh of the compiled tree: {} {}",
+        refreshed.stdout, refreshed.stderr
+    );
+    assert_eq!(fs::read(&compiled).unwrap(), compiled_bytes);
+    assert_eq!(
+        read_json(&second.join(".devforge-install.json"))["managed_hooks"]["claude"]["owned"][0]
+            ["sha256"]
+            .as_str(),
+        Some(sha(PYTHON_GROUP.as_bytes()).as_str()),
+    );
+    // A genuine local edit of the owned group is still refused, before any write.
+    let mut document = read_json(&settings);
+    document["hooks"]["Stop"][0]["hooks"][0]["timeout"] = json!(0.000002);
+    write(&settings, document.to_string().as_bytes());
+    let edited = f.snapshot();
+    blocked(
+        &install(&f, &["--provider", "claude"]),
+        "local edit/collision in owned claude hook: Stop",
+    );
+    assert_eq!(f.snapshot(), edited);
+}
+
+// ---- validating-executable placement on every run --------------------------
+
+/// Reproduction of PR #14 review finding P1, copied from
+/// `tests/review_install.rs::review_installer_inside_managed_destination_without_requirement_refuses_before_writes`
+/// with its assertions unchanged: with no provider declaring a runtime
+/// requirement, an installer that sits at one of the installation's own managed
+/// destinations must be refused before the first write.
+#[test]
+fn installer_inside_managed_destination_without_requirement_refuses_before_writes() {
+    let f = fixture();
+    write(
+        &f.plugin("claude").join("agents/first.md"),
+        b"agent installed before skill",
+    );
+    let folder = f.project.join(".claude/skills/demo");
+    let binary = copied(&folder, "SKILL.md");
+    write(
+        &f.project.join(".devforge-install.json"),
+        json!({"schema":1,"files":{".claude/skills/demo/SKILL.md":sha(&fs::read(&binary).unwrap())}})
+            .to_string()
+            .as_bytes(),
+    );
+    let before = f.snapshot();
+    let result = install_from(&binary, &f, &["--provider", "claude"], &[]);
+    let after = f.snapshot();
+    let added: Vec<_> = after.keys().filter(|p| !before.contains_key(*p)).collect();
+    eprintln!(
+        "result={} {}; new project files={:?}",
+        result.code, result.stdout, added
+    );
+    assert!(
+        before == after,
+        "refusal must precede writes; added={:?}; result={}",
+        added,
+        result.stdout
+    );
+    assert_eq!(result.code, 2, "validator inside project must refuse");
+}
+
+/// The same placement check names its reason, and covers the framework as well
+/// as the project, on a run where nothing declares a runtime requirement.
+#[test]
+fn the_validating_executable_placement_is_checked_without_any_requirement() {
+    let f = fixture();
+    let inside = copied(&f.project.join("tools"), "devforge");
+    let before = f.snapshot();
+    blocked(
+        &install_from(&inside, &f, &["--provider", "claude"], &[]),
+        "validating executable must be outside the installation project",
+    );
+    assert_eq!(f.snapshot(), before);
+    let framework = fixture();
+    let vendored = copied(&framework.framework.join("tools"), "devforge");
+    blocked(
+        &install_from(&vendored, &framework, &["--provider", "claude"], &[]),
+        "validating executable must be outside the framework",
+    );
+    assert!(framework.entries().is_empty());
 }

@@ -3740,6 +3740,48 @@ fn guard_validator(project: &Path) -> Result<Value> {
     guard_writes(&project, &map["report"], &relatives)
 }
 
+/// The pre-write protections the running validating executable owes itself,
+/// decided against the identity it was bound with: no destination may name it,
+/// no existing destination may already alias its inode, and its bytes must still
+/// be the bound ones. `install framework` applies these on every run, whether or
+/// not a provider declared a runtime requirement; the delivery-aware path reaches
+/// them through `guard_writes` once the probe report is bound, so the two cannot
+/// drift.
+fn protect_validator(
+    project: &Path,
+    running: &Path,
+    bound: &str,
+    relatives: &[&str],
+) -> Result<()> {
+    // 1. No destination may name this executable, however the caller spells it.
+    for relative in relatives {
+        let destination = project.join(relative);
+        ensure!(
+            destination != running
+                && !fs::canonicalize(&destination).is_ok_and(|real| real == running),
+            "selected validator binary overlaps an installation destination"
+        );
+    }
+    // 2. No existing destination may already be another name for its inode.
+    let identity = fs::metadata(running)?;
+    for relative in relatives {
+        let Ok(destination) = fs::metadata(project.join(relative)) else {
+            continue;
+        };
+        ensure!(
+            !destination.is_file()
+                || (destination.dev(), destination.ino()) != (identity.dev(), identity.ino()),
+            "installation would overwrite the selected validator binary through an alias"
+        );
+    }
+    // 3. The bytes that were bound must still be the bytes about to be protected.
+    ensure!(
+        crate::hash(&fs::read(running)?) == bound,
+        "selected validator binary changed before installation writes"
+    );
+    Ok(())
+}
+
 /// Decide, for an already-resolved project and an already-bound probe report,
 /// whether the named destinations may be written against this executable. The
 /// stdin-reading CLI action and the in-process installer share this one
@@ -3769,35 +3811,15 @@ fn guard_writes(project: &Path, report: &Value, relatives: &[&str]) -> Result<Va
             == Some(project),
         "runtime validation bound a different project"
     );
-    // 1. No destination may name this executable, however the caller spells it.
-    for relative in relatives {
-        let destination = project.join(relative);
-        ensure!(
-            destination != running
-                && !fs::canonicalize(&destination).is_ok_and(|real| real == running),
-            "selected validator binary overlaps an installation destination"
-        );
-    }
-    // 2. No existing destination may already be another name for its inode.
-    let identity = fs::metadata(&running)?;
-    for relative in relatives {
-        let Ok(destination) = fs::metadata(project.join(relative)) else {
-            continue;
-        };
-        ensure!(
-            !destination.is_file()
-                || (destination.dev(), destination.ino()) != (identity.dev(), identity.ino()),
-            "installation would overwrite the selected validator binary through an alias"
-        );
-    }
-    // 3. The bytes that probed must still be the bytes about to be protected.
-    ensure!(
+    protect_validator(
+        project,
+        &running,
         report
             .pointer("/validator/executable/sha256")
             .and_then(Value::as_str)
-            == Some(digest.as_str()),
-        "selected validator binary changed before installation writes"
-    );
+            .unwrap_or_default(),
+        relatives,
+    )?;
     Ok(json!({
         "schema_version": GUARD_SCHEMA,
         "project": project,
@@ -3957,12 +3979,115 @@ fn hook_destination(provider: &str) -> Result<&'static str> {
         .with_context(|| format!("unknown provider: {provider}"))
 }
 
-/// Content identity of one hook group. `serde_json::Map` is key-sorted and the
-/// compact encoder emits no separator spaces, so this reproduces the legacy
+/// CPython's `float.__repr__` (`float_repr_style == "short"`), which is what
+/// `json.dumps` writes for a float. Both encoders already agree on the shortest
+/// round-trip digit string — Rust's `{:e}` produces it — and only the layout
+/// differs: positional notation, always with a fractional part, when the
+/// scientific exponent is in `-4..16`, and otherwise `d[.ddd]e<sign><at least two
+/// exponent digits>`. `1e-06`, `1e+16`, `1.5e-07`, `0.0001`,
+/// `123456789012345.0`, `1e+100`, `-0.0`.
+fn python_float(value: f64) -> String {
+    let scientific = format!("{value:e}");
+    let (mantissa, exponent) = scientific
+        .split_once('e')
+        .expect("Rust writes an exponent for every finite float");
+    let exponent: i32 = exponent.parse().expect("a decimal exponent");
+    let (sign, mantissa) = match mantissa.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", mantissa),
+    };
+    if !(-4..16).contains(&exponent) {
+        let direction = if exponent < 0 { '-' } else { '+' };
+        return format!("{sign}{mantissa}e{direction}{:02}", exponent.abs());
+    }
+    let digits: String = mantissa.chars().filter(|digit| *digit != '.').collect();
+    if exponent < 0 {
+        let zeros = "0".repeat((-exponent - 1) as usize);
+        return format!("{sign}0.{zeros}{digits}");
+    }
+    let whole = exponent as usize + 1;
+    match digits.len() > whole {
+        true => format!("{sign}{}.{}", &digits[..whole], &digits[whole..]),
+        false => format!("{sign}{digits}{}.0", "0".repeat(whole - digits.len())),
+    }
+}
+
+/// Python's `ensure_ascii=False` escape set: `"`, `\` and the control characters
+/// below 0x20, written as `\b \t \n \f \r` or lowercase `\u00XX`. Everything
+/// else — DEL, `/`, every non-ASCII character — is emitted literally.
+fn python_string(text: &str, out: &mut String) {
+    out.push('"');
+    for character in text.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{8}' => out.push_str("\\b"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\u{c}' => out.push_str("\\f"),
+            '\r' => out.push_str("\\r"),
+            control if (control as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", control as u32));
+            }
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+}
+
+/// `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+/// allow_nan=False)` as CPython writes it. `serde_json`'s compact encoder agrees
+/// on objects, arrays, literals, integers and strings, but lays floats out with
+/// ryu (`1e-6`, `1e16`) where Python uses `repr` (`1e-06`, `1e+16`), so a valid
+/// float a legacy installation recorded would otherwise change identity here.
+fn python_json(value: &Value, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
+        // A JSON number without a fraction or exponent stays an integer, as it
+        // does in Python. `serde_json` cannot hold a non-finite float, which
+        // `allow_nan=False` would refuse anyway.
+        Value::Number(number) => match (number.is_i64() || number.is_u64(), number.as_f64()) {
+            (false, Some(float)) if float.is_finite() => out.push_str(&python_float(float)),
+            _ => out.push_str(&number.to_string()),
+        },
+        Value::String(text) => python_string(text, out),
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                python_json(item, out);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            // `sort_keys=True` orders by code point, which is byte order in UTF-8.
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (index, key) in keys.into_iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                python_string(key, out);
+                out.push(':');
+                python_json(&map[key.as_str()], out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+/// Content identity of one hook group: the digest of the exact bytes the legacy
 /// `json.dumps(group, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-/// allow_nan=False)` byte for byte. JSON booleans and integers stay distinct.
+/// allow_nan=False)` produced, so an identity either installer recorded is read
+/// back unchanged by the other. JSON booleans and integers stay distinct.
 fn group_digest(group: &Value) -> String {
-    crate::hash(group.to_string().as_bytes())
+    let mut encoded = String::new();
+    python_json(group, &mut encoded);
+    crate::hash(encoded.as_bytes())
 }
 
 fn hook_record(event: &str, definition: &Value) -> Value {
@@ -4263,6 +4388,23 @@ fn install_framework(
         crate::separate(&project, &framework),
         "project and framework must be separate directories"
     );
+    // The running compiled CLI is the validating authority on every installation,
+    // not only on the delivery-aware ones, so its placement is decided here:
+    // before the framework is read, and long before any write. An executable
+    // inside the project or the framework can be one of this installation's own
+    // destinations. The legacy `scripts/install_framework.py` applied its
+    // `--validator` checks only when a provider declared a runtime requirement;
+    // this is a deliberate strengthening, recorded in
+    // `docs/integration/framework-installation.md`.
+    let validator = executable_identity()?;
+    ensure!(
+        crate::separate(&validator.0, &project),
+        "validating executable must be outside the installation project"
+    );
+    ensure!(
+        crate::separate(&validator.0, &framework),
+        "validating executable must be outside the framework"
+    );
     let providers: Vec<&str> = if provider == "both" {
         PROVIDER_NAMES.to_vec()
     } else {
@@ -4453,28 +4595,36 @@ fn install_framework(
     }
     let mut record_bytes = serde_json::to_vec_pretty(&updated)?;
     record_bytes.push(b'\n');
-    if let Some(report) = &report {
-        let selected = runtime.expect("a probed runtime was selected");
-        let mut write_paths: BTreeSet<String> = planned.keys().cloned().collect();
-        write_paths.extend(hook_writes.keys().cloned());
-        write_paths.extend(retired.iter().cloned());
-        write_paths.insert(INVENTORY.to_string());
-        for relative in &write_paths {
+    // Every destination this installation would touch, preflighted against the
+    // protections the validating authority owes itself. Those apply to every run;
+    // the selected runtime's own protections apply only when one was probed.
+    let mut write_paths: BTreeSet<String> = planned.keys().cloned().collect();
+    write_paths.extend(hook_writes.keys().cloned());
+    write_paths.extend(retired.iter().cloned());
+    write_paths.insert(INVENTORY.to_string());
+    let relatives: Vec<&str> = write_paths.iter().map(String::as_str).collect();
+    match &report {
+        Some(report) => {
+            let selected = runtime.expect("a probed runtime was selected");
+            for relative in &write_paths {
+                ensure!(
+                    project.join(relative) != *selected,
+                    "selected runtime binary overlaps an installation destination"
+                );
+            }
+            let current = runtime_digest(selected)?;
             ensure!(
-                project.join(relative) != *selected,
-                "selected runtime binary overlaps an installation destination"
+                report["sha256_after"].as_str() == Some(current.as_str()),
+                "selected runtime binary changed before installation writes"
             );
+            // The validating authority is protected exactly like the runtime it
+            // admitted, and decides that itself: no destination may name it, none may
+            // already alias its inode, and its bytes must still be the probed ones.
+            guard_writes(&project, report, &relatives)?;
         }
-        let current = runtime_digest(selected)?;
-        ensure!(
-            report["sha256_after"].as_str() == Some(current.as_str()),
-            "selected runtime binary changed before installation writes"
-        );
-        // The validating authority is protected exactly like the runtime it
-        // admitted, and decides that itself: no destination may name it, none may
-        // already alias its inode, and its bytes must still be the probed ones.
-        let relatives: Vec<&str> = write_paths.iter().map(String::as_str).collect();
-        guard_writes(&project, report, &relatives)?;
+        // Without a probe the same decision is reached against the identity bound
+        // when this installation began.
+        None => protect_validator(&project, &validator.0, &validator.1, &relatives)?,
     }
     for relative in &retired {
         let destination = safe_destination(&project, relative)?;
@@ -4712,8 +4862,137 @@ fn manual_experts(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_iso, time};
-    use serde_json::json;
+    use super::{group_digest, parse_iso, time};
+    use serde_json::{Value, json};
+
+    /// Hook identities are the digest of the exact bytes
+    /// `json.dumps(group, sort_keys=True, separators=(",", ":"),
+    /// ensure_ascii=False, allow_nan=False)` writes, so a valid float a legacy
+    /// installation recorded stays refreshable. Floats follow CPython's
+    /// `float.__repr__`; integers, strings, containers and literals do not change.
+    ///
+    /// Captured on Python 3.12.3:
+    /// ```text
+    /// /usr/bin/python3 -c 'import json; print(json.dumps([0.000001,1e16,1.5e-7,
+    ///   0.0001,123456789012345.0,12345678901234567.0,1e100,-0.0,1.0,5],
+    ///   separators=(",",":")))'
+    /// [1e-06,1e+16,1.5e-07,0.0001,123456789012345.0,1.2345678901234568e+16,1e+100,-0.0,1.0,5]
+    /// ```
+    #[test]
+    fn hook_identities_reproduce_the_python_encoding() {
+        for (value, text) in [
+            (json!(0.000001), "1e-06"),
+            (json!(1e16), "1e+16"),
+            (json!(1.5e-7), "1.5e-07"),
+            (json!(0.0001), "0.0001"),
+            (json!(123456789012345.0), "123456789012345.0"),
+            (json!(12345678901234567.0), "1.2345678901234568e+16"),
+            (json!(1e100), "1e+100"),
+            (json!(-0.0), "-0.0"),
+            (json!(1.0), "1.0"),
+            (json!(5), "5"),
+            // The positional window is `-4 <= exponent < 16`, both ends.
+            (json!(0.00001), "1e-05"),
+            (json!(1e15), "1000000000000000.0"),
+            (json!(1e17), "1e+17"),
+            (json!(12345.678), "12345.678"),
+            (json!(2.5), "2.5"),
+            (json!(-1.5e-7), "-1.5e-07"),
+            // Exponents are signed and at least two digits, never padded further.
+            (json!(1.7976931348623157e308), "1.7976931348623157e+308"),
+            (json!(5e-324), "5e-324"),
+            (json!(-9007199254740993i64), "-9007199254740993"),
+            (json!(18446744073709551615u64), "18446744073709551615"),
+        ] {
+            assert_eq!(group_digest(&value), crate::hash(text.as_bytes()), "{text}");
+        }
+        assert_eq!(
+            group_digest(&json!([
+                0.000001,
+                1e16,
+                1.5e-7,
+                0.0001,
+                123456789012345.0,
+                12345678901234567.0,
+                1e100,
+                -0.0,
+                1.0,
+                5
+            ])),
+            crate::hash(
+                b"[1e-06,1e+16,1.5e-07,0.0001,123456789012345.0,1.2345678901234568e+16,1e+100,-0.0,1.0,5]"
+            )
+        );
+        // The hook group the legacy installer records for a floating `timeout`.
+        assert_eq!(
+            group_digest(&json!({"hooks": [
+                {"type": "command", "command": "true", "timeout": 0.000001}
+            ]})),
+            crate::hash(br#"{"hooks":[{"command":"true","timeout":1e-06,"type":"command"}]}"#)
+        );
+        // Parsed input, which is how every recorded and declared hook definition
+        // reaches this function:
+        //   /usr/bin/python3 -c 'import json
+        //   for t in ["1E2","1e-6"]: print(json.dumps(json.loads(t),separators=(",",":")))'
+        //   100.0 / 1e-06
+        for (text, expected) in [("1E2", "100.0"), ("1e-6", "1e-06")] {
+            let parsed: Value = serde_json::from_str(text).expect("valid JSON");
+            assert_eq!(
+                group_digest(&parsed),
+                crate::hash(expected.as_bytes()),
+                "{text}"
+            );
+        }
+        // The two decoding residuals recorded as parity exception 5, which no
+        // encoder can recover from a `serde_json::Value`: `serde_json` decodes
+        // `-0` and any integer beyond `u64` as an `f64`, where Python keeps an
+        // `int` and writes `0` and every digit respectively.
+        for (text, encoded) in [
+            ("-0", "-0.0"),
+            ("12345678901234567890123", "1.2345678901234568e+22"),
+        ] {
+            let parsed: Value = serde_json::from_str(text).expect("valid JSON");
+            assert!(parsed.is_f64(), "{text}");
+            assert_eq!(
+                group_digest(&parsed),
+                crate::hash(encoded.as_bytes()),
+                "{text}"
+            );
+        }
+        // Keys sort, objects and arrays carry no separator spaces, and the JSON
+        // literals are Python's own.
+        assert_eq!(
+            group_digest(&json!({"b": 1, "a": {"d": true, "c": null}})),
+            crate::hash(br#"{"a":{"c":null,"d":true},"b":1}"#)
+        );
+        // Python's `ensure_ascii=False` escapes only `"`, `\` and control
+        // characters below 0x20, using `\b \t \n \f \r` and lowercase `\u00XX`;
+        // DEL, non-ASCII and `/` pass through. Captured from the same Python:
+        //   "a\"b\\c\u0000\u0001...\u0007\b\t\n\u000b\f\r\u000e...\u001f<DEL>é…/"
+        let mut text = String::from("a\"b\\c");
+        for code in 0..0x20u32 {
+            text.push(char::from_u32(code).expect("control character"));
+        }
+        text.push_str("\u{7f}\u{e9}\u{2028}\u{1f600}/");
+        let encoded = serde_json::to_string(&text).expect("string encoding");
+        assert!(
+            encoded.starts_with(r#""a\"b\\c\u0000\u0001\u0002"#),
+            "{encoded}"
+        );
+        assert!(
+            encoded.contains(r#"\u0007\b\t\n\u000b\f\r\u000e"#),
+            "{encoded}"
+        );
+        assert!(
+            encoded.ends_with("\\u001f\u{7f}\u{e9}\u{2028}\u{1f600}/\""),
+            "{encoded}"
+        );
+        assert_eq!(
+            group_digest(&json!(text)),
+            crate::hash(encoded.as_bytes()),
+            "serde_json escapes exactly the set Python escapes"
+        );
+    }
 
     #[test]
     fn timestamps_require_a_timezone_and_compare_by_instant() {
