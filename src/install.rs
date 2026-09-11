@@ -99,6 +99,23 @@ pub enum Action {
         #[arg(long)]
         runtime: Option<PathBuf>,
     },
+    /// Build a new runtime-only devforgeai plugin for one provider.
+    ///
+    /// Unaccepted staging: it takes exactly one provider, excludes project
+    /// experts and adoption evidence, never overwrites an existing export, and
+    /// executes nothing. Authoring material (`evals/`, `history/`,
+    /// `__pycache__/`, `*.pyc`, `provenance.json`) is left behind.
+    ExportPlugin {
+        /// DevForgeAI checkout containing providers/<provider>/plugins/devforgeai.
+        #[arg(long)]
+        framework: PathBuf,
+        /// The single provider package to export.
+        #[arg(long, value_parser = ["codex", "claude"])]
+        provider: String,
+        /// New directory named devforgeai, outside the source plugin.
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Install only the promoted Codex expert workflows from owner-selected adoption evidence.
     ManualExperts {
         /// DevForgeAI checkout containing providers/codex/plugins/devforgeai.
@@ -163,6 +180,11 @@ pub fn run(action: &Action, project: Option<&Path>) -> Result<Value> {
             *include_experts,
             runtime.as_deref(),
         ),
+        Action::ExportPlugin {
+            framework,
+            provider,
+            output,
+        } => export_plugin(framework, provider, output),
         Action::ManualExperts {
             framework,
             evidence,
@@ -4238,6 +4260,111 @@ fn plan_hook_merge(
         }
     }
     Ok((payload, Some(entry)))
+}
+
+// ---- runtime-only plugin export -------------------------------------------
+
+fn is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
+/// Build a new runtime-only plugin for one provider, exactly as the legacy
+/// `scripts/install_framework.py` `export_plugin()` did. An existing export is
+/// never overwritten, nothing outside the new directory is touched, no runtime
+/// is probed or executed, and every refusal precedes creating anything.
+fn export_plugin(framework: &Path, provider: &str, output: &Path) -> Result<Value> {
+    let framework = crate::resolved(framework)?;
+    let plugin = provider_plugin(&framework, provider)?;
+    let target = std::path::absolute(output)?;
+    let named = target.file_name().and_then(|name| name.to_str()) == Some("devforgeai");
+    ensure!(
+        named && !target.exists() && !is_symlink(&target),
+        "export needs a new directory named devforgeai"
+    );
+    for parent in target.ancestors().skip(1) {
+        ensure!(
+            !is_symlink(parent),
+            "symlink export parent: {}",
+            parent.display()
+        );
+        if parent.exists() {
+            ensure!(
+                parent.is_dir(),
+                "non-directory export parent: {}",
+                parent.display()
+            );
+        }
+    }
+    let destination = crate::resolved(&target)?;
+    ensure!(
+        !destination.starts_with(&plugin),
+        "export must be outside the source plugin"
+    );
+    // Read the bounded hook source and requirement; neither is executed.
+    crate::plugin::load_plugin_hooks(&plugin, provider)?;
+    let requirement = crate::plugin::load_requirement(&plugin, provider)?;
+    let component = format!(".{provider}-plugin");
+    let mut planned: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for (path, relative) in regular_files(&plugin)? {
+        let segments = parts(&relative);
+        if segments.contains(&"__pycache__")
+            || relative.extension().is_some_and(|suffix| suffix == "pyc")
+        {
+            continue;
+        }
+        let first = segments.first().copied().unwrap_or_default();
+        ensure!(
+            first == component || matches!(first, "skills" | "agents" | "hooks"),
+            "unsupported plugin component for this POC export: {}",
+            relative.display()
+        );
+        if segments.len() >= 3 && first == "skills" && authoring_only(&segments[2..]) {
+            continue;
+        }
+        if first == "hooks" && authoring_only(&segments[1..]) {
+            continue;
+        }
+        let name = relative.to_str().context("non-UTF8 plugin path")?;
+        planned.insert(name.to_string(), fs::read(&path)?);
+    }
+    let manifest_path = plugin.join(format!("{component}/plugin.json"));
+    let manifest = crate::plugin::read_json(&manifest_path).with_context(|| {
+        format!(
+            "cannot read the plugin manifest {}",
+            manifest_path.display()
+        )
+    })?;
+    ensure!(
+        manifest.get("name").and_then(Value::as_str) == Some("devforgeai"),
+        "plugin manifest name must be devforgeai"
+    );
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::create_dir(&target)?;
+    let mut digests = Map::new();
+    for (relative, data) in &planned {
+        let file = target.join(relative);
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&file, data)?;
+        digests.insert(relative.clone(), json!(crate::hash(data)));
+    }
+    let mut result = json!({
+        "status": "EXPORTED",
+        "provider": provider,
+        "output": destination,
+        "files_sha256": Value::Object(digests),
+        "behavior": "NOT_EVALUATED",
+        "adoption": "NOT_ACCEPTED_STAGING",
+        "authority": "compiled Rust CLI; no Python consulted",
+    });
+    if let Some(requirement) = requirement {
+        result["runtime_requirements"] = json!({provider: requirement});
+        result["runtime_host"] = json!("NOT_VERIFIED");
+    }
+    Ok(result)
 }
 
 // ---- project installation -------------------------------------------------
