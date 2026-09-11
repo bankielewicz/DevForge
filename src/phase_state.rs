@@ -2262,6 +2262,9 @@ fn phase_engine(state: &Path) -> R<()> {
 /// `phase_state.context` under `_guard`.
 fn context(state: &Path, package: &Path, info: &mut Info) -> R<Value> {
     let root = absolute(&json!(display(state)?), "state_root")?;
+    // `_held` owns the exclusive flock: it must stay bound until this function
+    // returns, on every exit path. Renaming it to `_` would drop it here and
+    // silently remove mutual exclusion for the rest of the read.
     let (dir, _held) = lock(&root)?;
     let state = State::load(&root, &dir, info)?;
     if state.reference_v2 {

@@ -279,3 +279,21 @@ and the exit code must match. Run the slice alone with:
 ```bash
 cargo +1.94.0 test --locked --test phase_state
 ```
+
+### A host clock artifact this suite can surface
+
+On this WSL2 host the wall clock steps **backwards** after sustained load. A
+45-second sample taken while `cargo build` ran recorded one backwards step of
+2.09 s (`2026-09-11T13:47:28.086569+00:00` followed by
+`2026-09-11T13:47:25.996217+00:00`). The legacy runtime reads that clock through
+`phase_state.utc_now`, writes `started_at_utc` at `delivery init` and an
+`at_utc` at each `delivery advance`, and then refuses its own commit on replay
+with `journal timestamp precedes task initialization` when the second stamp
+precedes the first. This was observed on the first suite run after a rebuild.
+
+It is an environment defect in the legacy mutation path, not a phase-state
+regression, and it is not masked: `Fixture::advance` fails with a message naming
+the cause so a reviewer is not misled. `an_expired_deadline_reports_historical_context_only`
+polls the legacy engine's own `expired` flag instead of sleeping a fixed span,
+so a backwards step cannot flip that fixture. The compiled reader is unaffected:
+it reads the clock once, only to compare `now >= deadline`.

@@ -234,12 +234,22 @@ impl Fixture {
     }
 
     fn advance(&self) -> Output {
-        run(&[
+        let advanced = run(&[
             "delivery",
             "advance",
             "--state",
             self.state.to_str().expect("utf-8"),
-        ])
+        ]);
+        assert!(
+            !String::from_utf8_lossy(&advanced.stdout)
+                .contains("journal timestamp precedes task initialization"),
+            "the legacy runtime refused its own commit because this host's wall \
+clock stepped backwards between `delivery init` and `delivery advance`. This is \
+an environment defect, not a phase-state regression; see \
+docs/integration/phase-state-status.md. Observed output: {}",
+            String::from_utf8_lossy(&advanced.stdout)
+        );
+        advanced
     }
 
     fn artifact(&self, identity: &str, role: &str, body: &str, upstream: Option<Value>) -> Vec<u8> {
@@ -363,6 +373,26 @@ fn run(arguments: &[&str]) -> Output {
         .stdin(Stdio::null())
         .output()
         .expect("devforge runs")
+}
+
+/// The fastest of several complete `devforge delivery status` runs.
+///
+/// Compared only against the same binary on a fixture it must delegate, so the
+/// CLI boundary and the runtime-cache verification cancel and the difference is
+/// one `/usr/bin/python3` start-up. An absolute margin is used rather than a
+/// ratio: under load both sides inflate, but the Python side inflates more, so
+/// the margin only widens.
+const PYTHON_START_UP: Duration = Duration::from_millis(20);
+
+fn fastest_status(state: &Path) -> Duration {
+    (0..7)
+        .map(|_| {
+            let started = Instant::now();
+            let _ = compiled(state);
+            started.elapsed()
+        })
+        .min()
+        .expect("one sample")
 }
 
 fn compiled(state: &Path) -> (String, i32) {
@@ -753,21 +783,11 @@ fn a_held_exclusive_lock_is_refused_exactly_as_before() {
     );
 
     // The contended refusal is decided in Rust: it must not pay a Python spawn.
-    let sample = |state: &Path| {
-        (0..5)
-            .map(|_| {
-                let started = Instant::now();
-                let _ = compiled(state);
-                started.elapsed()
-            })
-            .min()
-            .expect("one sample")
-    };
-    let contended = sample(&fixture.state);
-    let with_python = sample(&delegated.state);
+    let contended = fastest_status(&fixture.state);
+    let with_python = fastest_status(&delegated.state);
     drop(holder);
     assert!(
-        contended * 2 < with_python,
+        contended + PYTHON_START_UP < with_python,
         "the contended refusal should not pay Python start-up: \
 {contended:?} answered in Rust vs {with_python:?} delegated"
     );
@@ -920,7 +940,15 @@ fn an_existing_receipt_without_a_completion_intent_is_refused() {
 fn an_expired_deadline_reports_historical_context_only() {
     let fixture = Fixture::build("expired", "brainstorm", 3);
     assert_eq!(legacy(&fixture.state).0["status"], json!("ACTIVE"));
-    std::thread::sleep(Duration::from_secs(4));
+    // Poll rather than sleep a fixed span: this host's wall clock can step
+    // backwards, and only the legacy engine's own view of expiry matters here.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if legacy(&fixture.state).0["expired"] == json!(true) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
     let observed = assert_parity(&fixture.state, "an expired original deadline");
     assert_eq!(observed["status"], json!("COULD_NOT_RUN"));
     assert_eq!(observed["expired"], json!(true));
@@ -1088,20 +1116,10 @@ fn the_ported_status_path_does_not_start_the_python_controller() {
     assert_eq!(compiled(&ported.state).1, 0);
     assert_eq!(compiled(&delegated.state).1, 2);
 
-    let sample = |state: &Path| {
-        (0..5)
-            .map(|_| {
-                let started = Instant::now();
-                let _ = compiled(state);
-                started.elapsed()
-            })
-            .min()
-            .expect("one sample")
-    };
-    let without_python = sample(&ported.state);
-    let with_python = sample(&delegated.state);
+    let without_python = fastest_status(&ported.state);
+    let with_python = fastest_status(&delegated.state);
     assert!(
-        without_python * 2 < with_python,
+        without_python + PYTHON_START_UP < with_python,
         "the compiled status path should not pay Python start-up: \
 {without_python:?} answered in Rust vs {with_python:?} delegated"
     );
