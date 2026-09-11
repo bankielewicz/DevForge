@@ -7,3 +7,5 @@ __pycache__/
 /.agents/
 /.claude/
 /.codex/
+# CI-only pinned DevForgeAI checkout used as the receipt-check oracle
+/DevForgeAI-oracle/
