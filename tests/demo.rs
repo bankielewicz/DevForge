@@ -367,10 +367,13 @@ fn an_output_root_inside_the_framework_is_refused_before_any_write() {
     let scratch = Scratch::new();
     let policies = policies(&scratch, &framework);
     let before = inventory(&framework.join("examples"));
-    let inside = framework.join(".poc/demo-refusal-probe");
+    // A scratch copy of the framework layout, so a broken guard could only ever
+    // write here rather than into the shared checkout.
+    let copy = seeded_framework(&scratch, &framework);
+    let inside = copy.join(".poc/demo-refusal-probe");
     let output = demo(&[
         "--framework",
-        framework.to_str().unwrap(),
+        copy.to_str().unwrap(),
         "--policies",
         policies.to_str().unwrap(),
         "--output-root",
@@ -485,5 +488,94 @@ fn an_unexpected_gate_status_stops_the_run_and_writes_no_report() {
     assert!(
         root.join("fixed-unexpected/candidates/notes-sqlite")
             .is_dir()
+    );
+}
+
+/// A scratch framework carrying only `examples/notes-sqlite/seed`, so a case can
+/// mutate a fixture without touching the shared checkout.
+fn seeded_framework(scratch: &Scratch, real: &Path) -> PathBuf {
+    let root = scratch.join("framework-copy");
+    let seed = root.join("examples/notes-sqlite/seed");
+    fs::create_dir_all(&seed).unwrap();
+    let source = real.join("examples/notes-sqlite/seed");
+    for entry in fs::read_dir(&source).unwrap().flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            fs::copy(&path, seed.join(path.file_name().unwrap())).unwrap();
+        }
+    }
+    root
+}
+
+#[test]
+fn a_run_id_that_escapes_the_output_root_is_refused() {
+    let Some(framework) = framework() else {
+        eprintln!("companion framework absent; demo NOT_RUN");
+        return;
+    };
+    let scratch = Scratch::new();
+    let policies = policies(&scratch, &framework);
+    let root = scratch.join("out/nested");
+    for escaping in ["../escape", "..", "a/b", "with space", ""] {
+        let output = demo(&[
+            "--framework",
+            framework.to_str().unwrap(),
+            "--policies",
+            policies.to_str().unwrap(),
+            "--output-root",
+            root.to_str().unwrap(),
+            "--run-id",
+            escaping,
+            "--prepare-only",
+        ]);
+        blocked(
+            &output,
+            "--run-id must be a single nonempty [A-Za-z0-9_-] component",
+        );
+        // Nothing is created inside the output root, beside it, or above it.
+        assert!(!root.exists(), "{escaping:?} created the output root");
+        assert!(
+            !scratch.join("out/escape").exists() && !scratch.join("escape").exists(),
+            "{escaping:?} created a directory outside the output root"
+        );
+    }
+}
+
+#[test]
+fn a_symlink_inside_a_fixture_is_refused_rather_than_followed() {
+    let Some(framework) = framework() else {
+        eprintln!("companion framework absent; demo NOT_RUN");
+        return;
+    };
+    let scratch = Scratch::new();
+    let policies = policies(&scratch, &framework);
+    let copy = seeded_framework(&scratch, &framework);
+    // Sorted first, so the refusal precedes every other entry's copy.
+    let target = scratch.join("outside-target");
+    fs::write(&target, b"never copied\n").unwrap();
+    let link = copy.join("examples/notes-sqlite/seed/aaa-link");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let root = scratch.join("out");
+    let output = demo(&[
+        "--framework",
+        copy.to_str().unwrap(),
+        "--policies",
+        policies.to_str().unwrap(),
+        "--output-root",
+        root.to_str().unwrap(),
+        "--run-id",
+        "fixed-symlink",
+        "--prepare-only",
+    ]);
+    blocked(&output, "symlink in fixture: ");
+    blocked(&output, "aaa-link");
+    let candidate = root.join("fixed-symlink/candidates/notes-sqlite");
+    assert!(
+        !candidate.join("aaa-link").exists(),
+        "the symlink must not be followed into the candidate"
+    );
+    assert!(
+        !root.join("fixed-symlink/demo-report.json").exists(),
+        "a refused copy must not leave a report"
     );
 }
