@@ -55,6 +55,13 @@ const MAX_BYTES: u64 = 32 * 1024 * 1024;
 const AUTHORITY_LIMIT: u64 = 1024 * 1024;
 const INVENTORY: &str = ".devforge-install.json";
 const SKILL_ROOT: &str = ".agents/skills";
+const CLAUDE_SKILL_ROOT: &str = ".claude/skills";
+const PROVIDER_NAMES: [&str; 2] = ["codex", "claude"];
+/// The one shared settings document each provider merges its hook groups into.
+const HOOK_DESTINATIONS: [(&str, &str); 2] = [
+    ("codex", ".codex/hooks.json"),
+    ("claude", ".claude/settings.local.json"),
+];
 const INSTALL_ROOTS: [&str; 3] = [".agents", ".codex", ".claude"];
 const AUTHORITY_SCHEMA: &str = "devforge.manual-install-authority/v1";
 const LOCAL_BASELINE_V1: &str = "devforge.manual-expert-local-baseline/v1";
@@ -71,6 +78,27 @@ static EMPTY_LIST: LazyLock<Value> = LazyLock::new(|| Value::Array(Vec::new()));
 pub enum Action {
     /// Report this executable's digest and embedded source identity for authority pinning.
     Identity,
+    /// Install the framework's provider skills, agents and hook groups into a project.
+    ///
+    /// Promoted Codex expert packages are excluded: they carry owner-selected
+    /// adoption evidence and are installed only by `install manual-experts`.
+    /// A package declaring `hooks/runtime-requirements.json` needs `--runtime`;
+    /// this running executable is then the validating authority that probes it.
+    Framework {
+        /// DevForgeAI checkout containing providers/<provider>/plugins/devforgeai.
+        #[arg(long)]
+        framework: PathBuf,
+        /// Provider package to install into the project.
+        #[arg(long, value_parser = ["codex", "claude", "both"], default_value = "both")]
+        provider: String,
+        /// Also install the project's own experts/*/SKILL.md packages.
+        #[arg(long)]
+        include_experts: bool,
+        /// Absolute, canonical, single-hard-link devforge executable required by a
+        /// delivery-aware installation. Ignored when no package declares a requirement.
+        #[arg(long)]
+        runtime: Option<PathBuf>,
+    },
     /// Install only the promoted Codex expert workflows from owner-selected adoption evidence.
     ManualExperts {
         /// DevForgeAI checkout containing providers/codex/plugins/devforgeai.
@@ -123,6 +151,18 @@ pub fn run(action: &Action, project: Option<&Path>) -> Result<Value> {
         Action::Identity => identity(),
         Action::ProbeRuntime { runtime, provider } => probe_runtime(runtime, provider, project),
         Action::GuardValidator => guard_validator(project.context("--project is required")?),
+        Action::Framework {
+            framework,
+            provider,
+            include_experts,
+            runtime,
+        } => install_framework(
+            project.context("--project is required")?,
+            framework,
+            provider,
+            *include_experts,
+            runtime.as_deref(),
+        ),
         Action::ManualExperts {
             framework,
             evidence,
@@ -3623,12 +3663,15 @@ fn probe_runtime(runtime: &Path, providers: &[String], project: Option<&Path>) -
     Ok(report)
 }
 
-/// The pre-write protections owed to the selected validating executable.
+/// The pre-write protections owed to the selected validating executable, read
+/// from one `devforge.validator-guard-request/v1` object on stdin.
 ///
 /// The caller names the installation and the destinations it is about to write;
 /// this executable decides, about itself, whether that installation may proceed.
 /// Nothing is written, nothing is executed, and a refusal is final: the reasons
 /// below are the installer's, carried out verbatim, never re-decided in Python.
+/// `install framework` reaches the same decision through `guard_writes` without
+/// leaving this process.
 fn guard_validator(project: &Path) -> Result<Value> {
     let project = crate::resolved(project)?;
     ensure!(project.is_dir(), "project must already exist");
@@ -3672,9 +3715,17 @@ fn guard_validator(project: &Path) -> Result<Value> {
         );
         relatives.push(relative);
     }
+    guard_writes(&project, &map["report"], &relatives)
+}
+
+/// Decide, for an already-resolved project and an already-bound probe report,
+/// whether the named destinations may be written against this executable. The
+/// stdin-reading CLI action and the in-process installer share this one
+/// implementation, so their protections and refusals cannot drift.
+fn guard_writes(project: &Path, report: &Value, relatives: &[&str]) -> Result<Value> {
+    const MALFORMED: &str = "malformed validator guard request";
     // Bind the request to this executable and this installation before deciding.
     let (running, digest) = executable_identity()?;
-    let report = &map["report"];
     let reported = report
         .pointer("/validator/executable/path")
         .and_then(Value::as_str)
@@ -3693,11 +3744,11 @@ fn guard_validator(project: &Path) -> Result<Value> {
             .pointer("/project")
             .and_then(Value::as_str)
             .map(Path::new)
-            == Some(project.as_path()),
+            == Some(project),
         "runtime validation bound a different project"
     );
     // 1. No destination may name this executable, however the caller spells it.
-    for relative in &relatives {
+    for relative in relatives {
         let destination = project.join(relative);
         ensure!(
             destination != running
@@ -3707,7 +3758,7 @@ fn guard_validator(project: &Path) -> Result<Value> {
     }
     // 2. No existing destination may already be another name for its inode.
     let identity = fs::metadata(&running)?;
-    for relative in &relatives {
+    for relative in relatives {
         let Ok(destination) = fs::metadata(project.join(relative)) else {
             continue;
         };
@@ -3795,9 +3846,13 @@ fn runtime_skill_files(skill: &Path) -> Result<Vec<(PathBuf, String)>> {
     Ok(files)
 }
 
-fn provider_plugin(framework: &Path) -> Result<PathBuf> {
+fn provider_plugin(framework: &Path, provider: &str) -> Result<PathBuf> {
+    ensure!(
+        PROVIDER_NAMES.contains(&provider),
+        "unknown provider: {provider}"
+    );
     let mut prefix = framework.to_path_buf();
-    for component in ["providers", "codex", "plugins", "devforgeai"] {
+    for component in ["providers", provider, "plugins", "devforgeai"] {
         prefix.push(component);
         if let Ok(meta) = fs::symlink_metadata(&prefix) {
             ensure!(
@@ -3870,10 +3925,466 @@ fn read_inventory(path: &Path) -> Result<Value> {
     Ok(previous)
 }
 
+// ---- provider hook registry ----------------------------------------------
+
+fn hook_destination(provider: &str) -> Result<&'static str> {
+    HOOK_DESTINATIONS
+        .iter()
+        .find(|(name, _)| *name == provider)
+        .map(|(_, relative)| *relative)
+        .with_context(|| format!("unknown provider: {provider}"))
+}
+
+/// Content identity of one hook group. `serde_json::Map` is key-sorted and the
+/// compact encoder emits no separator spaces, so this reproduces the legacy
+/// `json.dumps(group, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+/// allow_nan=False)` byte for byte. JSON booleans and integers stay distinct.
+fn group_digest(group: &Value) -> String {
+    crate::hash(group.to_string().as_bytes())
+}
+
+fn hook_record(event: &str, definition: &Value) -> Value {
+    json!({"event": event, "definition": definition, "sha256": group_digest(definition)})
+}
+
+/// Check one provider's recorded ownership: its exact shape, that every recorded
+/// definition still hashes to its recorded identity, and that no identity repeats.
+fn validate_hook_registry(entry: &Value, relative: &str) -> Result<()> {
+    const INVALID: &str = "invalid managed hook registry entry";
+    let shape = entry.as_object().filter(|map| {
+        map.len() == 3
+            && ["path", "owned", "reused"]
+                .iter()
+                .all(|key| map.contains_key(*key))
+            && map["path"].as_str() == Some(relative)
+    });
+    let map = shape.context(INVALID)?;
+    let mut identities: BTreeSet<(String, String)> = BTreeSet::new();
+    for category in ["owned", "reused"] {
+        let rows = map[category]
+            .as_array()
+            .context("managed hook records must be lists")?;
+        for row in rows {
+            let row = row
+                .as_object()
+                .filter(|row| {
+                    row.len() == 3
+                        && ["event", "definition", "sha256"]
+                            .iter()
+                            .all(|key| row.contains_key(*key))
+                })
+                .context("invalid managed hook group record")?;
+            let identity = row["event"].as_str().zip(row["sha256"].as_str());
+            let (event, sha) = identity.context("invalid managed hook group identity")?;
+            crate::plugin::validate_hook_groups(&json!({event: [row["definition"]]}), true)?;
+            ensure!(
+                sha == group_digest(&row["definition"]),
+                "managed hook definition digest mismatch"
+            );
+            ensure!(
+                identities.insert((event.to_string(), sha.to_string())),
+                "duplicate managed hook group identity"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Plan one provider's hook merge with group-level ownership; never claim a
+/// complete shared settings file. Returns the bytes to write, if any, and the
+/// ownership record to store. User groups, unrelated events and every other
+/// settings key are preserved, and a semantically identical document is left
+/// byte-for-byte alone.
+fn plan_hook_merge(
+    project: &Path,
+    provider: &str,
+    source: Option<&Value>,
+    previous: Option<&Value>,
+) -> Result<(Option<Vec<u8>>, Option<Value>)> {
+    let relative = hook_destination(provider)?;
+    let empty = json!({"path": relative, "owned": [], "reused": []});
+    let old = previous.unwrap_or(&empty);
+    validate_hook_registry(old, relative)?;
+    if source.is_none() && previous.is_none() {
+        return Ok((None, None));
+    }
+    let destination = safe_destination(project, relative)?;
+    let exists = destination.exists();
+    let mut document = if exists {
+        crate::plugin::read_json(&destination)?
+    } else {
+        json!({})
+    };
+    let Some(map) = document.as_object_mut() else {
+        bail!("hook settings must be an object: {relative}");
+    };
+    map.entry("hooks").or_insert_with(|| json!({}));
+    crate::plugin::validate_hook_groups(&document["hooks"], false)?;
+    let mut desired: Vec<Value> = Vec::new();
+    let mut wanted: BTreeSet<(String, String)> = BTreeSet::new();
+    if let Some(source) = source {
+        let events = source["hooks"]
+            .as_object()
+            .context("hook source needs an event-to-group-list object")?;
+        for (event, groups) in events {
+            for group in groups.as_array().context("hook event needs a group list")? {
+                let row = hook_record(event, group);
+                let sha = row["sha256"].as_str().unwrap_or_default().to_string();
+                if wanted.insert((event.clone(), sha)) {
+                    desired.push(row);
+                }
+            }
+        }
+    }
+    let mut retained: BTreeSet<(String, String)> = BTreeSet::new();
+    // Verify all prior ownership before deciding whether to replace or retire it.
+    if exists {
+        let owned: Vec<Value> = old["owned"].as_array().cloned().unwrap_or_default();
+        for row in &owned {
+            let event = row["event"].as_str().unwrap_or_default();
+            let sha = row["sha256"].as_str().unwrap_or_default();
+            let matches = document["hooks"]
+                .get(event)
+                .and_then(Value::as_array)
+                .map_or(0, |groups| {
+                    groups
+                        .iter()
+                        .filter(|group| group_digest(group) == sha)
+                        .count()
+                });
+            ensure!(
+                matches == 1,
+                "local edit/collision in owned {provider} hook: {event}"
+            );
+        }
+        for row in &owned {
+            let event = row["event"].as_str().unwrap_or_default().to_string();
+            let sha = row["sha256"].as_str().unwrap_or_default().to_string();
+            if wanted.contains(&(event.clone(), sha.clone())) {
+                retained.insert((event, sha));
+            } else {
+                let kept: Vec<Value> = document["hooks"][event.as_str()]
+                    .as_array()
+                    .expect("the verified owned event exists")
+                    .iter()
+                    .filter(|group| group_digest(group) != sha)
+                    .cloned()
+                    .collect();
+                document["hooks"][event.as_str()] = Value::Array(kept);
+            }
+        }
+    }
+    let mut owned: Vec<Value> = Vec::new();
+    let mut reused: Vec<Value> = Vec::new();
+    for row in &desired {
+        let event = row["event"].as_str().unwrap_or_default().to_string();
+        let sha = row["sha256"].as_str().unwrap_or_default().to_string();
+        let groups = document["hooks"]
+            .as_object_mut()
+            .expect("the checked hook object")
+            .entry(event.clone())
+            .or_insert_with(|| json!([]));
+        let present = groups
+            .as_array()
+            .is_some_and(|groups| groups.iter().any(|group| group_digest(group) == sha));
+        if retained.contains(&(event, sha)) {
+            owned.push(row.clone());
+        } else if present {
+            reused.push(row.clone());
+        } else {
+            groups
+                .as_array_mut()
+                .expect("the checked group list")
+                .push(row["definition"].clone());
+            owned.push(row.clone());
+        }
+    }
+    let entry = json!({"path": relative, "owned": owned, "reused": reused});
+    // Missing settings can be rebuilt from selected groups, not lost unrelated data.
+    let mut payload = None;
+    if exists || !desired.is_empty() {
+        // Preserve formatting on a semantically identical install.
+        let identical = exists
+            && group_digest(&crate::plugin::read_json(&destination)?) == group_digest(&document);
+        if !identical {
+            let mut bytes = serde_json::to_vec_pretty(&document)?;
+            bytes.push(b'\n');
+            payload = Some(bytes);
+        }
+    }
+    Ok((payload, Some(entry)))
+}
+
+// ---- project installation -------------------------------------------------
+
+/// Install one or both provider packages into a project, exactly as the legacy
+/// `scripts/install_framework.py` `install()` did for its project modes, with
+/// compiled Rust as the only authority. Promoted Codex expert packages are
+/// refused here: they need owner-selected adoption evidence and `install
+/// manual-experts`. Nothing global is touched and no candidate code runs.
+fn install_framework(
+    project: &Path,
+    framework: &Path,
+    provider: &str,
+    include_experts: bool,
+    runtime: Option<&Path>,
+) -> Result<Value> {
+    let project = crate::resolved(project)?;
+    let framework = crate::resolved(framework)?;
+    ensure!(project.is_dir(), "project must already exist");
+    ensure!(
+        crate::separate(&project, &framework),
+        "project and framework must be separate directories"
+    );
+    let providers: Vec<&str> = if provider == "both" {
+        PROVIDER_NAMES.to_vec()
+    } else {
+        vec![provider]
+    };
+    let mut planned: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut hook_sources: BTreeMap<String, Option<Value>> = BTreeMap::new();
+    let mut requirements: BTreeMap<String, Value> = BTreeMap::new();
+    for target in &providers {
+        let plugin = provider_plugin(&framework, target)?;
+        hook_sources.insert(
+            (*target).to_string(),
+            crate::plugin::load_plugin_hooks(&plugin, target)?,
+        );
+        if let Some(requirement) = crate::plugin::load_requirement(&plugin, target)? {
+            requirements.insert((*target).to_string(), requirement);
+        }
+        let mut skills = Vec::new();
+        for entry in fs::read_dir(plugin.join("skills"))? {
+            let path = entry?.path();
+            // Select through the link like the legacy installer; runtime_skill_files
+            // then refuses a symlinked source instead of silently omitting it.
+            if fs::metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+                skills.push(path);
+            }
+        }
+        skills.sort();
+        if include_experts && project.join("experts").is_dir() {
+            // Explicit portable POC experts, not a fallback for provider sources.
+            let mut experts = Vec::new();
+            for entry in fs::read_dir(project.join("experts"))? {
+                let path = entry?.path();
+                if fs::metadata(path.join("SKILL.md")).is_ok_and(|meta| meta.is_file()) {
+                    experts.push(path);
+                }
+            }
+            experts.sort();
+            skills.extend(experts);
+        }
+        let skill_root = if *target == "codex" {
+            SKILL_ROOT
+        } else {
+            CLAUDE_SKILL_ROOT
+        };
+        for skill in &skills {
+            let name = skill
+                .file_name()
+                .and_then(|name| name.to_str())
+                .context("non-UTF8 skill name")?;
+            for (path, relative) in runtime_skill_files(skill)? {
+                let key = format!("{skill_root}/{name}/{relative}");
+                ensure!(!planned.contains_key(&key), "skill name collision: {key}");
+                planned.insert(key, fs::read(&path)?);
+            }
+        }
+        let (agents, destination) = if *target == "codex" {
+            (framework.join("providers/codex/agents"), ".codex/agents")
+        } else {
+            (plugin.join("agents"), ".claude/agents")
+        };
+        for (path, relative) in regular_files(&agents)? {
+            let name = relative.to_str().context("non-UTF8 agent path")?;
+            planned.insert(format!("{destination}/{name}"), fs::read(&path)?);
+        }
+    }
+    // A promoted Codex package carries owner-selected adoption evidence, which
+    // this action does not accept: `install manual-experts` owns that path.
+    require(
+        selected_packages(&planned)?.is_empty(),
+        "manual adoption evidence is required for promoted Codex packages",
+    )?;
+    // The validating executable is this running compiled CLI, selected by the
+    // operator when they invoked it. It, and no caller, admits the capabilities
+    // the separately selected runtime reports.
+    let report = match requirements.is_empty() {
+        true => None,
+        false => {
+            let selected = runtime
+                .context("delivery-aware project installation requires --runtime ABSOLUTE_PATH")?;
+            // Only the providers whose plugin declared a requirement are probed,
+            // in selection order, exactly as the legacy installer passed its
+            // `requirements` rather than its whole provider selection.
+            let names: Vec<String> = providers
+                .iter()
+                .filter(|name| requirements.contains_key(**name))
+                .map(|name| (*name).to_string())
+                .collect();
+            Some(probe_runtime(selected, &names, Some(&project))?)
+        }
+    };
+    let record_path = safe_destination(&project, INVENTORY)?;
+    let previous = read_inventory(&record_path)?;
+    let previous_files = previous["files"].as_object().cloned().unwrap_or_default();
+    let mut managed_hooks = previous
+        .get("managed_hooks")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut hook_writes: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for target in &providers {
+        let source = hook_sources.get(*target).cloned().flatten();
+        let recorded = managed_hooks.get(*target).cloned();
+        let (payload, entry) =
+            plan_hook_merge(&project, target, source.as_ref(), recorded.as_ref())?;
+        if let Some(entry) = entry {
+            managed_hooks.insert((*target).to_string(), entry);
+        }
+        if let Some(payload) = payload {
+            hook_writes.insert(hook_destination(target)?.to_string(), payload);
+        }
+    }
+    let selected_roots: BTreeSet<&str> = providers
+        .iter()
+        .map(|target| {
+            if *target == "codex" {
+                ".agents"
+            } else {
+                ".claude"
+            }
+        })
+        .collect();
+    let mut retired: Vec<String> = Vec::new();
+    for (relative, old_digest) in &previous_files {
+        let segments = parts(Path::new(relative));
+        // Only retire previously managed authoring files in the selected skill scopes.
+        if segments.len() >= 4
+            && selected_roots.contains(&segments[0])
+            && segments[1] == "skills"
+            && authoring_only(&segments[3..])
+        {
+            let destination = safe_destination(&project, relative)?;
+            if destination.exists() {
+                ensure!(
+                    old_digest.as_str() == Some(crate::hash(&fs::read(&destination)?).as_str()),
+                    "local edit/collision; refusing removal: {relative}"
+                );
+            }
+            retired.push(relative.clone());
+        }
+    }
+    for (relative, data) in &planned {
+        let destination = safe_destination(&project, relative)?;
+        if destination.exists() {
+            let old = fs::read(&destination)?;
+            if old != *data {
+                ensure!(
+                    previous_files.get(relative).and_then(Value::as_str)
+                        == Some(crate::hash(&old).as_str()),
+                    "local edit/collision; refusing replacement: {relative}"
+                );
+            }
+        }
+    }
+    let mut evidence = previous
+        .get("runtime_evidence")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for target in &providers {
+        evidence.remove(*target);
+        if let Some(requirement) = requirements.get(*target) {
+            let mut row = report.clone().expect("a declared requirement was probed");
+            row.as_object_mut()
+                .expect("probe report object")
+                .insert("requirement".into(), requirement.clone());
+            evidence.insert((*target).to_string(), row);
+        }
+    }
+    // Preflight every destination before writes. Identical installs are idempotent.
+    let mut tracked = previous_files.clone();
+    for target in &providers {
+        tracked.remove(hook_destination(target)?);
+    }
+    for relative in &retired {
+        tracked.remove(relative);
+    }
+    for (relative, data) in &planned {
+        tracked.insert(relative.clone(), json!(crate::hash(data)));
+    }
+    // A preserved manual_expert_adoption record, and any other recorded key,
+    // stays exactly as the previous inventory carried it.
+    let mut updated = previous.clone();
+    updated["schema"] = json!(1);
+    updated["files"] = Value::Object(tracked);
+    updated["managed_hooks"] = Value::Object(managed_hooks);
+    if !evidence.is_empty() || previous.get("runtime_evidence").is_some() {
+        updated["runtime_evidence"] = Value::Object(evidence);
+    }
+    let mut record_bytes = serde_json::to_vec_pretty(&updated)?;
+    record_bytes.push(b'\n');
+    if let Some(report) = &report {
+        let selected = runtime.expect("a probed runtime was selected");
+        let mut write_paths: BTreeSet<String> = planned.keys().cloned().collect();
+        write_paths.extend(hook_writes.keys().cloned());
+        write_paths.extend(retired.iter().cloned());
+        write_paths.insert(INVENTORY.to_string());
+        for relative in &write_paths {
+            ensure!(
+                project.join(relative) != *selected,
+                "selected runtime binary overlaps an installation destination"
+            );
+        }
+        let current = runtime_digest(selected)?;
+        ensure!(
+            report["sha256_after"].as_str() == Some(current.as_str()),
+            "selected runtime binary changed before installation writes"
+        );
+        // The validating authority is protected exactly like the runtime it
+        // admitted, and decides that itself: no destination may name it, none may
+        // already alias its inode, and its bytes must still be the probed ones.
+        let relatives: Vec<&str> = write_paths.iter().map(String::as_str).collect();
+        guard_writes(&project, report, &relatives)?;
+    }
+    for relative in &retired {
+        let destination = safe_destination(&project, relative)?;
+        if destination.exists() {
+            fs::remove_file(destination)?;
+        }
+    }
+    for (relative, data) in planned.iter().chain(hook_writes.iter()) {
+        let destination = safe_destination(&project, relative)?;
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&destination, data)?;
+    }
+    fs::write(&record_path, &record_bytes)?;
+    let mut result = json!({
+        "status": "INSTALLED",
+        "project": project,
+        "providers": providers,
+        "files": planned.len(),
+        "removed_authoring_files": retired,
+        "scope": "project-local; no global configuration changed",
+        "authority": "compiled Rust CLI; no Python consulted",
+        "behavior": "NOT_EVALUATED",
+    });
+    if !requirements.is_empty() {
+        result["runtime_requirements"] = Value::Object(requirements.into_iter().collect());
+        result["runtime_compatibility"] = json!("VERIFIED");
+        result["native_activation"] = json!("NOT_VERIFIED");
+    }
+    Ok(result)
+}
+
 /// The runtime bytes `manual-experts` would install for every promoted package
 /// present in the framework, keyed by project-relative destination.
 fn planned_bytes(framework: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
-    let plugin = provider_plugin(framework)?;
+    let plugin = provider_plugin(framework, "codex")?;
     let mut skills = Vec::new();
     for entry in fs::read_dir(plugin.join("skills"))? {
         let path = entry?.path();
