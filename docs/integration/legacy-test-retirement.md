@@ -35,7 +35,16 @@ which covers all 47: 46 mapped to a named Rust case and
 `NOT_APPLICABLE` (the compiled command has no `assert` statements and no
 `python3 -O` equivalent, so the property it protected holds by construction).
 
-No assertion is lost. `tests/validate_framework.rs` additionally runs the
+No refusal predicate loses coverage. Two legacy assertions are carried in
+reduced form, both benign: `test_inline_content_must_be_utf8_text_in_every_map`
+exercised a lone-surrogate content through all three inline maps (18 arms) and
+pinned the reason, while the Rust case exercises it through `files` only (17
+arms) and pins only BLOCKED, because the surrogate is refused at decode time
+before any per-map walk; and `test_root_runtime_is_pruned_before_enumeration`
+patched `os.scandir`/`os.listdir` to assert the private runtime was never
+enumerated, while the Rust case asserts only the observable consequence (a
+malformed document and a dangling symlink planted inside `.devforge-runtime/`
+still PASS). `tests/validate_framework.rs` additionally runs the
 unchanged `scripts/validate_framework.py` as a compatibility oracle over 18
 synthetic trees, the companion checkout and its real authored hook packages, so
 the Python validator is still executed on every `cargo test` run — it simply no
@@ -59,9 +68,11 @@ tests/test_manual_local_baseline.py:9:  import test_installer
 ```
 
 Deleting it produced `ModuleNotFoundError: No module named 'test_installer'`,
-two loader errors and a discovered count of 508 instead of 583 — 28 live cases
-silently stopped running, which is exactly the failure mode this retirement is
-supposed to prevent (`w2g/after-deletion.log`, `w2g/after-python.log`). It
+two loader errors, `FAILED (errors=2)` with exit 1, and a discovered count of
+508 instead of 583: the 30 live cases of the two manual suites (18 + 12) stopped
+running and were replaced by two `_FailedTest` placeholders. CI's guard would
+reject that run, but a suite that disappears behind a loader error is exactly the
+failure mode this retirement is supposed to prevent (`w2g/after-deletion.log`, `w2g/after-python.log`). It
 therefore retires only together with the two suites below, or after their shared
 fixtures are moved.
 
@@ -139,7 +150,7 @@ remaining suites together, or commission a Rust port that can reach the window.
 
 | What | Log |
 | --- | --- |
-| Base GREEN before any deletion (Rust 263, Python 630) | `w2g/baseline.log`, `w2g/baseline-python-full.log` |
+| Base before any deletion: Rust GREEN (263, exit 0); Python 630 with one pre-existing failure (`FAILED (failures=1)`, exit 1; see "A pre-existing base defect"). The per-suite block in `baseline.log` shows `Ran 1 test … FAILED (errors=1)` for the two manual suites because a standalone per-module run hits the `import test_installer` loader error; their real counts are 18 and 12 | `w2g/baseline.log`, `w2g/baseline-python-full.log` |
 | The four-suite deletion attempt that broke discovery | `w2g/after-deletion.log`, `w2g/after-python.log` |
 | Final state, 583 OK, 0 skipped | `w2g/after-deletion-final.log`, `w2g/final-python.log` |
 | `test_utility_schedule.py` base flake probe | `w2g/base-utility-schedule-probe.log` |
