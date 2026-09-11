@@ -12,9 +12,15 @@ use clap::Subcommand;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::LazyLock;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 /// Content identity of every build input, computed by `build.rs`.
 pub const SOURCE_SHA256: &str = env!("DEVFORGE_SOURCE_SHA256");
@@ -54,6 +60,10 @@ const AUTHORITY_SCHEMA: &str = "devforge.manual-install-authority/v1";
 const LOCAL_BASELINE_V1: &str = "devforge.manual-expert-local-baseline/v1";
 /// The `v1` record plus a `test_destination` selected for the actual installation.
 const LOCAL_BASELINE_V2: &str = "devforge.manual-expert-local-baseline/v2";
+/// The report `probe-runtime` returns and `guard-validator` requires as its evidence.
+const PROBE_SCHEMA: &str = "devforge.runtime-probe/v1";
+const GUARD_REQUEST_SCHEMA: &str = "devforge.validator-guard-request/v1";
+const GUARD_SCHEMA: &str = "devforge.validator-guard/v1";
 static EMPTY_OBJECT: LazyLock<Value> = LazyLock::new(|| Value::Object(Map::new()));
 static EMPTY_LIST: LazyLock<Value> = LazyLock::new(|| Value::Array(Vec::new()));
 
@@ -86,11 +96,33 @@ pub enum Action {
         #[arg(long)]
         authority: PathBuf,
     },
+    /// Probe an explicitly selected runtime executable and validate the delivery
+    /// capabilities it reports. Reads and executes only that runtime; writes nothing.
+    /// The global --project, when given, binds the report to that installation and
+    /// requires this validating executable to be outside it.
+    ProbeRuntime {
+        /// Absolute, canonical, single-hard-link runtime executable to probe.
+        #[arg(long)]
+        runtime: PathBuf,
+        /// Provider the installed package requires; repeat for each, codex or claude.
+        #[arg(long)]
+        provider: Vec<String>,
+        // The global `--project` optionally names the installation this probe admits;
+        // the validating executable must then be outside that project.
+    },
+    /// Decide, immediately before the installation writes, whether the planned
+    /// destinations may proceed against this validating executable: none may name
+    /// it, none may already alias its inode, and its own bytes must still be the
+    /// ones its probe report bound. Reads one `devforge.validator-guard-request/v1`
+    /// object from stdin, requires the global --project, and writes nothing.
+    GuardValidator,
 }
 
 pub fn run(action: &Action, project: Option<&Path>) -> Result<Value> {
     match action {
         Action::Identity => identity(),
+        Action::ProbeRuntime { runtime, provider } => probe_runtime(runtime, provider, project),
+        Action::GuardValidator => guard_validator(project.context("--project is required")?),
         Action::ManualExperts {
             framework,
             evidence,
@@ -3263,6 +3295,441 @@ fn verify_authority(authority: &Path, project: &Path, framework: &Path) -> Resul
         "executable": {"path": running, "sha256": digest},
         "source_sha256": source,
         "verification": "executable digest and source identity matched the owner-selected authority record",
+    }))
+}
+
+// ---- selected runtime capability probe -----------------------------------
+//
+// Rust owns runtime selection hygiene, bounded execution and the delivery
+// capability contract. The eight-field `devforge.delivery-capabilities/v1` base
+// set stays admitted; the same base plus every one of the seven declared
+// extensions is the supported extended contract. A partial extension set, an
+// unknown field, a missing base field and any malformed value are refused.
+// Nothing here writes to the filesystem, and a successful probe is mechanical
+// compatibility only: native activation stays NOT_VERIFIED.
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const PROBE_OUTPUT_LIMIT: usize = 1024 * 1024;
+const PROBE_POLL: Duration = Duration::from_millis(5);
+const CAPABILITY_SCHEMA: &str = "devforge.delivery-capabilities/v1";
+const DELIVERY_PROTOCOL: &str = "devforge.delivery-runtime/v1";
+const REQUIRED_EVENTS: [&str; 4] = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"];
+const BASE_FIELDS: [&str; 8] = [
+    "schema_version",
+    "protocol",
+    "supported_providers",
+    "completion_modes",
+    "io_modes",
+    "hook_events",
+    "native_admission",
+    "mechanical_scope",
+];
+const EXTENSION_FIELDS: [&str; 7] = [
+    "utility_workflows",
+    "utility_session_schema",
+    "utility_native_schedule_schema",
+    "native_execution_enabled",
+    "native_process_interface",
+    "native_process_receipt_schema",
+    "native_semantic_review",
+];
+const EXTENSION_SCHEMAS: [(&str, &str); 3] = [
+    ("utility_session_schema", "devforge.utility-session/v1"),
+    (
+        "utility_native_schedule_schema",
+        "devforge.utility-native-schedule/v1",
+    ),
+    (
+        "native_process_receipt_schema",
+        "devforge.native-process-receipt/v1",
+    ),
+];
+
+/// Path hygiene and content identity of the selected runtime, refused before any
+/// execution. A second hard link would let an installation destination alias it.
+fn runtime_digest(runtime: &Path) -> Result<String> {
+    ensure!(
+        runtime.is_absolute(),
+        "--runtime must be an absolute executable path"
+    );
+    let mut prefix = PathBuf::new();
+    for part in runtime.components() {
+        prefix.push(part.as_os_str());
+        if let Ok(meta) = fs::symlink_metadata(&prefix) {
+            ensure!(
+                !meta.file_type().is_symlink(),
+                "--runtime must be canonical and have no symlink components"
+            );
+        }
+    }
+    match fs::canonicalize(runtime) {
+        Ok(real) => ensure!(
+            real == runtime,
+            "--runtime must be canonical and have no symlink components"
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            bail!("--runtime must select a regular executable file")
+        }
+        Err(error) => bail!("--runtime is unreadable: {error}"),
+    }
+    let meta = fs::symlink_metadata(runtime)
+        .map_err(|error| anyhow!("--runtime is unreadable: {error}"))?;
+    ensure!(
+        meta.is_file() && meta.mode() & 0o111 != 0,
+        "--runtime must select a regular executable file"
+    );
+    ensure!(
+        meta.nlink() == 1,
+        "--runtime must have exactly one hard link"
+    );
+    let bytes = fs::read(runtime).map_err(|error| anyhow!("--runtime is unreadable: {error}"))?;
+    Ok(crate::hash(&bytes))
+}
+
+/// Drain one pipe into memory, stopping as soon as the combined budget is spent.
+fn reader<R: Read + Send + 'static>(mut source: R, total: Arc<AtomicUsize>) -> JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut collected = Vec::new();
+        let mut buffer = [0u8; 65536];
+        while let Ok(count) = source.read(&mut buffer) {
+            if count == 0 || total.fetch_add(count, Ordering::Relaxed) + count > PROBE_OUTPUT_LIMIT
+            {
+                break;
+            }
+            collected.extend_from_slice(&buffer[..count]);
+        }
+        collected
+    })
+}
+
+fn stop(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Run `<runtime> delivery capabilities` with no shell, no PATH lookup and no
+/// stdin, bounded by a wall deadline and a combined output budget. Only stdout
+/// is returned; stderr counts against the budget and is discarded.
+fn capability_output(runtime: &Path) -> Result<Vec<u8>> {
+    let mut child = Command::new(runtime)
+        .args(["delivery", "capabilities"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| anyhow!("cannot execute the selected runtime: {error}"))?;
+    let total = Arc::new(AtomicUsize::new(0));
+    let out = reader(child.stdout.take().expect("piped stdout"), total.clone());
+    let err = reader(child.stderr.take().expect("piped stderr"), total.clone());
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let spent = || total.load(Ordering::Relaxed) > PROBE_OUTPUT_LIMIT;
+    // Drain first: an unread pipe would block a runtime that outlives the budget.
+    while !(out.is_finished() && err.is_finished()) {
+        if spent() {
+            stop(&mut child);
+            bail!("runtime capabilities output exceeds 1 MiB");
+        }
+        if Instant::now() >= deadline {
+            stop(&mut child);
+            bail!("runtime capabilities timed out after 5 seconds");
+        }
+        std::thread::sleep(PROBE_POLL);
+    }
+    if spent() {
+        stop(&mut child);
+        bail!("runtime capabilities output exceeds 1 MiB");
+    }
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(PROBE_POLL),
+            Ok(None) => {
+                stop(&mut child);
+                bail!("runtime capabilities timed out after 5 seconds");
+            }
+            Err(error) => {
+                stop(&mut child);
+                bail!("cannot wait for the selected runtime: {error}");
+            }
+        }
+    };
+    let stdout = out.join().unwrap_or_default();
+    let _ = err.join();
+    ensure!(!spent(), "runtime capabilities output exceeds 1 MiB");
+    if !status.success() {
+        let code = status
+            .code()
+            .unwrap_or_else(|| -status.signal().unwrap_or_default());
+        bail!("runtime capabilities exited with status {code}");
+    }
+    Ok(stdout)
+}
+
+/// A nonempty list of nonempty, unique strings, as the contract requires.
+fn string_list(value: &Value) -> Option<Vec<&str>> {
+    let items = value.as_array().filter(|items| !items.is_empty())?;
+    let mut values: Vec<&str> = Vec::with_capacity(items.len());
+    for item in items {
+        let text = item.as_str().filter(|text| !text.is_empty())?;
+        if values.contains(&text) {
+            return None;
+        }
+        values.push(text);
+    }
+    Some(values)
+}
+
+fn filled(value: &Value) -> bool {
+    value.as_str().is_some_and(|text| !text.trim().is_empty())
+}
+
+/// Admit exactly the base contract or the base plus every declared extension,
+/// and report which one was observed.
+fn validate_capabilities(data: &Value, providers: &[String]) -> Result<&'static str> {
+    let Some(map) = data.as_object() else {
+        bail!("malformed runtime capabilities fields");
+    };
+    let present: BTreeSet<&str> = map.keys().map(String::as_str).collect();
+    let base: BTreeSet<&str> = BASE_FIELDS.into_iter().collect();
+    let known: BTreeSet<&str> = BASE_FIELDS.into_iter().chain(EXTENSION_FIELDS).collect();
+    let contract = if present == base {
+        "base"
+    } else if present == known {
+        "extended"
+    } else if !base.is_subset(&present) || !present.is_subset(&known) {
+        bail!("malformed runtime capabilities fields");
+    } else {
+        bail!("unsupported runtime capabilities extension combination");
+    };
+    ensure!(
+        map["schema_version"].as_str() == Some(CAPABILITY_SCHEMA)
+            && map["protocol"].as_str() == Some(DELIVERY_PROTOCOL)
+            && matches!(
+                map["native_admission"].as_str(),
+                Some("NOT_VALIDATED" | "CONTRACT_REQUIRED")
+            )
+            && filled(&map["mechanical_scope"]),
+        "unsupported runtime capabilities contract"
+    );
+    let mut lists = BTreeMap::new();
+    for field in [
+        "supported_providers",
+        "completion_modes",
+        "io_modes",
+        "hook_events",
+    ] {
+        let Some(values) = string_list(&map[field]) else {
+            bail!("malformed runtime capability list: {field}");
+        };
+        lists.insert(field, values);
+    }
+    ensure!(
+        providers
+            .iter()
+            .all(|provider| lists["supported_providers"].contains(&provider.as_str()))
+            && lists["completion_modes"].contains(&"managed-session")
+            && REQUIRED_EVENTS
+                .iter()
+                .all(|event| lists["hook_events"].contains(event)),
+        "runtime capabilities do not satisfy the package requirement"
+    );
+    if contract == "extended" {
+        ensure!(
+            string_list(&map["utility_workflows"]).is_some(),
+            "malformed runtime capabilities extension: utility_workflows"
+        );
+        for (field, schema) in EXTENSION_SCHEMAS {
+            ensure!(
+                map[field].as_str() == Some(schema),
+                "malformed runtime capabilities extension: {field}"
+            );
+        }
+        ensure!(
+            map["native_execution_enabled"].is_boolean(),
+            "malformed runtime capabilities extension: native_execution_enabled"
+        );
+        for field in ["native_process_interface", "native_semantic_review"] {
+            ensure!(
+                filled(&map[field]),
+                "malformed runtime capabilities extension: {field}"
+            );
+        }
+    }
+    Ok(contract)
+}
+
+fn probe_runtime(runtime: &Path, providers: &[String], project: Option<&Path>) -> Result<Value> {
+    // Bind the validating executable first. When an installation project is named,
+    // an executable inside it could be overwritten by the very installation this
+    // probe admits, so refuse before reading or executing anything.
+    let (validator, digest) = executable_identity()?;
+    let project = match project {
+        Some(selected) => {
+            let selected = crate::resolved(selected)?;
+            ensure!(selected.is_dir(), "project must already exist");
+            ensure!(
+                crate::separate(&validator, &selected),
+                "validating executable must be outside the installation project"
+            );
+            Some(selected)
+        }
+        None => None,
+    };
+    ensure!(
+        !providers.is_empty(),
+        "--provider must select at least one provider"
+    );
+    for (index, provider) in providers.iter().enumerate() {
+        ensure!(
+            provider == "codex" || provider == "claude",
+            "--provider must be codex or claude"
+        );
+        ensure!(
+            !providers[..index].contains(provider),
+            "--provider must not be repeated"
+        );
+    }
+    let before = runtime_digest(runtime)?;
+    let output = capability_output(runtime)?;
+    let capabilities = strict_json(&output)
+        .map_err(|reason| anyhow!("invalid runtime capabilities output: {reason}"))?;
+    let contract = validate_capabilities(&capabilities, providers)?;
+    let after = runtime_digest(runtime)?;
+    ensure!(
+        before == after,
+        "selected runtime binary changed during capability verification"
+    );
+    let mut report = json!({
+        "schema_version": "devforge.runtime-probe/v1",
+        "path": runtime,
+        "sha256_before": before,
+        "sha256_after": after,
+        "capabilities": capabilities,
+        "contract": contract,
+        "providers": providers,
+        "native_activation": "NOT_VERIFIED",
+        "validator": {
+            "executable": {"path": validator, "sha256": digest},
+            "source_sha256": SOURCE_SHA256,
+        },
+    });
+    // Record the bound project so the caller cannot present this report for another one.
+    if let Some(project) = project {
+        report
+            .as_object_mut()
+            .expect("probe report object")
+            .insert("project".into(), json!(project));
+    }
+    Ok(report)
+}
+
+/// The pre-write protections owed to the selected validating executable.
+///
+/// The caller names the installation and the destinations it is about to write;
+/// this executable decides, about itself, whether that installation may proceed.
+/// Nothing is written, nothing is executed, and a refusal is final: the reasons
+/// below are the installer's, carried out verbatim, never re-decided in Python.
+fn guard_validator(project: &Path) -> Result<Value> {
+    let project = crate::resolved(project)?;
+    ensure!(project.is_dir(), "project must already exist");
+    let mut raw = Vec::new();
+    std::io::stdin()
+        .lock()
+        .take(MAX_BYTES + 1)
+        .read_to_end(&mut raw)
+        .context("cannot read the validator guard request")?;
+    ensure!(
+        raw.len() as u64 <= MAX_BYTES,
+        "validator guard request exceeds size limit"
+    );
+    let request = strict_json(&raw)
+        .map_err(|reason| anyhow!("malformed validator guard request: {reason}"))?;
+    const MALFORMED: &str = "malformed validator guard request";
+    let map = request.as_object().ok_or_else(|| anyhow!(MALFORMED))?;
+    ensure!(
+        map.len() == 3
+            && map.get("schema_version").and_then(Value::as_str) == Some(GUARD_REQUEST_SCHEMA)
+            && map.contains_key("report")
+            && map.contains_key("write_paths"),
+        MALFORMED
+    );
+    // Every destination is a nonempty, unique, plainly relative path in the project.
+    let entries = map["write_paths"]
+        .as_array()
+        .filter(|values| !values.is_empty())
+        .ok_or_else(|| anyhow!(MALFORMED))?;
+    let mut relatives: Vec<&str> = Vec::new();
+    for entry in entries {
+        let relative = entry.as_str().unwrap_or_default();
+        ensure!(
+            !relative.is_empty()
+                && Path::new(relative).is_relative()
+                && !Path::new(relative)
+                    .components()
+                    .any(|part| matches!(part, Component::CurDir | Component::ParentDir))
+                && !relatives.contains(&relative),
+            MALFORMED
+        );
+        relatives.push(relative);
+    }
+    // Bind the request to this executable and this installation before deciding.
+    let (running, digest) = executable_identity()?;
+    let report = &map["report"];
+    let reported = report
+        .pointer("/validator/executable/path")
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .ok_or_else(|| anyhow!(MALFORMED))?;
+    ensure!(
+        fs::canonicalize(reported).unwrap_or_else(|_| reported.to_path_buf()) == running,
+        "guard invoked by a different executable than the validator that probed"
+    );
+    ensure!(
+        report.pointer("/schema_version").and_then(Value::as_str) == Some(PROBE_SCHEMA),
+        "runtime validation did not report {PROBE_SCHEMA}"
+    );
+    ensure!(
+        report
+            .pointer("/project")
+            .and_then(Value::as_str)
+            .map(Path::new)
+            == Some(project.as_path()),
+        "runtime validation bound a different project"
+    );
+    // 1. No destination may name this executable, however the caller spells it.
+    for relative in &relatives {
+        let destination = project.join(relative);
+        ensure!(
+            destination != running
+                && !fs::canonicalize(&destination).is_ok_and(|real| real == running),
+            "selected validator binary overlaps an installation destination"
+        );
+    }
+    // 2. No existing destination may already be another name for its inode.
+    let identity = fs::metadata(&running)?;
+    for relative in &relatives {
+        let Ok(destination) = fs::metadata(project.join(relative)) else {
+            continue;
+        };
+        ensure!(
+            !destination.is_file()
+                || (destination.dev(), destination.ino()) != (identity.dev(), identity.ino()),
+            "installation would overwrite the selected validator binary through an alias"
+        );
+    }
+    // 3. The bytes that probed must still be the bytes about to be protected.
+    ensure!(
+        report
+            .pointer("/validator/executable/sha256")
+            .and_then(Value::as_str)
+            == Some(digest.as_str()),
+        "selected validator binary changed before installation writes"
+    );
+    Ok(json!({
+        "schema_version": GUARD_SCHEMA,
+        "project": project,
+        "validator": {"executable": {"path": running, "sha256": digest}},
+        "write_paths": relatives.len(),
     }))
 }
 

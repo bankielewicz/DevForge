@@ -33,7 +33,8 @@ def main():
         policy = cli_root / "policies" / f"{slug}.json"
         state = authority / slug
         shutil.copytree(fixture / "seed", project)
-        install(framework, project, "both", include_experts=True, runtime=binary)
+        # The same built CLI is selected explicitly as the runtime and as the validating authority.
+        install(framework, project, "both", include_experts=True, runtime=binary, validator=binary)
         events = []
 
         def call(*command, success=True):

@@ -1,19 +1,24 @@
-"""Framework-owned delivery compatibility checks, separate from native activation."""
+"""Framework-owned package requirement readers; capability validation is the Rust CLI's.
+
+Runtime probing and delivery-capability validation belong to the explicitly
+selected DevForge executable (`devforge install probe-runtime`). Nothing here
+re-checks or second-guesses that decision: there is no Python fallback.
+"""
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import selectors
 import stat
 import subprocess
-import time
 
 
 REQUIRED_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]
 REQUIREMENT_PATH = "hooks/runtime-requirements.json"
-PROBE_TIMEOUT = 5
-PROBE_OUTPUT_LIMIT = 1024 * 1024
+PROBE_SCHEMA = "devforge.runtime-probe/v1"
+GUARD_REQUEST_SCHEMA = "devforge.validator-guard-request/v1"
+GUARD_SCHEMA = "devforge.validator-guard/v1"
+PROBE_DEADLINE = 30
 
 
 def json_object(pairs):
@@ -157,74 +162,68 @@ def runtime_digest(runtime):
     return sha.hexdigest()
 
 
-def capability_output(runtime):
-    """Bound elapsed time and combined output without a shell or PATH lookup."""
-    deadline = time.monotonic() + PROBE_TIMEOUT
-    output = bytearray()
-    size = 0
-    with subprocess.Popen([str(runtime), "delivery", "capabilities"], stdin=subprocess.DEVNULL,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
-        try:
-            with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ)
-                selector.register(process.stderr, selectors.EVENT_READ)
-                while selector.get_map():
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise ValueError("runtime capabilities timed out after 5 seconds")
-                    for key, _ in selector.select(remaining):
-                        chunk = os.read(key.fileobj.fileno(), min(65536, PROBE_OUTPUT_LIMIT + 1 - size))
-                        if not chunk:
-                            selector.unregister(key.fileobj)
-                            continue
-                        size += len(chunk)
-                        if size > PROBE_OUTPUT_LIMIT:
-                            raise ValueError("runtime capabilities output exceeds 1 MiB")
-                        if key.fileobj is process.stdout:
-                            output.extend(chunk)
-            process.wait(timeout=max(0, deadline - time.monotonic()))
-            if process.returncode != 0:
-                raise ValueError(f"runtime capabilities exited with status {process.returncode}")
-        except subprocess.TimeoutExpired as error:
-            process.kill()
-            raise ValueError("runtime capabilities timed out after 5 seconds") from error
-        except BaseException:
-            if process.poll() is None:
-                process.kill()
-            raise
-    return bytes(output)
+def probe_runtime(validator, runtime, providers, project):
+    """Delegate probing and validation to the explicitly selected DevForge executable.
 
-
-def validate_capabilities(data, providers):
-    fields = {"schema_version", "protocol", "supported_providers", "completion_modes",
-              "io_modes", "hook_events", "native_admission", "mechanical_scope"}
-    if not isinstance(data, dict) or set(data) != fields:
-        raise ValueError("malformed runtime capabilities fields")
-    if (data["schema_version"] != "devforge.delivery-capabilities/v1"
-            or data["protocol"] != "devforge.delivery-runtime/v1"
-            or data["native_admission"] not in ("NOT_VALIDATED", "CONTRACT_REQUIRED")
-            or not isinstance(data["mechanical_scope"], str) or not data["mechanical_scope"].strip()):
-        raise ValueError("unsupported runtime capabilities contract")
-    for field in ("supported_providers", "completion_modes", "io_modes", "hook_events"):
-        values = data[field]
-        if (not isinstance(values, list) or not values
-                or not all(isinstance(value, str) and value for value in values)
-                or len(values) != len(set(values))):
-            raise ValueError(f"malformed runtime capability list: {field}")
-    if (not set(providers) <= set(data["supported_providers"])
-            or "managed-session" not in data["completion_modes"]
-            or not set(REQUIRED_EVENTS) <= set(data["hook_events"])):
-        raise ValueError("runtime capabilities do not satisfy the package requirement")
-
-
-def probe_runtime(runtime, providers):
+    The validator is chosen by the operator, never discovered from PATH, an
+    environment default or the runtime under test. Its refusal is final: this
+    module neither re-validates the reported capabilities nor installs anything
+    when the probe fails. The already-resolved installation project is named so
+    the compiled CLI can refuse a validating executable inside it; the returned
+    report must carry that same project back.
+    """
     if runtime is None:
         raise ValueError("delivery-aware project installation requires --runtime ABSOLUTE_PATH")
-    before = runtime_digest(runtime)
-    capabilities = strict_json(capability_output(runtime))
-    validate_capabilities(capabilities, providers)
-    after = runtime_digest(runtime)
-    if before != after:
-        raise ValueError("selected runtime binary changed during capability verification")
-    return {"path": str(runtime), "sha256_before": before, "sha256_after": after,
-            "capabilities": capabilities, "native_activation": "NOT_VERIFIED"}
+    command = [str(validator), "--project", str(project), "install", "probe-runtime", "--runtime", str(runtime)]
+    command += [argument for provider in providers for argument in ("--provider", provider)]
+    try:
+        completed = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
+                                   timeout=PROBE_DEADLINE)
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(f"runtime validation timed out after {PROBE_DEADLINE} seconds") from error
+    if completed.returncode != 0:
+        reason = f"runtime validation exited with status {completed.returncode}"
+        try:
+            report = strict_json(completed.stdout)
+        except ValueError:
+            report = None
+        if isinstance(report, dict) and isinstance(report.get("reason"), str):
+            reason = report["reason"]
+        raise ValueError(reason)
+    report = strict_json(completed.stdout)
+    if not isinstance(report, dict) or report.get("schema_version") != PROBE_SCHEMA:
+        raise ValueError(f"runtime validation did not report {PROBE_SCHEMA}")
+    if report.get("project") != str(project):
+        raise ValueError("runtime validation bound a different project")
+    return report
+
+
+def guard_validator(validator, project, report, write_paths):
+    """Delegate the selected validator's pre-write protections to that executable.
+
+    Whether an installation destination names the validating authority, aliases its
+    inode, or whether its bytes still are the ones its probe report bound, is decided
+    by the compiled CLI about itself. This module only carries the installation inputs
+    in and the refusal out; it re-checks nothing and has no fallback.
+    """
+    request = {"schema_version": GUARD_REQUEST_SCHEMA, "report": report,
+               "write_paths": list(write_paths)}
+    command = [str(validator), "--project", str(project), "install", "guard-validator"]
+    try:
+        completed = subprocess.run(command, input=json.dumps(request, allow_nan=False).encode("utf-8"),
+                                   capture_output=True, timeout=PROBE_DEADLINE)
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(f"runtime validation timed out after {PROBE_DEADLINE} seconds") from error
+    if completed.returncode != 0:
+        reason = f"runtime validation exited with status {completed.returncode}"
+        try:
+            refusal = strict_json(completed.stdout)
+        except ValueError:
+            refusal = None
+        if isinstance(refusal, dict) and isinstance(refusal.get("reason"), str):
+            reason = refusal["reason"]
+        raise ValueError(reason)
+    decision = strict_json(completed.stdout)
+    if not isinstance(decision, dict) or decision.get("schema_version") != GUARD_SCHEMA:
+        raise ValueError(f"validator guard did not report {GUARD_SCHEMA}")
+    return decision

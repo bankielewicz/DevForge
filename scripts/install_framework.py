@@ -213,7 +213,7 @@ def plan_hook_merge(project, provider, source, previous):
 
 
 def install(framework, project, provider, include_experts=False, runtime=None, manual_evidence=None,
-            manual_experts_only=False):
+            manual_experts_only=False, validator=None):
     framework, project = framework.resolve(), project.resolve()
     if not project.is_dir():
         raise ValueError("project must already exist")
@@ -253,7 +253,17 @@ def install(framework, project, provider, include_experts=False, runtime=None, m
     adoption = manual_adoption.validate(manual_evidence, planned, project, framework)
     if adoption is not None and adoption.get("qualification_status") == "UNQUALIFIED" and not manual_experts_only:
         raise ValueError("local baseline adoption requires --manual-experts-only")
-    runtime_evidence = runtime_requirements.probe_runtime(runtime, requirements) if requirements else None
+    runtime_evidence = None
+    if requirements:
+        # The validating executable is selected explicitly and separately from the
+        # runtime under test; compiled Rust, not this script, admits the capabilities.
+        if validator is None:
+            raise ValueError("delivery-aware project installation requires --validator ABSOLUTE_PATH")
+        try:
+            runtime_requirements.runtime_digest(validator)  # Identical selection hygiene.
+        except ValueError as error:
+            raise ValueError(str(error).replace("--runtime", "--validator")) from error
+        runtime_evidence = runtime_requirements.probe_runtime(validator, runtime, requirements, project)
     record_path = safe_destination(project, ".devforge-install.json")
     previous = read_json(record_path) if record_path.exists() else {"schema": 1, "files": {}}
     if (not isinstance(previous, dict) or previous.get("schema", 1) != 1
@@ -312,6 +322,12 @@ def install(framework, project, provider, include_experts=False, runtime=None, m
             raise ValueError("selected runtime binary overlaps an installation destination")
         if runtime_requirements.runtime_digest(runtime) != runtime_evidence["sha256_after"]:
             raise ValueError("selected runtime binary changed before installation writes")
+        # The validating authority is protected exactly like the runtime it admitted,
+        # and decides that itself: the compiled CLI refuses a destination that names it,
+        # one that already aliases its inode, or a digest that no longer matches the
+        # identity its probe report bound. This script only hands over the installation
+        # inputs and propagates the refusal; it decides nothing here.
+        runtime_requirements.guard_validator(validator, project, runtime_evidence, sorted(write_paths))
     if adoption is not None:
         replacements = {**planned, **hook_writes, ".devforge-install.json": record_bytes}
         overwritten_inodes = {}
@@ -364,6 +380,9 @@ def main():
     parser.add_argument("--include-experts", action="store_true")
     parser.add_argument("--runtime", type=Path,
                         help="Explicit absolute devforge executable required by delivery-aware project installs")
+    parser.add_argument("--validator", type=Path,
+                        help="Explicit absolute DevForge executable that probes and validates the "
+                             "selected runtime; required with --runtime")
     parser.add_argument("--manual-evidence", type=Path,
                         help="Exact owner-selected evidence required to adopt promoted Codex expert workflows")
     parser.add_argument("--manual-experts-only", action="store_true",
@@ -376,7 +395,7 @@ def main():
             result = export_plugin(args.framework, args.provider, args.export_plugin)
         else:
             result = install(args.framework, args.project, args.provider, args.include_experts, args.runtime, args.manual_evidence,
-                             args.manual_experts_only)
+                             args.manual_experts_only, args.validator)
         print(json.dumps(result, indent=2))
     except (ValueError, OSError, KeyError) as error:
         print(json.dumps({"status": "BLOCKED", "reason": str(error)}))

@@ -1,0 +1,1336 @@
+//! Black-box acceptance tests for `devforge install probe-runtime`.
+//!
+//! Compiled Rust owns runtime probing and delivery-capability validation. Every
+//! stand-in runtime here is a `/bin/sh` script, so no interpreter outside the
+//! evaluation exception participates. A refusal proves the mechanical predicate
+//! it names; it is never native activation or human acceptance.
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
+
+const BIN: &str = env!("CARGO_BIN_EXE_devforge");
+
+/// The exact `devforge delivery capabilities` stdout recorded when the Claude
+/// walkthrough installer refused, minus its trailing newline:
+/// `worktrees/claude-manual-20260911T015447Z/observations/runtime-capabilities.json`
+/// (859 bytes, sha256 e2a664f0e2f6cf0526fb1a767532bf635dcc2563599405278b7d9f60206c8ef6).
+const OBSERVED: &str = r#"{"completion_modes":["process","managed-session"],"hook_events":["SessionStart","UserPromptSubmit","Stop","SessionEnd"],"io_modes":["inherited","interactive-tty"],"mechanical_scope":"phase evidence and persisted artifact verification; no semantic acceptance","native_admission":"NOT_VALIDATED","native_execution_enabled":false,"native_process_interface":"EXPLICIT_FROZEN_CONFIGURATION_REQUIRED","native_process_receipt_schema":"devforge.native-process-receipt/v1","native_semantic_review":"SEPARATE_SELECTED_OPERATOR_OR_INDEPENDENT_REVIEW","protocol":"devforge.delivery-runtime/v1","schema_version":"devforge.delivery-capabilities/v1","supported_providers":["codex","claude"],"utility_native_schedule_schema":"devforge.utility-native-schedule/v1","utility_session_schema":"devforge.utility-session/v1","utility_workflows":["skill-builder","skill-validator"]}"#;
+
+const EXTENSION_FIELDS: [&str; 7] = [
+    "utility_workflows",
+    "utility_session_schema",
+    "utility_native_schedule_schema",
+    "native_execution_enabled",
+    "native_process_interface",
+    "native_process_receipt_schema",
+    "native_semantic_review",
+];
+const SCOPE: &str = "phase evidence and persisted artifact verification; no semantic acceptance";
+
+static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Writing a file this suite later executes races with forking in another test
+/// thread: the forked child inherits the writer's descriptor, and its exec then
+/// fails with ETXTBSY. Every such write and every spawn takes this lock, so no
+/// fork is ever in flight while a descriptor to one of them is open for writing.
+static EXECUTABLES: Mutex<()> = Mutex::new(());
+
+fn executables() -> MutexGuard<'static, ()> {
+    // A failed test already reports itself; poisoning must not hide it behind a panic.
+    EXECUTABLES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+// ---- fixtures ------------------------------------------------------------
+
+struct Temp(PathBuf);
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+impl Temp {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+fn temp() -> Temp {
+    // Fixtures live beside the test binary so hard-link cases share its filesystem.
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "devforge-probe-runtime-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&path).unwrap();
+    Temp(path)
+}
+
+fn sha(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+/// Write an executable `/bin/sh` stand-in runtime.
+fn standin(dir: &Path, name: &str, body: &str) -> PathBuf {
+    let path = dir.join(name);
+    let lock = executables();
+    fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    drop(lock);
+    assert_eq!(fs::metadata(&path).unwrap().nlink(), 1);
+    path
+}
+
+/// A stand-in that prints `payload` on stdout verbatim and exits 0.
+fn serving(dir: &Path, payload: &str) -> PathBuf {
+    standin(
+        dir,
+        "devforge-standin",
+        &format!("printf '%s' {}\n", quote(payload)),
+    )
+}
+
+/// A stand-in that records execution in `marker` before serving valid capabilities.
+fn marking(dir: &Path, marker: &Path) -> PathBuf {
+    standin(
+        dir,
+        "devforge-marking",
+        &format!(
+            "printf 'executed\\n' > {}\nprintf '%s' {}\n",
+            quote(marker.to_str().unwrap()),
+            quote(&extended().to_string())
+        ),
+    )
+}
+
+/// A single-hard-link copy of the built CLI, selectable as a runtime or, when run
+/// directly, as the validating executable.
+fn copied(dir: &Path, name: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::create_dir_all(dir).unwrap();
+    let lock = executables();
+    fs::copy(BIN, &path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    drop(lock);
+    assert_eq!(fs::metadata(&path).unwrap().nlink(), 1);
+    path
+}
+
+fn base() -> Value {
+    json!({
+        "schema_version": "devforge.delivery-capabilities/v1",
+        "protocol": "devforge.delivery-runtime/v1",
+        "supported_providers": ["codex", "claude"],
+        "completion_modes": ["process", "managed-session"],
+        "io_modes": ["inherited", "interactive-tty"],
+        "hook_events": ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"],
+        "native_admission": "NOT_VALIDATED",
+        "mechanical_scope": SCOPE,
+    })
+}
+
+fn extended() -> Value {
+    let mut value = base();
+    let map = value.as_object_mut().unwrap();
+    map.insert(
+        "utility_workflows".into(),
+        json!(["skill-builder", "skill-validator"]),
+    );
+    map.insert(
+        "utility_session_schema".into(),
+        json!("devforge.utility-session/v1"),
+    );
+    map.insert(
+        "utility_native_schedule_schema".into(),
+        json!("devforge.utility-native-schedule/v1"),
+    );
+    map.insert("native_execution_enabled".into(), json!(false));
+    map.insert(
+        "native_process_interface".into(),
+        json!("EXPLICIT_FROZEN_CONFIGURATION_REQUIRED"),
+    );
+    map.insert(
+        "native_process_receipt_schema".into(),
+        json!("devforge.native-process-receipt/v1"),
+    );
+    map.insert(
+        "native_semantic_review".into(),
+        json!("SEPARATE_SELECTED_OPERATOR_OR_INDEPENDENT_REVIEW"),
+    );
+    value
+}
+
+fn with(source: &Value, key: &str, replacement: Value) -> String {
+    let mut value = source.clone();
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert(key.into(), replacement);
+    value.to_string()
+}
+
+fn without(source: &Value, key: &str) -> String {
+    let mut value = source.clone();
+    assert!(value.as_object_mut().unwrap().remove(key).is_some());
+    value.to_string()
+}
+
+// ---- invocation ----------------------------------------------------------
+
+struct Run {
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+/// Invoke an explicitly selected DevForge executable, which is the validating
+/// authority for that run: its own location decides the project refusals below.
+fn run_with(binary: &Path, args: &[&str]) -> Run {
+    let lock = executables();
+    let child = Command::new(binary)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(lock);
+    let output = child.wait_with_output().unwrap();
+    Run {
+        code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+fn run(args: &[&str]) -> Run {
+    run_with(Path::new(BIN), args)
+}
+
+fn probe(runtime: &str, providers: &[&str]) -> Run {
+    let mut args = vec!["install", "probe-runtime", "--runtime", runtime];
+    for provider in providers {
+        args.push("--provider");
+        args.push(provider);
+    }
+    run(&args)
+}
+
+fn accepted(runtime: &Path, providers: &[&str]) -> Value {
+    let result = probe(runtime.to_str().unwrap(), providers);
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    serde_json::from_str(&result.stdout).expect("probe report must be JSON")
+}
+
+fn refused(result: &Run, reason: &str) {
+    assert_eq!(
+        result.code, 2,
+        "expected refusal {reason}; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    let report: Value = serde_json::from_str(&result.stdout).expect("refusal must be JSON");
+    assert_eq!(report["status"], "BLOCKED", "report={report}");
+    assert_eq!(report["reason"], reason, "report={report}");
+}
+
+/// A refusal whose reason carries a parser detail the test does not pin exactly.
+fn refused_starting(result: &Run, prefix: &str) {
+    assert_eq!(
+        result.code, 2,
+        "expected refusal {prefix}; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    let report: Value = serde_json::from_str(&result.stdout).expect("refusal must be JSON");
+    assert_eq!(report["status"], "BLOCKED", "report={report}");
+    let reason = report["reason"].as_str().unwrap_or_default();
+    assert!(reason.starts_with(prefix), "report={report}");
+}
+
+fn refuses(dir: &Path, body: &str, providers: &[&str], reason: &str) {
+    let runtime = serving(dir, body);
+    refused(&probe(runtime.to_str().unwrap(), providers), reason);
+}
+
+/// Path, size, mode and mtime of every entry below `root`.
+fn snapshot(root: &Path) -> BTreeMap<String, (u64, u32, i64, i64)> {
+    fn visit(root: &Path, dir: &Path, seen: &mut BTreeMap<String, (u64, u32, i64, i64)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let meta = fs::symlink_metadata(&path).unwrap();
+            seen.insert(
+                path.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                (meta.len(), meta.mode(), meta.mtime(), meta.mtime_nsec()),
+            );
+            if meta.is_dir() {
+                visit(root, &path, seen);
+            }
+        }
+    }
+    let mut seen = BTreeMap::new();
+    visit(root, root, &mut seen);
+    seen
+}
+
+fn identity() -> Value {
+    let result = run(&["install", "identity"]);
+    assert_eq!(result.code, 0, "stderr={}", result.stderr);
+    serde_json::from_str(&result.stdout).unwrap()
+}
+
+// ---- acceptance ----------------------------------------------------------
+
+#[test]
+fn recorded_walkthrough_capabilities_are_accepted_as_the_extended_contract() {
+    // The exact bytes that made the legacy eight-field check refuse installation.
+    let dir = temp();
+    let runtime = serving(dir.path(), OBSERVED);
+    let report = accepted(&runtime, &["claude"]);
+    assert_eq!(report["schema_version"], "devforge.runtime-probe/v1");
+    assert_eq!(report["contract"], "extended");
+    assert_eq!(report["providers"], json!(["claude"]));
+    assert_eq!(report["native_activation"], "NOT_VERIFIED");
+    assert_eq!(report["path"], runtime.to_str().unwrap());
+    let expected: Value = serde_json::from_str(OBSERVED).unwrap();
+    assert_eq!(report["capabilities"], expected);
+    assert_eq!(report["capabilities"].as_object().unwrap().len(), 15);
+    let digest = sha(&fs::read(&runtime).unwrap());
+    assert_eq!(report["sha256_before"], digest);
+    assert_eq!(report["sha256_after"], digest);
+}
+
+#[test]
+fn the_running_delivery_capabilities_still_serve_the_recorded_bytes() {
+    // Keeps the regression above discriminating: the shipped runtime emits those bytes.
+    let result = run(&["delivery", "capabilities"]);
+    assert_eq!(result.code, 0, "stderr={}", result.stderr);
+    assert_eq!(result.stdout, format!("{OBSERVED}\n"));
+}
+
+#[test]
+fn the_built_binary_is_accepted_when_probed_as_its_own_runtime() {
+    let dir = temp();
+    let runtime = dir.path().join("devforge");
+    fs::copy(BIN, &runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(fs::metadata(&runtime).unwrap().nlink(), 1);
+    let report = accepted(&runtime, &["codex", "claude"]);
+    assert_eq!(report["contract"], "extended");
+    assert_eq!(report["providers"], json!(["codex", "claude"]));
+    assert_eq!(
+        report["capabilities"],
+        serde_json::from_str::<Value>(OBSERVED).unwrap()
+    );
+    let digest = sha(&fs::read(&runtime).unwrap());
+    assert_eq!(report["sha256_before"], digest);
+    assert_eq!(report["sha256_after"], digest);
+    // The validating executable is reported separately from the probed runtime.
+    let identity = identity();
+    assert_eq!(report["validator"]["executable"], identity["executable"]);
+    assert_eq!(
+        report["validator"]["source_sha256"],
+        identity["source_sha256"]
+    );
+    assert_ne!(report["validator"]["executable"]["path"], report["path"]);
+    assert_eq!(report["validator"]["executable"]["sha256"], digest);
+}
+
+#[test]
+fn the_eight_field_base_contract_is_accepted() {
+    let dir = temp();
+    let runtime = serving(dir.path(), &base().to_string());
+    let report = accepted(&runtime, &["codex"]);
+    assert_eq!(report["contract"], "base");
+    assert_eq!(report["capabilities"], base());
+    assert_eq!(report["capabilities"].as_object().unwrap().len(), 8);
+}
+
+// ---- capability refusals -------------------------------------------------
+
+#[test]
+fn malformed_base_capabilities_are_refused_with_exact_reasons() {
+    let dir = temp();
+    let base = base();
+    let text = base.to_string();
+    let surrogate = text.replace(
+        &format!("\"mechanical_scope\":{}", json!(SCOPE)),
+        "\"mechanical_scope\":\"\\ud800\"",
+    );
+    assert_ne!(surrogate, text);
+    let cases: Vec<(String, &[&str], &str)> = vec![
+        ("{".into(), &["codex"], "invalid runtime capabilities output: invalid JSON"),
+        ("[]".into(), &["codex"], "malformed runtime capabilities fields"),
+        (
+            r#"{"schema_version":"devforge.delivery-capabilities/v1","schema_version":"devforge.delivery-capabilities/v1"}"#.into(),
+            &["codex"],
+            "invalid runtime capabilities output: duplicate JSON key: schema_version at line 1 column 107",
+        ),
+        (surrogate, &["codex"], "invalid runtime capabilities output: invalid JSON"),
+        (
+            with(&base, "schema_version", json!("devforge.delivery-capabilities/v2")),
+            &["codex"],
+            "unsupported runtime capabilities contract",
+        ),
+        (
+            with(&base, "protocol", json!("other")),
+            &["codex"],
+            "unsupported runtime capabilities contract",
+        ),
+        (
+            with(&base, "native_admission", json!(true)),
+            &["codex"],
+            "unsupported runtime capabilities contract",
+        ),
+        (
+            with(&base, "native_admission", json!("ADMITTED")),
+            &["codex"],
+            "unsupported runtime capabilities contract",
+        ),
+        (
+            with(&base, "mechanical_scope", Value::Null),
+            &["codex"],
+            "unsupported runtime capabilities contract",
+        ),
+        (
+            with(&base, "mechanical_scope", json!("   ")),
+            &["codex"],
+            "unsupported runtime capabilities contract",
+        ),
+        (
+            with(&base, "io_modes", json!("inherited")),
+            &["codex"],
+            "malformed runtime capability list: io_modes",
+        ),
+        (
+            with(&base, "supported_providers", json!([])),
+            &["codex"],
+            "malformed runtime capability list: supported_providers",
+        ),
+        (
+            with(&base, "completion_modes", json!(["managed-session", "managed-session"])),
+            &["codex"],
+            "malformed runtime capability list: completion_modes",
+        ),
+        (
+            with(&base, "hook_events", json!(["Stop", ""])),
+            &["codex"],
+            "malformed runtime capability list: hook_events",
+        ),
+        (
+            with(&base, "supported_providers", json!(["claude"])),
+            &["codex"],
+            "runtime capabilities do not satisfy the package requirement",
+        ),
+        (
+            with(&base, "completion_modes", json!(["unmanaged"])),
+            &["codex"],
+            "runtime capabilities do not satisfy the package requirement",
+        ),
+        (
+            with(&base, "hook_events", json!(["SessionStart", "UserPromptSubmit", "Stop"])),
+            &["codex"],
+            "runtime capabilities do not satisfy the package requirement",
+        ),
+        (
+            with(&base, "extra", json!("unknown")),
+            &["codex"],
+            "malformed runtime capabilities fields",
+        ),
+        (
+            without(&base, "native_admission"),
+            &["codex"],
+            "malformed runtime capabilities fields",
+        ),
+    ];
+    for (body, providers, reason) in cases {
+        refuses(dir.path(), &body, providers, reason);
+    }
+}
+
+#[test]
+fn a_requested_provider_outside_the_runtime_support_is_refused() {
+    let dir = temp();
+    refuses(
+        dir.path(),
+        &with(&extended(), "supported_providers", json!(["claude"])),
+        &["codex", "claude"],
+        "runtime capabilities do not satisfy the package requirement",
+    );
+}
+
+#[test]
+fn malformed_extension_values_are_refused_field_by_field() {
+    let dir = temp();
+    let extended = extended();
+    let cases = [
+        ("utility_workflows", json!("skill-builder")),
+        ("utility_workflows", json!([])),
+        (
+            "utility_workflows",
+            json!(["skill-builder", "skill-builder"]),
+        ),
+        (
+            "utility_session_schema",
+            json!("devforge.utility-session/v2"),
+        ),
+        ("utility_native_schedule_schema", json!(false)),
+        ("native_execution_enabled", json!("false")),
+        ("native_process_interface", json!("  ")),
+        ("native_process_receipt_schema", Value::Null),
+        ("native_semantic_review", json!(["review"])),
+    ];
+    for (field, replacement) in cases {
+        refuses(
+            dir.path(),
+            &with(&extended, field, replacement),
+            &["claude"],
+            &format!("malformed runtime capabilities extension: {field}"),
+        );
+    }
+}
+
+#[test]
+fn a_partial_extension_set_is_refused_as_an_unsupported_combination() {
+    let dir = temp();
+    let extended = extended();
+    for field in EXTENSION_FIELDS {
+        refuses(
+            dir.path(),
+            &without(&extended, field),
+            &["claude"],
+            "unsupported runtime capabilities extension combination",
+        );
+    }
+    // A base contract carrying one extension is equally unsupported.
+    let mut single = base();
+    single.as_object_mut().unwrap().insert(
+        "utility_session_schema".into(),
+        json!("devforge.utility-session/v1"),
+    );
+    refuses(
+        dir.path(),
+        &single.to_string(),
+        &["claude"],
+        "unsupported runtime capabilities extension combination",
+    );
+    // An unknown key alongside a partial extension set is a malformed field set.
+    refuses(
+        dir.path(),
+        &with(
+            &without(&extended, "native_semantic_review")
+                .parse::<Value>()
+                .unwrap(),
+            "extra",
+            json!(1),
+        ),
+        &["claude"],
+        "malformed runtime capabilities fields",
+    );
+}
+
+// ---- runtime selection hygiene -------------------------------------------
+
+#[test]
+fn runtime_path_hygiene_refuses_before_any_execution() {
+    let dir = temp();
+    let marker = dir.path().join("executed.marker");
+    let runtime = marking(dir.path(), &marker);
+
+    refused(
+        &probe("devforge-marking", &["codex"]),
+        "--runtime must be an absolute executable path",
+    );
+    let link = dir.path().join("runtime-link");
+    std::os::unix::fs::symlink(&runtime, &link).unwrap();
+    refused(
+        &probe(link.to_str().unwrap(), &["codex"]),
+        "--runtime must be canonical and have no symlink components",
+    );
+    let parent_link = dir.path().join("parent-link");
+    std::os::unix::fs::symlink(dir.path(), &parent_link).unwrap();
+    refused(
+        &probe(
+            parent_link.join("devforge-marking").to_str().unwrap(),
+            &["codex"],
+        ),
+        "--runtime must be canonical and have no symlink components",
+    );
+    let folder = dir.path().join("folder");
+    fs::create_dir(&folder).unwrap();
+    refused(
+        &probe(
+            folder.join("../devforge-marking").to_str().unwrap(),
+            &["codex"],
+        ),
+        "--runtime must be canonical and have no symlink components",
+    );
+    refused(
+        &probe(folder.to_str().unwrap(), &["codex"]),
+        "--runtime must select a regular executable file",
+    );
+    refused(
+        &probe(dir.path().join("absent").to_str().unwrap(), &["codex"]),
+        "--runtime must select a regular executable file",
+    );
+    let plain = dir.path().join("not-executable");
+    fs::copy(&runtime, &plain).unwrap();
+    fs::set_permissions(&plain, fs::Permissions::from_mode(0o644)).unwrap();
+    refused(
+        &probe(plain.to_str().unwrap(), &["codex"]),
+        "--runtime must select a regular executable file",
+    );
+    // A second hard link lets an installation destination alias the selected runtime.
+    let alias = dir.path().join("runtime-alias");
+    fs::hard_link(&runtime, &alias).unwrap();
+    assert_eq!(fs::metadata(&alias).unwrap().nlink(), 2);
+    refused(
+        &probe(alias.to_str().unwrap(), &["codex"]),
+        "--runtime must have exactly one hard link",
+    );
+    assert!(
+        !marker.exists(),
+        "path hygiene must refuse before executing the candidate runtime"
+    );
+}
+
+#[test]
+fn probe_bounds_time_output_and_exit_status() {
+    let dir = temp();
+    let valid = quote(&extended().to_string());
+    let cases = [
+        (
+            "exec sleep 10\n".to_string(),
+            "runtime capabilities timed out after 5 seconds",
+        ),
+        (
+            "head -c 1048577 /dev/zero | tr '\\0' 'x'\n".to_string(),
+            "runtime capabilities output exceeds 1 MiB",
+        ),
+        (
+            format!("head -c 1048577 /dev/zero | tr '\\0' 'x' 1>&2\nprintf '%s' {valid}\n"),
+            "runtime capabilities output exceeds 1 MiB",
+        ),
+        (
+            format!("printf '%s' {valid}\nexit 7\n"),
+            "runtime capabilities exited with status 7",
+        ),
+    ];
+    for (body, reason) in cases {
+        let runtime = standin(dir.path(), "devforge-bounded", &body);
+        refused(&probe(runtime.to_str().unwrap(), &["codex"]), reason);
+    }
+}
+
+#[test]
+fn a_runtime_that_rewrites_itself_during_the_probe_is_refused() {
+    let dir = temp();
+    let runtime = standin(
+        dir.path(),
+        "devforge-mutating",
+        &format!(
+            "printf '%s' {}\nprintf '\\n# changed\\n' >> \"$0\"\n",
+            quote(&extended().to_string())
+        ),
+    );
+    let before = fs::read(&runtime).unwrap();
+    refused(
+        &probe(runtime.to_str().unwrap(), &["codex"]),
+        "selected runtime binary changed during capability verification",
+    );
+    assert_ne!(fs::read(&runtime).unwrap(), before);
+}
+
+#[test]
+fn provider_selection_arguments_are_validated() {
+    let dir = temp();
+    let runtime = serving(dir.path(), &extended().to_string());
+    let path = runtime.to_str().unwrap();
+    refused(
+        &probe(path, &[]),
+        "--provider must select at least one provider",
+    );
+    refused(
+        &probe(path, &["codex", "codex"]),
+        "--provider must not be repeated",
+    );
+    refused(
+        &probe(path, &["gemini"]),
+        "--provider must be codex or claude",
+    );
+    refused(
+        &probe(path, &["claude", "gemini"]),
+        "--provider must be codex or claude",
+    );
+}
+
+#[test]
+fn the_probe_writes_nothing_to_the_filesystem() {
+    let dir = temp();
+    let accepted_runtime = serving(dir.path(), OBSERVED);
+    let refused_runtime = standin(dir.path(), "devforge-refused", "printf '%s' '[]'\n");
+    let before = snapshot(dir.path());
+    let report = accepted(&accepted_runtime, &["codex", "claude"]);
+    assert_eq!(report["contract"], "extended");
+    refused(
+        &probe(refused_runtime.to_str().unwrap(), &["codex"]),
+        "malformed runtime capabilities fields",
+    );
+    assert_eq!(snapshot(dir.path()), before);
+}
+
+// ---- selected installation project ---------------------------------------
+//
+// A delivery-aware installation names the project it is about to write. The
+// validating executable must sit outside that project, or an installation
+// destination could overwrite the authority that admitted it. The refusal is
+// decided before the selected runtime is read or executed.
+
+/// `<validator> --project P install probe-runtime --runtime R --provider ...`.
+fn probe_bound(binary: &Path, project: &Path, runtime: &Path, providers: &[&str]) -> Run {
+    let mut args = vec![
+        "--project",
+        project.to_str().unwrap(),
+        "install",
+        "probe-runtime",
+        "--runtime",
+        runtime.to_str().unwrap(),
+    ];
+    for provider in providers {
+        args.push("--provider");
+        args.push(provider);
+    }
+    run_with(binary, &args)
+}
+
+#[test]
+fn a_validating_executable_inside_the_selected_project_is_refused_before_execution() {
+    let dir = temp();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let project = root.join("project");
+    fs::create_dir(&project).unwrap();
+    let marker = root.join("executed.marker");
+    let runtime = marking(&root, &marker);
+    // The same bytes, one copy inside the project and one outside it.
+    let inside = copied(&project.join("tools"), "devforge");
+    let outside = copied(&root, "devforge-authority");
+    assert_eq!(fs::read(&inside).unwrap(), fs::read(&outside).unwrap());
+
+    refused(
+        &probe_bound(&inside, &project, &runtime, &["codex"]),
+        "validating executable must be outside the installation project",
+    );
+    assert!(
+        !marker.exists(),
+        "the project refusal must precede executing the selected runtime"
+    );
+
+    // Only the validator's location was refused: the identical copy outside is admitted.
+    let result = probe_bound(&outside, &project, &runtime, &["codex"]);
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    let report: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(report["contract"], "extended");
+    assert_eq!(report["project"], project.to_str().unwrap());
+    assert_eq!(report["path"], runtime.to_str().unwrap());
+    // The report binds the running validator itself: canonical path, true digest.
+    let reported = report["validator"]["executable"]["path"].as_str().unwrap();
+    assert_eq!(Path::new(reported), fs::canonicalize(&outside).unwrap());
+    assert_eq!(
+        report["validator"]["executable"]["sha256"],
+        sha(&fs::read(&outside).unwrap())
+    );
+    assert_eq!(
+        report["validator"]["source_sha256"],
+        identity()["source_sha256"]
+    );
+    assert!(marker.exists(), "the admitted probe executes the runtime");
+}
+
+#[test]
+fn a_missing_or_non_directory_project_is_refused_before_execution() {
+    let dir = temp();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let marker = root.join("executed.marker");
+    let runtime = marking(&root, &marker);
+    let file = root.join("project-file");
+    fs::write(&file, b"not a project directory\n").unwrap();
+    for candidate in [
+        root.join("absent-project"),
+        file,
+        root.join("absent/deeper"),
+    ] {
+        refused(
+            &probe_bound(Path::new(BIN), &candidate, &runtime, &["codex"]),
+            "project must already exist",
+        );
+        assert!(
+            !marker.exists(),
+            "an unusable project must refuse before executing the runtime"
+        );
+    }
+}
+
+#[test]
+fn an_unbound_probe_reports_no_project_and_a_canonical_validator_identity() {
+    let dir = temp();
+    let runtime = serving(dir.path(), OBSERVED);
+    let report = accepted(&runtime, &["codex", "claude"]);
+    assert!(
+        report.as_object().unwrap().get("project").is_none(),
+        "an unbound probe must not claim a project; report={report}"
+    );
+    let reported = report["validator"]["executable"]["path"].as_str().unwrap();
+    let path = Path::new(reported);
+    assert!(
+        path.is_absolute(),
+        "validator path must be absolute: {reported}"
+    );
+    assert_eq!(path, fs::canonicalize(path).unwrap());
+    assert_eq!(
+        report["validator"]["executable"]["sha256"],
+        sha(&fs::read(path).unwrap()),
+        "the reported digest must be the running executable's own bytes"
+    );
+}
+
+// ---- the selected validating executable's own protections -----------------
+//
+// Immediately before the installation writes, the executable that probed decides
+// whether an installation destination names it, whether an existing destination is
+// another name for its inode, and whether its own bytes still are the ones the
+// probe report bound. `install guard-validator` reads one strict-JSON request from
+// stdin, writes nothing, and refuses instead of returning. A refusal proves the
+// mechanical predicate it names, never that an installation is otherwise correct.
+
+const GUARD_REQUEST: &str = "devforge.validator-guard-request/v1";
+const GUARD_REPORT: &str = "devforge.validator-guard/v1";
+
+fn guard_request(report: &Value, write_paths: &[&str]) -> Value {
+    json!({
+        "schema_version": GUARD_REQUEST,
+        "report": report,
+        "write_paths": write_paths,
+    })
+}
+
+/// Run `binary` with `args` and `input` on stdin. A refusal that precedes reading
+/// the request closes the pipe, which is a refusal to observe, not a test failure.
+fn piped(binary: &Path, args: &[&str], input: &[u8]) -> Run {
+    let lock = executables();
+    let mut child = Command::new(binary)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(lock);
+    let _ = child.stdin.take().unwrap().write_all(input);
+    let output = child.wait_with_output().unwrap();
+    Run {
+        code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// `<validator> --project P install guard-validator` with `input` on stdin.
+fn guard_input(binary: &Path, project: &Path, input: &[u8]) -> Run {
+    piped(
+        binary,
+        &[
+            "--project",
+            project.to_str().unwrap(),
+            "install",
+            "guard-validator",
+        ],
+        input,
+    )
+}
+
+fn guard(binary: &Path, project: &Path, request: &Value) -> Run {
+    guard_input(binary, project, request.to_string().as_bytes())
+}
+
+/// The probe report of `binary` bound to `project`, which that same binary guards.
+fn probed(binary: &Path, project: &Path, runtime: &Path, providers: &[&str]) -> Value {
+    let result = probe_bound(binary, project, runtime, providers);
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    serde_json::from_str(&result.stdout).expect("probe report must be JSON")
+}
+
+/// An installation project holding a stand-in runtime and a validating copy outside it.
+struct Guarded {
+    /// Owns the fixture tree: dropping it removes everything below `root`.
+    _dir: Temp,
+    root: PathBuf,
+    project: PathBuf,
+    runtime: PathBuf,
+    authority: PathBuf,
+}
+
+fn guarded() -> Guarded {
+    let dir = temp();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let project = root.join("project");
+    fs::create_dir(&project).unwrap();
+    let runtime = serving(&root, OBSERVED);
+    let authority = copied(&root, "devforge-authority");
+    Guarded {
+        _dir: dir,
+        root,
+        project,
+        runtime,
+        authority,
+    }
+}
+
+impl Guarded {
+    fn report(&self) -> Value {
+        probed(&self.authority, &self.project, &self.runtime, &["claude"])
+    }
+    /// An ordinary existing installation destination that is not the validator.
+    fn place(&self, relative: &str, bytes: &[u8]) -> PathBuf {
+        let destination = self.project.join(relative);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(&destination, bytes).unwrap();
+        destination
+    }
+}
+
+const DESTINATIONS: [&str; 3] = [
+    ".claude/skills/devforge-brainstorm/SKILL.md",
+    ".claude/settings.json",
+    ".devforge-install.json",
+];
+
+#[test]
+fn the_guard_admits_its_own_bound_report_and_ordinary_destinations() {
+    let fixture = guarded();
+    let report = fixture.report();
+    // Two destinations already exist as ordinary regular files; none aliases the validator.
+    fixture.place(DESTINATIONS[0], b"installed skill\n");
+    fixture.place(DESTINATIONS[1], b"{\"hooks\":{}}\n");
+
+    let result = guard(
+        &fixture.authority,
+        &fixture.project,
+        &guard_request(&report, &DESTINATIONS),
+    );
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    let decision: Value = serde_json::from_str(&result.stdout).expect("decision must be JSON");
+    assert_eq!(decision.as_object().unwrap().len(), 4, "{decision}");
+    assert_eq!(decision["schema_version"], GUARD_REPORT);
+    assert_eq!(decision["project"], fixture.project.to_str().unwrap());
+    assert_eq!(decision["write_paths"], json!(DESTINATIONS.len()));
+    // The decision names the running executable itself, which is what the probe bound.
+    assert_eq!(
+        decision["validator"]["executable"],
+        report["validator"]["executable"]
+    );
+    assert_eq!(
+        decision["validator"]["executable"]["path"],
+        fs::canonicalize(&fixture.authority)
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    assert_eq!(
+        decision["validator"]["executable"]["sha256"],
+        sha(&fs::read(&fixture.authority).unwrap())
+    );
+}
+
+#[test]
+fn a_destination_that_names_the_validating_executable_is_refused() {
+    let dir = temp();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let project = root.join("project");
+    fs::create_dir(&project).unwrap();
+    let runtime = serving(&root, OBSERVED);
+    // `probe-runtime` refuses a validator inside the project outright, so the report
+    // is taken from an unbound probe by the copy already at its final path and the
+    // bound project is patched in. That keeps `validator.executable.path` equal to
+    // the guard's own identity, which is the only way a forged request reaches the
+    // overlap decision at all.
+    let inside = copied(&project.join("tools"), "devforge");
+    let result = run_with(
+        &inside,
+        &[
+            "install",
+            "probe-runtime",
+            "--runtime",
+            runtime.to_str().unwrap(),
+            "--provider",
+            "claude",
+        ],
+    );
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    let mut report: Value = serde_json::from_str(&result.stdout).unwrap();
+    report
+        .as_object_mut()
+        .unwrap()
+        .insert("project".into(), json!(project.to_str().unwrap()));
+    assert_eq!(
+        report["validator"]["executable"]["path"],
+        fs::canonicalize(&inside).unwrap().to_str().unwrap()
+    );
+
+    refused(
+        &guard(
+            &inside,
+            &project,
+            &guard_request(&report, &[".devforge-install.json", "tools/devforge"]),
+        ),
+        "selected validator binary overlaps an installation destination",
+    );
+    // The same file reached through a symlinked parent is the same destination: the
+    // canonical form decides, not the spelling. That is an overlap, not an alias.
+    std::os::unix::fs::symlink(project.join("tools"), project.join("link")).unwrap();
+    refused(
+        &guard(
+            &inside,
+            &project,
+            &guard_request(&report, &["link/devforge"]),
+        ),
+        "selected validator binary overlaps an installation destination",
+    );
+    // Only the destination that named it was refused.
+    let result = guard(
+        &inside,
+        &project,
+        &guard_request(&report, &[".devforge-install.json"]),
+    );
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+}
+
+#[test]
+fn an_existing_destination_that_aliases_the_validator_is_refused() {
+    let fixture = guarded();
+    let report = fixture.report();
+    // A managed destination becomes a second name for the validator's inode after
+    // the probe admitted it; the bytes, and so the digest, never change.
+    let record = fixture.project.join(DESTINATIONS[2]);
+    fs::hard_link(&fixture.authority, &record).unwrap();
+    assert_eq!(fs::metadata(&record).unwrap().nlink(), 2);
+    assert_eq!(
+        sha(&fs::read(&record).unwrap()),
+        report["validator"]["executable"]["sha256"]
+            .as_str()
+            .unwrap()
+    );
+
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&report, &DESTINATIONS),
+        ),
+        "installation would overwrite the selected validator binary through an alias",
+    );
+    // Naming only the unrelated destinations is admitted, so the alias decided it.
+    let result = guard(
+        &fixture.authority,
+        &fixture.project,
+        &guard_request(&report, &DESTINATIONS[..2]),
+    );
+    assert_eq!(
+        result.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    assert!(record.exists(), "the guard removes nothing");
+}
+
+#[test]
+fn a_validator_whose_bytes_changed_since_the_probe_is_refused() {
+    let fixture = guarded();
+    let report = fixture.report();
+    let mut patched = report.clone();
+    patched["validator"]["executable"]["sha256"] = json!("0".repeat(64));
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&patched, &DESTINATIONS),
+        ),
+        "selected validator binary changed before installation writes",
+    );
+    // The real replacement: the selected bytes change between the probe and the writes.
+    let lock = executables();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&fixture.authority)
+        .unwrap()
+        .write_all(b"\n# changed after the probe\n")
+        .unwrap();
+    drop(lock);
+    assert_ne!(
+        sha(&fs::read(&fixture.authority).unwrap()),
+        report["validator"]["executable"]["sha256"]
+            .as_str()
+            .unwrap()
+    );
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&report, &DESTINATIONS),
+        ),
+        "selected validator binary changed before installation writes",
+    );
+}
+
+#[test]
+fn a_report_bound_to_another_executable_or_project_is_refused() {
+    let fixture = guarded();
+    let elsewhere = fixture.root.join("other-project");
+    fs::create_dir(&elsewhere).unwrap();
+    // Identical bytes at a different path: only the path binding can refuse this.
+    let stranger = copied(&fixture.root, "devforge-stranger");
+    assert_eq!(
+        fs::read(&stranger).unwrap(),
+        fs::read(&fixture.authority).unwrap()
+    );
+    let strange = probed(&stranger, &fixture.project, &fixture.runtime, &["claude"]);
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&strange, &DESTINATIONS),
+        ),
+        "guard invoked by a different executable than the validator that probed",
+    );
+
+    let other = probed(
+        &fixture.authority,
+        &elsewhere,
+        &fixture.runtime,
+        &["claude"],
+    );
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&other, &DESTINATIONS),
+        ),
+        "runtime validation bound a different project",
+    );
+    // An unbound probe report claims no installation at all.
+    let unbound = accepted(&fixture.runtime, &["claude"]);
+    let mut rebound = unbound.clone();
+    rebound["validator"]["executable"] = fixture.report()["validator"]["executable"].clone();
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&rebound, &DESTINATIONS),
+        ),
+        "runtime validation bound a different project",
+    );
+    // A record that is not a probe report is refused before any project comparison.
+    let mut wrong = fixture.report();
+    wrong["schema_version"] = json!("devforge.runtime-probe/v2");
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&wrong, &DESTINATIONS),
+        ),
+        "runtime validation did not report devforge.runtime-probe/v1",
+    );
+}
+
+#[test]
+fn malformed_guard_requests_are_refused_before_any_decision() {
+    let fixture = guarded();
+    let report = fixture.report();
+    let valid = guard_request(&report, &DESTINATIONS);
+    let mut unknown = valid.clone();
+    unknown
+        .as_object_mut()
+        .unwrap()
+        .insert("extra".into(), json!(true));
+    let mut short = valid.clone();
+    short.as_object_mut().unwrap().remove("write_paths");
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        (b"[]".to_vec(), "malformed validator guard request"),
+        (b"\"request\"".to_vec(), "malformed validator guard request"),
+        (b"null".to_vec(), "malformed validator guard request"),
+        (unknown.to_string().into_bytes(), "malformed validator guard request"),
+        (short.to_string().into_bytes(), "malformed validator guard request"),
+        (
+            guard_request(&report, &[]).to_string().into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            guard_request(&report, &["", ".devforge-install.json"])
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            guard_request(&report, &[".devforge-install.json", ".devforge-install.json"])
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            guard_request(&report, &["/etc/devforge"]).to_string().into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            guard_request(&report, &["../devforge-authority"])
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            guard_request(&report, &["./devforge"]).to_string().into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            json!({"schema_version": GUARD_REQUEST, "report": report, "write_paths": ".devforge-install.json"})
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            json!({"schema_version": GUARD_REQUEST, "report": report, "write_paths": [".devforge-install.json", 7]})
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            json!({"schema_version": "devforge.validator-guard-request/v2", "report": report, "write_paths": DESTINATIONS})
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            json!({"schema_version": GUARD_REQUEST, "report": [], "write_paths": DESTINATIONS})
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+        (
+            json!({"schema_version": GUARD_REQUEST, "report": {"schema_version": "devforge.runtime-probe/v1"}, "write_paths": DESTINATIONS})
+                .to_string()
+                .into_bytes(),
+            "malformed validator guard request",
+        ),
+    ];
+    for (raw, reason) in cases {
+        let result = guard_input(&fixture.authority, &fixture.project, &raw);
+        refused(&result, reason);
+    }
+    // A parser refusal names its own cause and decides nothing either.
+    for raw in [b"".to_vec(), b"{".to_vec()] {
+        refused(
+            &guard_input(&fixture.authority, &fixture.project, &raw),
+            "malformed validator guard request: invalid JSON",
+        );
+    }
+    let duplicated = format!(
+        "{{\"schema_version\":{GUARD_REQUEST:?},\"schema_version\":{GUARD_REQUEST:?},\"report\":{report},\"write_paths\":[\".devforge-install.json\"]}}"
+    );
+    refused_starting(
+        &guard_input(&fixture.authority, &fixture.project, duplicated.as_bytes()),
+        "malformed validator guard request: duplicate JSON key: schema_version",
+    );
+}
+
+#[test]
+fn the_guard_refuses_a_missing_or_unusable_project() {
+    let fixture = guarded();
+    let request = guard_request(&fixture.report(), &DESTINATIONS)
+        .to_string()
+        .into_bytes();
+    refused(
+        &piped(
+            &fixture.authority,
+            &["install", "guard-validator"],
+            &request,
+        ),
+        "--project is required",
+    );
+    let file = fixture.root.join("project-file");
+    fs::write(&file, b"not a project directory\n").unwrap();
+    for candidate in [
+        fixture.root.join("absent-project"),
+        file,
+        fixture.root.join("absent/deeper"),
+    ] {
+        refused(
+            &guard_input(&fixture.authority, &candidate, &request),
+            "project must already exist",
+        );
+    }
+}
+
+#[test]
+fn the_guard_writes_nothing_whether_it_admits_or_refuses() {
+    let fixture = guarded();
+    let report = fixture.report();
+    fixture.place(DESTINATIONS[0], b"installed skill\n");
+    let mut patched = report.clone();
+    patched["validator"]["executable"]["sha256"] = json!("1".repeat(64));
+
+    let before = snapshot(&fixture.root);
+    let admitted = guard(
+        &fixture.authority,
+        &fixture.project,
+        &guard_request(&report, &DESTINATIONS),
+    );
+    assert_eq!(
+        admitted.code, 0,
+        "expected acceptance; stdout={} stderr={}",
+        admitted.stdout, admitted.stderr
+    );
+    refused(
+        &guard(
+            &fixture.authority,
+            &fixture.project,
+            &guard_request(&patched, &DESTINATIONS),
+        ),
+        "selected validator binary changed before installation writes",
+    );
+    assert_eq!(snapshot(&fixture.root), before);
+}

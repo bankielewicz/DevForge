@@ -201,11 +201,27 @@ grants native hook trust or demonstrates actual callback activation.
 
 A delivery-aware package declares `hooks/runtime-requirements.json` with the
 versioned `devforge.runtime-requirement/v1` contract and its provider. Installation
-then requires an explicit `--runtime` executable. Before writing, the installer
-checks `delivery capabilities`, binds the executable's bytes and records the
-reported compatibility. It does not discover an executable through PATH or infer
-native activation from the capability response. Export preserves the requirement;
-export and structural validation report the eventual host runtime as unverified.
+then requires an explicit `--runtime` executable to probe and an explicit
+`--validator` DevForge executable to probe it with; both must be absolute,
+canonical, regular executables with exactly one hard link, and the validator is
+never taken from `--runtime`'s value by default, an environment variable or PATH.
+The installer delegates to `devforge install probe-runtime`, which runs
+`delivery capabilities` under a five-second deadline and a 1 MiB output budget,
+admits either the eight-field `devforge.delivery-capabilities/v1` base contract or
+that base plus all seven declared extensions, and reports `base` or `extended`.
+A missing base field, an unknown field, a partial extension set or any malformed
+value is refused, and the installer writes nothing on refusal; Python performs no
+capability validation. The probe is bound to the installation project: the
+compiled CLI refuses, before reading or executing the runtime, a validating
+executable that is not outside that project, and reports the project it was bound
+to. Before any write the installer hands that report and every planned destination
+back to the same executable through `devforge install guard-validator`, which
+decides the validator's own protections: a planned destination that names it, an
+existing destination that already aliases its inode, or a digest that no longer
+equals the identity the report bound, blocks the whole installation. That guard
+writes nothing, and Python only invokes it and propagates its refusal. Compatibility is
+mechanical only: native activation stays unverified. Export preserves the requirement; export and structural validation
+report the eventual host runtime as unverified.
 
 Before integrated release, validate runtime compatibility, finish native launcher
 admission and observe native task completion and message rendering, update the retained provider packages and shared
