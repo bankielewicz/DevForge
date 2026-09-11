@@ -757,15 +757,17 @@ fn operate(action: &Action, state: Option<&Path>) -> Result<Outcome> {
     let package = cache(&parent, &project, state.as_deref(), profile.as_deref())?;
     // The compiled phase-state reader answers `status` for the ported read path
     // and returns None for anything the legacy controller must still decide.
-    if let (Action::Status, Some(state)) = (action, state.as_deref())
-        && let Some(value) = crate::phase_state::status(state, &package)
-    {
-        let failed = value
-            .get("status")
-            .or_else(|| value.get("result"))
-            .and_then(Value::as_str)
-            .is_some_and(|label| matches!(label, "FAIL" | "COULD_NOT_RUN" | "BLOCKED" | "STALE"));
-        return Ok(Outcome { value, failed });
+    if let (Action::Status, Some(state)) = (action, state.as_deref()) {
+        if let Some(value) = crate::phase_state::status(state, &package) {
+            let failed = value
+                .get("status")
+                .or_else(|| value.get("result"))
+                .and_then(Value::as_str)
+                .is_some_and(|label| {
+                    matches!(label, "FAIL" | "COULD_NOT_RUN" | "BLOCKED" | "STALE")
+                });
+            return Ok(Outcome { value, failed });
+        }
     }
     if let Action::Run {
         contract,

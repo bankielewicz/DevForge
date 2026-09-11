@@ -988,23 +988,37 @@ fn other_delivery_actions_still_reach_the_python_controller() {
 
 #[test]
 fn the_ported_status_path_does_not_start_the_python_controller() {
-    let fixture = Fixture::active("no-python");
-    // Warm both paths so neither measurement includes first-run cache work.
-    let _ = compiled(&fixture.state);
-    let _ = legacy(&fixture.state);
-    let started = Instant::now();
-    for _ in 0..3 {
-        assert_eq!(compiled(&fixture.state).1, 0);
-    }
-    let rust = started.elapsed();
-    let started = Instant::now();
-    for _ in 0..3 {
-        legacy(&fixture.state);
-    }
-    let python = started.elapsed();
+    // The same binary, the same CLI boundary and the same runtime-cache
+    // verification on both sides: the only difference is whether the reader
+    // answers or hands the call to the Python controller. Comparing the binary
+    // against itself cancels every fixed cost, and the minimum of several runs
+    // keeps the observation usable under parallel test load.
+    let ported = Fixture::active("no-python-ported");
+    let delegated = Fixture::active("no-python-delegated");
+    let mut value: Value =
+        serde_json::from_slice(&fs::read(&delegated.delivery_path).expect("contract"))
+            .expect("contract JSON");
+    value["schema_version"] = json!("devforge.delivery-task/v2");
+    write(&delegated.delivery_path, &json_bytes(&value));
+    assert_eq!(compiled(&ported.state).1, 0);
+    assert_eq!(compiled(&delegated.state).1, 2);
+
+    let sample = |state: &Path| {
+        (0..5)
+            .map(|_| {
+                let started = Instant::now();
+                let _ = compiled(state);
+                started.elapsed()
+            })
+            .min()
+            .expect("one sample")
+    };
+    let without_python = sample(&ported.state);
+    let with_python = sample(&delegated.state);
     assert!(
-        rust * 3 < python,
-        "the compiled status path should not pay Python start-up: {rust:?} vs {python:?}"
+        without_python * 2 < with_python,
+        "the compiled status path should not pay Python start-up: \
+{without_python:?} answered in Rust vs {with_python:?} delegated"
     );
 
     // Source audit: the reader is consulted before the controller is built.

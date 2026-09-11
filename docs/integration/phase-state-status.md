@@ -208,10 +208,12 @@ Additional Rust coverage with no single legacy counterpart:
 observations, both recorded here because neither is a syscall trace (`strace` is
 not installed in this environment):
 
-1. **Timing.** Three compiled `status` runs against one warmed ACTIVE fixture
-   must complete in under a third of the time of three legacy controller runs on
-   the same fixture. The legacy path pays `/usr/bin/python3` start-up plus the
-   `yaml` import; the compiled path pays neither.
+1. **Timing, binary against itself.** Two fixtures differ only in whether the
+   reader answers: an ACTIVE v1 journal (ported) and the same journal rebound to
+   a `devforge.delivery-task/v2` contract (delegated). Both pay the identical
+   CLI boundary and runtime-cache verification, so the only difference is the
+   `/usr/bin/python3` spawn. The minimum of five runs on the ported fixture must
+   be less than half the minimum of five runs on the delegated one.
 2. **Source audit.** The test reads `src/delivery.rs` and asserts that the
    `crate::phase_state::status` call site appears before the
    `python(&package, "controller.py")` command is constructed, so the reader is
