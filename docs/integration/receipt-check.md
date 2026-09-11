@@ -86,8 +86,13 @@ to run them. They are neither ported nor deleted here.
 `tests/receipt.rs` runs `python3 <the shipped script>` on every fixture and
 compares **stdout byte for byte and the exit code**: 15 fixtures in
 `the_legacy_checker_and_the_compiled_command_agree` plus a permission-denied file
-in `the_legacy_checker_agrees_on_an_unreadable_regular_file`. The oracle asserts
-the interpreter and script exist rather than skipping.
+in `the_legacy_checker_agrees_on_an_unreadable_regular_file`. The oracle is
+resolved from `$DEVFORGE_FRAMEWORK_SOURCE` when set, otherwise from the
+`DevForgeAI` checkout beside this repository's common Git directory (the
+workspace layout, from any worktree), and its bytes must hash to the pinned
+`c5a63d53…` (DevForgeAI `f683331`); a missing interpreter, missing script or
+different file fails the suite rather than skipping. CI checks out DevForgeAI
+at that revision into `DevForgeAI-oracle/` and points the variable at it.
 
 Deliberate reimplementations, each matched to the legacy behavior rather than to
 the nearest Rust idiom:

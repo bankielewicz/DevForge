@@ -14,12 +14,22 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const BIN: &str = env!("CARGO_BIN_EXE_devforge");
 const PYTHON: &str = "/usr/bin/python3";
-/// The shipped legacy helper this action replaces; the oracle, never modified.
-const LEGACY: &str = "/home/bryan/Projects/DevForge/framework/DevForgeAI/project-experts/claude/devforgeai-contribution-context/scripts/check_receipt.py";
+/// The shipped legacy helper this action replaces, relative to the DevForgeAI
+/// checkout; the oracle, never modified.
+const LEGACY_RELATIVE: &str =
+    "project-experts/claude/devforgeai-contribution-context/scripts/check_receipt.py";
+/// Exact identity of the oracle (DevForgeAI `f683331`); a different file is
+/// not the baseline this suite compares against, so the suite fails instead of
+/// comparing against something else.
+const LEGACY_SHA256: &str = "c5a63d535b3dada638854c832f41bdccdf7835e4db3cce5f579b9f7c8f537136";
+/// Names the DevForgeAI checkout that holds the oracle; CI sets it to a
+/// checkout pinned at the same revision.
+const FRAMEWORK_SOURCE_VAR: &str = "DEVFORGE_FRAMEWORK_SOURCE";
 const SCOPE: &str = "scope=receipt verification is byte identity and format only; self-receipt inspection is a listing, not a guarantee; neither is semantic acceptance";
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -125,7 +135,54 @@ fn check(args: &[&str]) -> Run {
 
 /// `python3 <legacy script> ...`
 fn legacy(args: &[&str]) -> Run {
-    invoke(Path::new(PYTHON), &[LEGACY], args)
+    let oracle = legacy_oracle();
+    invoke(Path::new(PYTHON), &[oracle.to_str().unwrap()], args)
+}
+
+/// The oracle script, resolved once: `$DEVFORGE_FRAMEWORK_SOURCE` when set,
+/// otherwise the `DevForgeAI` checkout beside this repository's common Git
+/// directory (the workspace layout, valid from any worktree). Verified by
+/// exact SHA-256 before use; a missing or different file panics, never skips.
+fn legacy_oracle() -> &'static Path {
+    static ORACLE: OnceLock<PathBuf> = OnceLock::new();
+    ORACLE.get_or_init(|| {
+        let root = match std::env::var_os(FRAMEWORK_SOURCE_VAR) {
+            Some(value) => PathBuf::from(value),
+            None => {
+                let common = Command::new("git")
+                    .args(["-C", env!("CARGO_MANIFEST_DIR")])
+                    .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+                    .stdin(Stdio::null())
+                    .output()
+                    .expect("git is required to locate the DevForgeAI oracle");
+                assert!(common.status.success(), "git rev-parse failed");
+                let common = String::from_utf8(common.stdout).unwrap();
+                Path::new(common.trim())
+                    .parent()
+                    .and_then(Path::parent)
+                    .expect("the common Git directory has a parent workspace")
+                    .join("DevForgeAI")
+            }
+        };
+        let script = root.join(LEGACY_RELATIVE);
+        assert!(
+            Path::new(PYTHON).is_file(),
+            "the legacy oracle interpreter must be present: {PYTHON}"
+        );
+        let bytes = fs::read(&script).unwrap_or_else(|error| {
+            panic!(
+                "the legacy oracle script must be present at {} (set {FRAMEWORK_SOURCE_VAR} to a DevForgeAI checkout): {error}",
+                script.display()
+            )
+        });
+        assert_eq!(
+            sha(&bytes),
+            LEGACY_SHA256,
+            "the legacy oracle at {} is not the pinned baseline",
+            script.display()
+        );
+        script
+    })
 }
 
 fn write(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
@@ -716,14 +773,8 @@ fn fixtures(dir: &Path) -> Vec<(String, Vec<String>)> {
 /// code, on every fixture this suite exercises.
 #[test]
 fn the_legacy_checker_and_the_compiled_command_agree() {
-    assert!(
-        Path::new(PYTHON).is_file(),
-        "the legacy oracle interpreter must be present: {PYTHON}"
-    );
-    assert!(
-        Path::new(LEGACY).is_file(),
-        "the legacy oracle script must be present: {LEGACY}"
-    );
+    let oracle = legacy_oracle();
+    assert!(oracle.is_file(), "missing oracle: {}", oracle.display());
     let dir = temp();
     for (name, args) in fixtures(dir.0.as_path()) {
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -746,7 +797,8 @@ fn the_legacy_checker_and_the_compiled_command_agree() {
 /// be restored immediately; it is compared the same way.
 #[test]
 fn the_legacy_checker_agrees_on_an_unreadable_regular_file() {
-    assert!(Path::new(LEGACY).is_file(), "missing oracle: {LEGACY}");
+    let oracle = legacy_oracle();
+    assert!(oracle.is_file(), "missing oracle: {}", oracle.display());
     let dir = temp();
     let denied = write(dir.0.as_path(), "denied.md", b"secret\n");
     let path = denied.to_str().unwrap().to_string();
