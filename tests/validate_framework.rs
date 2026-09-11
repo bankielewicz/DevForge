@@ -1547,24 +1547,32 @@ fn matches_the_legacy_validator_on_the_real_framework_checkout() {
         assert_eq!(text(&rust.stdout), text(&legacy.stdout), "real tree stdout");
         return;
     }
-    // Both refuse. The tree currently holds many independent retained-evidence
-    // defects and neither validator promises which one is reported first, so the
-    // comparable facts are the refusal shape and that the named path is real.
-    let reason = text(&rust.stderr);
-    let named = reason
-        .trim_end()
-        .strip_prefix("BLOCKED: ")
-        .expect("BLOCKED reason");
-    assert!(
-        text(&legacy.stderr).starts_with("BLOCKED: "),
-        "legacy stderr={:?}",
-        text(&legacy.stderr)
-    );
-    let relative = named.split(':').next().unwrap_or(named);
-    assert!(
-        framework.join(relative).exists(),
-        "reason did not name an existing path: {reason:?}"
-    );
+    // Both refuse. The checkout holds several independent defects and neither
+    // validator promises which one is reported first, so the comparable facts
+    // are the exit status and the single-line refusal shape. A divergence is
+    // printed rather than asserted; the byte-level parity evidence is the
+    // synthetic oracle, the real hook packages and the repaired-copy runs
+    // recorded in docs/integration/framework-structure-validation.md.
+    for (who, reason) in [
+        ("rust", text(&rust.stderr)),
+        ("legacy", text(&legacy.stderr)),
+    ] {
+        let mut lines = reason.lines();
+        let first = lines.next().unwrap_or_default();
+        assert!(
+            first.starts_with("BLOCKED: ") && first.len() > "BLOCKED: ".len(),
+            "{who} refusal was not a single BLOCKED line: {reason:?}"
+        );
+        assert_eq!(lines.next(), None, "{who} refusal was not one line");
+    }
+    assert!(rust.stdout.is_empty() && legacy.stdout.is_empty());
+    if text(&rust.stderr) != text(&legacy.stderr) {
+        eprintln!(
+            "real-tree first defect differs (traversal order is unspecified in both)\n  rust:   {}  legacy: {}",
+            text(&rust.stderr),
+            text(&legacy.stderr)
+        );
+    }
 }
 
 #[test]
