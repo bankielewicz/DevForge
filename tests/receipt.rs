@@ -294,6 +294,36 @@ fn a_token_is_only_a_digest_when_it_stands_alone_as_sixty_four_hex_characters() 
     );
 }
 
+/// Line numbers follow Python's `str.splitlines()` boundaries, not `str::lines()`:
+/// `\r\n`, a bare `\r`, `\x0b` and `\u{85}` all start a new line, and a blank
+/// line is still counted. Numbering the same file with `lines()` would report
+/// [2, 4, 5] instead of [2, 5, 7].
+#[test]
+fn line_numbers_follow_every_separator_the_legacy_scan_recognised() {
+    let dir = temp();
+    let other = sha(b"referenced\n");
+    let body =
+        format!("line1\r\nline2 {other}\n\nalpha\u{85}beta {other}\ngamma\u{b}delta {other}\n");
+    let file = write(dir.0.as_path(), "separators.md", body.as_bytes());
+    let run = check(&[
+        "--file",
+        file.to_str().unwrap(),
+        "--self-receipt-inspection",
+    ]);
+    assert_eq!(run.code, 5, "stdout={} stderr={}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("lines [2, 5, 7] carry a 64-hex token."),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("3 digest occurrence(s) present, so absence of a"),
+        "{}",
+        run.stdout
+    );
+}
+
 #[test]
 fn both_commands_run_together_and_the_failure_outranks_the_listing() {
     let dir = temp();
@@ -482,6 +512,12 @@ fn fixtures(dir: &Path) -> Vec<(String, Vec<String>)> {
     fs::write(&binary_path, &binary).unwrap();
     let mixed_path = dir.join("mixed.md");
     fs::write(&mixed_path, mixed.as_bytes()).unwrap();
+    // Every separator Python's splitlines() recognises, plus a blank line.
+    let separators = format!(
+        "line1\r\nline2 {other}\n\nalpha\u{85}beta {other}\ngamma\u{b}delta {other}\rtail {other}\n"
+    );
+    let separators_path = dir.join("separators.md");
+    fs::write(&separators_path, separators.as_bytes()).unwrap();
     let empty_path = dir.join("empty.md");
     fs::write(&empty_path, b"").unwrap();
     let clean_path = dir.join("clean.md");
@@ -576,6 +612,14 @@ fn fixtures(dir: &Path) -> Vec<(String, Vec<String>)> {
             vec![
                 "--file".into(),
                 p(&binary_path),
+                "--self-receipt-inspection".into(),
+            ],
+        ),
+        (
+            "inspection line separators",
+            vec![
+                "--file".into(),
+                p(&separators_path),
                 "--self-receipt-inspection".into(),
             ],
         ),
