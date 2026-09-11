@@ -2668,3 +2668,32 @@ fn the_validating_executable_placement_is_checked_without_any_requirement() {
     );
     assert!(framework.entries().is_empty());
 }
+
+/// The no-requirement path also reaches the validating executable's own
+/// pre-write protections, not only the placement check: an executable outside
+/// the project is still refused when a managed destination is another name for
+/// its inode, and the refusal precedes every write.
+#[test]
+fn an_aliased_destination_is_refused_without_any_requirement() {
+    let f = fixture();
+    write(
+        &f.plugin("claude").join("agents/first.md"),
+        b"agent installed before skill",
+    );
+    let outside = copied(&f.root().join("outside"), "devforge");
+    let destination = f.project.join(".claude/skills/demo/SKILL.md");
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    fs::hard_link(&outside, &destination).unwrap();
+    write(
+        &f.project.join(".devforge-install.json"),
+        json!({"schema":1,"files":{".claude/skills/demo/SKILL.md":sha(&fs::read(&destination).unwrap())}})
+            .to_string()
+            .as_bytes(),
+    );
+    let before = f.snapshot();
+    blocked(
+        &install_from(&outside, &f, &["--provider", "claude"], &[]),
+        "installation would overwrite the selected validator binary through an alias",
+    );
+    assert_eq!(f.snapshot(), before);
+}

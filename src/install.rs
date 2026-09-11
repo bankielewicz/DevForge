@@ -4959,38 +4959,45 @@ mod tests {
                 "{text}"
             );
         }
-        // Keys sort, objects and arrays carry no separator spaces, and the JSON
-        // literals are Python's own.
+        // Keys sort, objects and arrays carry no separator spaces. Captured from
+        //   /usr/bin/python3 -c 'import json; print(json.dumps({"b":1,"a":{"d":True,
+        //     "c":None}},sort_keys=True,separators=(",",":"),ensure_ascii=False))'
+        //   {"a":{"c":null,"d":true},"b":1}
         assert_eq!(
             group_digest(&json!({"b": 1, "a": {"d": true, "c": null}})),
             crate::hash(br#"{"a":{"c":null,"d":true},"b":1}"#)
         );
-        // Python's `ensure_ascii=False` escapes only `"`, `\` and control
-        // characters below 0x20, using `\b \t \n \f \r` and lowercase `\u00XX`;
-        // DEL, non-ASCII and `/` pass through. Captured from the same Python:
-        //   "a\"b\\c\u0000\u0001...\u0007\b\t\n\u000b\f\r\u000e...\u001f<DEL>é…/"
+        // Python's `ensure_ascii=False` escapes only `"`, `\` and the control
+        // characters below 0x20, as `\b \t \n \f \r` or lowercase `\u00XX`;
+        // DEL, non-ASCII and `/` pass through. The expectation below is the
+        // captured output of this, whose `s` is the string built just after it
+        // (`a"b\c`, U+0000..U+001F, U+007F, U+00E9, U+2028, U+1F600, `/`):
+        //   /usr/bin/python3 -c 'import json
+        //   s = chr(97)+chr(34)+chr(98)+chr(92)+chr(99) \
+        //       + "".join(chr(i) for i in range(0x20)) \
+        //       + "".join(chr(i) for i in (0x7F, 0xE9, 0x2028, 0x1F600)) + "/"
+        //   print(json.dumps(s,sort_keys=True,separators=(",",":"),ensure_ascii=False))'
+        // UTF-8: 22 61 5c 22 62 5c 5c 63 5c 75 30 30 30 30 ... 5c 75 30 30 31 66
+        //        7f c3 a9 e2 80 a8 f0 9f 98 80 2f 22
         let mut text = String::from("a\"b\\c");
         for code in 0..0x20u32 {
             text.push(char::from_u32(code).expect("control character"));
         }
         text.push_str("\u{7f}\u{e9}\u{2028}\u{1f600}/");
-        let encoded = serde_json::to_string(&text).expect("string encoding");
-        assert!(
-            encoded.starts_with(r#""a\"b\\c\u0000\u0001\u0002"#),
-            "{encoded}"
+        let captured = concat!(
+            "\"a\\\"b\\\\c",
+            "\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n",
+            "\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015",
+            "\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f",
+            "\u{7f}\u{e9}\u{2028}\u{1f600}/\"",
         );
-        assert!(
-            encoded.contains(r#"\u0007\b\t\n\u000b\f\r\u000e"#),
-            "{encoded}"
-        );
-        assert!(
-            encoded.ends_with("\\u001f\u{7f}\u{e9}\u{2028}\u{1f600}/\""),
-            "{encoded}"
-        );
+        assert_eq!(group_digest(&json!(text)), crate::hash(captured.as_bytes()));
+        // Observation, not the oracle above: `serde_json` happens to escape
+        // exactly the same set the same way, which is why delegating strings to
+        // it would also have worked.
         assert_eq!(
-            group_digest(&json!(text)),
-            crate::hash(encoded.as_bytes()),
-            "serde_json escapes exactly the set Python escapes"
+            serde_json::to_string(&text).expect("string encoding"),
+            captured
         );
     }
 
