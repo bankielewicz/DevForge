@@ -189,6 +189,16 @@ Beyond the three corrections and the policy blocker above:
    insertion order. The report's own fields keep the legacy order.
 7. **Copy semantics.** `copy_tree` refuses a symlink inside a fixture instead of
    following it, and preserves file modes as `shutil.copytree` did.
+8. **`verify-poc` skips symlinked source files.** The inventory uses
+   `symlink_metadata`, so a symlink to a file is not followed and does not appear
+   in `sources_sha256`; the legacy `path.is_file()` followed it and hashed the
+   target. Every symlink in either checkout today lives under `.poc/`, which both
+   implementations exclude. The inventory is evidence, never an admission
+   decision.
+9. **`verify-poc` omits an unreadable source instead of aborting.** An
+   unreadable directory or file is skipped and the run continues; the legacy
+   `path.read_bytes()` raised and stopped the whole verification. That makes a
+   manifest quietly incomplete where the legacy script failed loudly.
 
 ## Test mapping
 
