@@ -1957,3 +1957,493 @@ fn the_legacy_installer_and_the_compiled_command_agree_and_cross_refresh() {
     let again = rust_install(&projects[1]);
     assert_eq!(again.code, 0, "{} {}", again.stdout, again.stderr);
 }
+
+// ---- runtime-only plugin export -------------------------------------------
+
+/// Run `install export-plugin` through the built executable.
+fn export(fixture: &Fixture, provider: &str, output: &Path) -> Run {
+    spawn(
+        Path::new(BIN),
+        &[
+            "install",
+            "export-plugin",
+            "--framework",
+            fixture.framework.to_str().unwrap(),
+            "--provider",
+            provider,
+            "--output",
+            output.to_str().unwrap(),
+        ],
+        &[],
+    )
+}
+
+fn exported(fixture: &Fixture, provider: &str, output: &Path) -> Value {
+    let result = export(fixture, provider, output);
+    assert_eq!(
+        result.code, 0,
+        "expected EXPORTED; stdout={} stderr={}",
+        result.stdout, result.stderr
+    );
+    let value: Value = serde_json::from_str(&result.stdout).expect("result must be JSON");
+    assert_eq!(value["status"], "EXPORTED", "result={value}");
+    value
+}
+
+/// Legacy `test_export_preserves_runtime_and_excludes_authoring_material`.
+#[test]
+fn export_preserves_runtime_and_excludes_authoring_material() {
+    let fixture = fixture();
+    let skill = fixture.skill().parent().unwrap().to_path_buf();
+    write(&skill.join("evals/evals.json"), b"{}");
+    write(&skill.join("evals/fixtures/case.md"), b"case");
+    write(&skill.join("history/old.json"), b"old");
+    write(&skill.join("provenance.json"), b"{}");
+    write(&skill.join("__pycache__/helper.pyc"), b"bytecode");
+    write(&skill.join("scripts/check.py"), b"print('ok')");
+    write(&skill.join("assets/template.md"), b"template");
+    let output = fixture.root().join("export/devforgeai");
+    let result = exported(&fixture, "codex", &output);
+    assert_eq!(
+        fs::read(output.join("skills/demo/SKILL.md")).unwrap(),
+        b"codex skill"
+    );
+    assert_eq!(
+        fs::read(output.join("skills/demo/scripts/check.py")).unwrap(),
+        b"print('ok')"
+    );
+    assert_eq!(
+        fs::read(output.join("skills/demo/assets/template.md")).unwrap(),
+        b"template"
+    );
+    for excluded in [
+        "skills/demo/evals",
+        "skills/demo/history",
+        "skills/demo/provenance.json",
+        "skills/demo/__pycache__",
+    ] {
+        assert!(!output.join(excluded).exists(), "{excluded}");
+    }
+    assert!(output.join(".codex-plugin/plugin.json").is_file());
+    assert_eq!(result["behavior"], "NOT_EVALUATED");
+    assert_eq!(result["adoption"], "NOT_ACCEPTED_STAGING");
+    assert_eq!(result["provider"], "codex");
+    assert_eq!(result["output"], json!(output));
+    assert_eq!(
+        result["authority"],
+        "compiled Rust CLI; no Python consulted"
+    );
+    assert!(result.get("runtime_requirements").is_none(), "{result}");
+    assert!(result.get("runtime_host").is_none(), "{result}");
+    let digests = result["files_sha256"].as_object().unwrap();
+    assert_eq!(digests.len(), tree(&output).len());
+    for (relative, digest) in digests {
+        assert_eq!(
+            json!(sha(&fs::read(output.join(relative)).unwrap())),
+            *digest,
+            "{relative}"
+        );
+    }
+    // An existing export is never overwritten.
+    blocked(
+        &export(&fixture, "codex", &output),
+        "export needs a new directory named devforgeai",
+    );
+}
+
+/// Legacy `test_delivery_export_retains_dependency_without_executing_runtime`.
+#[test]
+fn delivery_export_retains_the_dependency_without_executing_a_runtime() {
+    let fixture = fixture();
+    let (path, requirement) = fixture.delivery_requirement("codex");
+    // A stand-in that records execution proves the export probes nothing.
+    let marker = fixture.root().join("probe-executed.marker");
+    let discoverable = fixture.marking(&marker);
+    let output = fixture.root().join("delivery-export/devforgeai");
+    let result = exported(&fixture, "codex", &output);
+    assert!(!marker.exists(), "export must not probe a runtime");
+    assert!(discoverable.is_file());
+    assert_eq!(
+        fs::read(output.join("hooks/runtime-requirements.json")).unwrap(),
+        fs::read(&path).unwrap()
+    );
+    assert_eq!(
+        result["runtime_requirements"],
+        json!({"codex": requirement})
+    );
+    assert_eq!(result["runtime_host"], "NOT_VERIFIED");
+    assert_eq!(result["behavior"], "NOT_EVALUATED");
+    assert_eq!(
+        result["files_sha256"]["hooks/runtime-requirements.json"],
+        json!(sha(&fs::read(&path).unwrap()))
+    );
+}
+
+/// Legacy `test_hook_default_and_exact_declarations_export_runtime_only`, export half.
+#[test]
+fn hook_default_and_exact_declarations_export_runtime_only() {
+    for (index, declaration) in [None, Some("hooks/hooks.json"), Some("./hooks/hooks.json")]
+        .into_iter()
+        .enumerate()
+    {
+        let fixture = fixture();
+        let source = fixture.hook_source("codex", &codex_group(), false);
+        for relative in [
+            "history/old.json",
+            "evals/case.json",
+            "__pycache__/hook.pyc",
+        ] {
+            write(&source.parent().unwrap().join(relative), b"excluded");
+        }
+        let manifest = fixture.plugin("codex").join(".codex-plugin/plugin.json");
+        let mut document = json!({"name": "devforgeai"});
+        if let Some(value) = declaration {
+            document["hooks"] = json!(value);
+        }
+        write(&manifest, document.to_string().as_bytes());
+        let output = fixture.root().join(format!("export-{index}/devforgeai"));
+        exported(&fixture, "codex", &output);
+        assert_eq!(
+            fs::read(output.join("hooks/hooks.json")).unwrap(),
+            fs::read(&source).unwrap()
+        );
+        assert_eq!(
+            fs::read(output.join(".codex-plugin/plugin.json")).unwrap(),
+            fs::read(&manifest).unwrap()
+        );
+        for excluded in ["hooks/evals", "hooks/history", "hooks/__pycache__"] {
+            assert!(!output.join(excluded).exists(), "{excluded}");
+        }
+    }
+}
+
+/// Legacy `test_unsupported_hook_declarations_fail_install_and_export_before_writes`,
+/// export half: the refusal precedes creating the output directory.
+#[test]
+fn unsupported_hook_declarations_fail_export_before_writes() {
+    let fixture = fixture();
+    fixture.hook_source("codex", &codex_group(), false);
+    let manifest = fixture.plugin("codex").join(".codex-plugin/plugin.json");
+    let output = fixture.root().join("bad-export/devforgeai");
+    for value in [
+        json!(null),
+        json!([]),
+        json!({}),
+        json!(["./hooks/hooks.json"]),
+        json!("../hooks/hooks.json"),
+        json!("./other.json"),
+        json!(1),
+    ] {
+        write(
+            &manifest,
+            json!({"name": "devforgeai", "hooks": value})
+                .to_string()
+                .as_bytes(),
+        );
+        blocked(
+            &export(&fixture, "codex", &output),
+            "framework hooks must select hooks/hooks.json",
+        );
+        assert!(!output.exists(), "value={value}");
+        assert!(!output.parent().unwrap().exists(), "value={value}");
+    }
+}
+
+/// Legacy `test_missing_malformed_duplicate_or_symlink_hook_source_is_rejected`
+/// and `test_delivery_sidecar_rejects_...`, export halves.
+#[test]
+fn malformed_hook_sources_and_sidecars_fail_export_before_writes() {
+    let hooks = fixture();
+    let source = hooks.hook_source("codex", &codex_group(), true);
+    let output = hooks.root().join("bad/devforgeai");
+    for (raw, expected) in [
+        (
+            "[]",
+            "hook source needs hooks and optional description only",
+        ),
+        (
+            r#"{"hooks":[]}"#,
+            "hooks must be an event-to-group-list object",
+        ),
+        (r#"{"hooks":{},"hooks":{}}"#, "duplicate JSON key: hooks"),
+        (
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":""}]}]}}"#,
+            "command hook needs a nonempty command string",
+        ),
+        (
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"prompt","prompt":"x"}]}]}}"#,
+            "framework hook handlers must be command handlers",
+        ),
+    ] {
+        fs::write(&source, raw).unwrap();
+        let result = export(&hooks, "codex", &output);
+        blocked_with(&result, expected);
+        assert!(!output.exists(), "raw={raw}");
+    }
+    // A malformed, duplicate-keyed or unsupported delivery sidecar refuses too.
+    let delivery = fixture();
+    let (path, requirement) = delivery.delivery_requirement("codex");
+    let output = delivery.root().join("bad-dependency/devforgeai");
+    let mut cases: Vec<String> = vec![
+        "{".into(),
+        "[]".into(),
+        r#"{"runtime": "x", "runtime": "x"}"#.into(),
+    ];
+    for (key, value) in [
+        ("extra", json!(true)),
+        ("protocol", json!("devforge.delivery-runtime/v999")),
+        ("provider", json!("claude")),
+        ("required_events", json!("SessionStart")),
+        ("completion_mode", json!(true)),
+    ] {
+        let mut changed = requirement.clone();
+        changed[key] = value;
+        cases.push(changed.to_string());
+    }
+    for raw in cases {
+        fs::write(&path, &raw).unwrap();
+        let result = export(&delivery, "codex", &output);
+        assert_eq!(result.code, 2, "raw={raw} stdout={}", result.stdout);
+        assert!(!output.exists(), "raw={raw}");
+    }
+    // The unchanged sidecar exports, so the refusals above were specific.
+    fs::write(&path, requirement.to_string()).unwrap();
+    exported(&delivery, "codex", &output);
+}
+
+/// Output selection hygiene: the name, an existing entry, symlink and
+/// non-directory parents, and an output inside the source plugin.
+#[test]
+fn export_output_selection_is_refused_before_anything_is_created() {
+    let fixture = fixture();
+    let root = fixture.root().to_path_buf();
+    let wrong_name = root.join("export/plugin");
+    blocked(
+        &export(&fixture, "codex", &wrong_name),
+        "export needs a new directory named devforgeai",
+    );
+    assert!(!wrong_name.parent().unwrap().exists());
+    // A dangling symlink at the output is an existing entry, not a new directory.
+    fs::create_dir(root.join("linked")).unwrap();
+    let dangling = root.join("linked/devforgeai");
+    std::os::unix::fs::symlink(root.join("absent"), &dangling).unwrap();
+    blocked(
+        &export(&fixture, "codex", &dangling),
+        "export needs a new directory named devforgeai",
+    );
+    assert!(
+        fs::symlink_metadata(&dangling)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    // A symlinked parent is refused by name.
+    fs::create_dir(root.join("real-parent")).unwrap();
+    let parent_link = root.join("parent-link");
+    std::os::unix::fs::symlink(root.join("real-parent"), &parent_link).unwrap();
+    blocked_with(
+        &export(&fixture, "codex", &parent_link.join("devforgeai")),
+        "symlink export parent: ",
+    );
+    assert!(!root.join("real-parent/devforgeai").exists());
+    // A non-directory parent is refused by name.
+    let file_parent = root.join("a-file");
+    fs::write(&file_parent, b"not a directory").unwrap();
+    blocked_with(
+        &export(&fixture, "codex", &file_parent.join("devforgeai")),
+        "non-directory export parent: ",
+    );
+    assert_eq!(fs::read(&file_parent).unwrap(), b"not a directory");
+    // The export may not land inside the plugin it is reading.
+    let inside = fixture.plugin("codex").join("staging/devforgeai");
+    blocked(
+        &export(&fixture, "codex", &inside),
+        "export must be outside the source plugin",
+    );
+    assert!(!fixture.plugin("codex").join("staging").exists());
+}
+
+/// An unsupported top-level plugin component and a bad manifest name both refuse
+/// before the output directory is created; `__pycache__` and `.pyc` are skipped
+/// wherever they appear, never refused.
+#[test]
+fn unsupported_components_and_manifest_names_refuse_before_writes() {
+    let source = fixture();
+    let plugin = source.plugin("codex");
+    let output = source.root().join("component-export/devforgeai");
+    write(&plugin.join("docs/notes.md"), b"unsupported");
+    let result = export(&source, "codex", &output);
+    blocked_with(
+        &result,
+        "unsupported plugin component for this POC export: docs/notes.md",
+    );
+    assert!(!output.exists());
+    // Compiled bytecode is skipped before the component check, never refused.
+    fs::remove_dir_all(plugin.join("docs")).unwrap();
+    write(&plugin.join("docs/__pycache__/notes.pyc"), b"bytecode");
+    write(&plugin.join("skills/demo/__pycache__/x.pyc"), b"bytecode");
+    write(&plugin.join("skills/demo/stale.pyc"), b"bytecode");
+    exported(&source, "codex", &output);
+    assert!(!output.join("docs").exists());
+    assert!(!output.join("skills/demo/__pycache__").exists());
+    assert!(!output.join("skills/demo/stale.pyc").exists());
+    // The manifest must name the plugin devforgeai.
+    let renamed = fixture();
+    write(
+        &renamed.plugin("codex").join(".codex-plugin/plugin.json"),
+        br#"{"name": "something-else"}"#,
+    );
+    let output = renamed.root().join("named-export/devforgeai");
+    blocked(
+        &export(&renamed, "codex", &output),
+        "plugin manifest name must be devforgeai",
+    );
+    assert!(!output.exists());
+}
+
+/// A symlinked source inside the plugin is refused, and nothing is created.
+#[test]
+fn a_symlinked_plugin_source_refuses_the_export() {
+    let fixture = fixture();
+    let outside = fixture.root().join("outside.md");
+    write(&outside, b"outside");
+    std::os::unix::fs::symlink(
+        &outside,
+        fixture.plugin("codex").join("skills/demo/linked.md"),
+    )
+    .unwrap();
+    let output = fixture.root().join("symlink-export/devforgeai");
+    blocked_with(
+        &export(&fixture, "codex", &output),
+        "symlink source is unsupported: ",
+    );
+    assert!(!output.exists());
+    assert_eq!(fs::read(&outside).unwrap(), b"outside");
+}
+
+/// Export is unaccepted staging: it takes exactly one provider and accepts no
+/// project-expert or adoption input, so the legacy combination refusal has no
+/// reachable equivalent. The parser rejects each of them.
+#[test]
+fn export_accepts_one_provider_and_no_adoption_inputs() {
+    let fixture = fixture();
+    let output = fixture.root().join("rejected/devforgeai");
+    for extra in [
+        vec!["--provider", "both"],
+        vec!["--provider", "codex", "--include-experts"],
+        vec!["--provider", "codex", "--manual-evidence", "ignored"],
+        vec!["--provider", "codex", "--manual-experts-only"],
+    ] {
+        let mut args: Vec<String> = vec![
+            "install".into(),
+            "export-plugin".into(),
+            "--framework".into(),
+            fixture.framework.to_string_lossy().into_owned(),
+            "--output".into(),
+            output.to_string_lossy().into_owned(),
+        ];
+        args.extend(extra.iter().map(|value| (*value).to_string()));
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let result = spawn(Path::new(BIN), &refs, &[]);
+        assert_eq!(result.code, 2, "extra={extra:?} stdout={}", result.stdout);
+        assert!(result.stdout.is_empty(), "extra={extra:?}");
+        assert!(!output.exists(), "extra={extra:?}");
+    }
+    // Exactly one provider and nothing else is the accepted selection.
+    let result = exported(&fixture, "codex", &output);
+    assert_eq!(result["provider"], "codex");
+    // The global --project is accepted and ignored here, as it is by
+    // `install identity`; the legacy parser made it exclusive with
+    // --export-plugin. Nothing is written under the named project.
+    let ignored = fixture.root().join("ignored-project");
+    fs::create_dir(&ignored).unwrap();
+    let second = fixture.root().join("second/devforgeai");
+    let run = spawn(
+        Path::new(BIN),
+        &[
+            "--project",
+            ignored.to_str().unwrap(),
+            "install",
+            "export-plugin",
+            "--framework",
+            fixture.framework.to_str().unwrap(),
+            "--provider",
+            "codex",
+            "--output",
+            second.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run.code, 0, "stdout={} stderr={}", run.stdout, run.stderr);
+    assert!(second.join("skills/demo/SKILL.md").is_file());
+    assert!(tree(&ignored).is_empty(), "the named project is untouched");
+}
+
+/// The legacy oracle for export: `python3 scripts/install_framework.py
+/// --export-plugin` and the compiled command produce byte-identical trees and
+/// the same reported digests and runtime declaration.
+#[test]
+fn the_legacy_exporter_and_the_compiled_command_agree() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let legacy = manifest.join("scripts/install_framework.py");
+    assert!(
+        Path::new(PYTHON).is_file() && legacy.is_file(),
+        "the legacy baseline must be present"
+    );
+    for provider in PROVIDERS {
+        let fixture = fixture();
+        let (_, requirement) = fixture.delivery_requirement(provider);
+        let plugin = fixture.plugin(provider);
+        write(&plugin.join("skills/demo/assets/template.md"), b"template");
+        write(&plugin.join("skills/demo/references/rules.md"), b"rules");
+        write(&plugin.join("skills/demo/evals/evals.json"), b"{}");
+        write(&plugin.join("skills/demo/provenance.json"), b"{}");
+        write(&plugin.join("hooks/history/old.json"), b"old");
+        write(&plugin.join("agents/reviewer.md"), b"agent");
+        write(
+            &plugin.join(format!(".{provider}-plugin/plugin.json")),
+            json!({"name": "devforgeai", "hooks": "./hooks/hooks.json"})
+                .to_string()
+                .as_bytes(),
+        );
+        let python_out = fixture.root().join("python-export/devforgeai");
+        let rust_out = fixture.root().join("rust-export/devforgeai");
+        let run = spawn(
+            Path::new(PYTHON),
+            &[
+                legacy.to_str().unwrap(),
+                "--framework",
+                fixture.framework.to_str().unwrap(),
+                "--provider",
+                provider,
+                "--export-plugin",
+                python_out.to_str().unwrap(),
+            ],
+            &[],
+        );
+        assert_eq!(run.code, 0, "legacy export: {} {}", run.stdout, run.stderr);
+        let legacy_result: Value = serde_json::from_str(&run.stdout).unwrap();
+        let result = exported(&fixture, provider, &rust_out);
+        assert_eq!(tree(&python_out), tree(&rust_out), "provider={provider}");
+        assert_eq!(
+            legacy_result["files_sha256"], result["files_sha256"],
+            "provider={provider}"
+        );
+        assert_eq!(legacy_result["status"], result["status"]);
+        assert_eq!(legacy_result["provider"], result["provider"]);
+        assert_eq!(legacy_result["behavior"], result["behavior"]);
+        assert_eq!(legacy_result["adoption"], result["adoption"]);
+        assert_eq!(
+            legacy_result["runtime_requirements"],
+            json!({provider: requirement})
+        );
+        assert_eq!(
+            legacy_result["runtime_requirements"],
+            result["runtime_requirements"]
+        );
+        assert_eq!(legacy_result["runtime_host"], result["runtime_host"]);
+        // The only legitimate difference is the resolved output path.
+        assert_eq!(legacy_result["output"], json!(python_out));
+        assert_eq!(result["output"], json!(rust_out));
+    }
+}
