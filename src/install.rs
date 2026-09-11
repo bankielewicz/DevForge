@@ -4736,7 +4736,7 @@ fn manual_experts(
 #[cfg(test)]
 mod tests {
     use super::{group_digest, parse_iso, time};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     /// Hook identities are the digest of the exact bytes
     /// `json.dumps(group, sort_keys=True, separators=(",", ":"),
@@ -4803,6 +4803,35 @@ mod tests {
             ]})),
             crate::hash(br#"{"hooks":[{"command":"true","timeout":1e-06,"type":"command"}]}"#)
         );
+        // Parsed input, which is how every recorded and declared hook definition
+        // reaches this function:
+        //   /usr/bin/python3 -c 'import json
+        //   for t in ["1E2","1e-6"]: print(json.dumps(json.loads(t),separators=(",",":")))'
+        //   100.0 / 1e-06
+        for (text, expected) in [("1E2", "100.0"), ("1e-6", "1e-06")] {
+            let parsed: Value = serde_json::from_str(text).expect("valid JSON");
+            assert_eq!(
+                group_digest(&parsed),
+                crate::hash(expected.as_bytes()),
+                "{text}"
+            );
+        }
+        // The two decoding residuals recorded as parity exception 5, which no
+        // encoder can recover from a `serde_json::Value`: `serde_json` decodes
+        // `-0` and any integer beyond `u64` as an `f64`, where Python keeps an
+        // `int` and writes `0` and every digit respectively.
+        for (text, encoded) in [
+            ("-0", "-0.0"),
+            ("12345678901234567890123", "1.2345678901234568e+22"),
+        ] {
+            let parsed: Value = serde_json::from_str(text).expect("valid JSON");
+            assert!(parsed.is_f64(), "{text}");
+            assert_eq!(
+                group_digest(&parsed),
+                crate::hash(encoded.as_bytes()),
+                "{text}"
+            );
+        }
         // Keys sort, objects and arrays carry no separator spaces, and the JSON
         // literals are Python's own.
         assert_eq!(

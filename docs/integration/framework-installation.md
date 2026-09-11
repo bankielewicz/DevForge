@@ -243,13 +243,15 @@ These are the only known observable differences from
    whose expectations are the captured output of
    `/usr/bin/python3 -c 'import json; print(json.dumps([0.000001,1e16,1.5e-7,0.0001,123456789012345.0,12345678901234567.0,1e100,-0.0,1.0,5],separators=(",",":")))'`
    → `[1e-06,1e+16,1.5e-07,0.0001,123456789012345.0,1.2345678901234568e+16,1e+100,-0.0,1.0,5]`
-   (Python 3.12.3). Two differences survive the parse and cannot be recovered
-   from a `serde_json::Value`:
-   - a JSON `-0` (no fraction, no exponent) becomes the float `-0.0` and encodes
-     as `-0.0`, where Python keeps an `int` and writes `0`;
-   - an integer outside `i64`/`u64` range becomes an `f64` and encodes in float
-     form, where Python's arbitrary-precision `int` writes every digit.
+   (Python 3.12.3). Two differences are introduced by the *decoder*, before any
+   encoding, and no encoder can recover them from a `serde_json::Value`:
+   - the integer literal `-0` decodes to the float `-0.0` and encodes as `-0.0`,
+     where Python keeps an `int` and writes `0`;
+   - an integer literal outside `i64`/`u64` range decodes to an `f64` and encodes
+     in float form (`12345678901234567890123` → `1.2345678901234568e+22`), where
+     Python's arbitrary-precision `int` writes every digit.
 
+   Both are unchanged by this repair and are pinned by the same unit test.
    Neither appears in any provider hook definition; a package that introduced one
    would need this checked.
 6. **Path resolution.** `crate::resolved` refuses any symlinked component of
@@ -260,10 +262,13 @@ These are the only known observable differences from
    absence of writes do not.
 8. **The validating executable is checked on every run, not only the
    delivery-aware ones.** This is an intentional divergence, requested by the
-   owner after the PR #14 review. `scripts/install_framework.py` guards its
-   `--validator` under `if requirements:` (`~:257` and `~:330`), so a package
-   with no `hooks/runtime-requirements.json` reaches the legacy write loop with
-   no placement or self-protection check at all. The compiled command refuses
+   owner after the PR #14 review. `scripts/install_framework.py` selects and
+   checks its `--validator` only under `if requirements:` (line 257), and calls
+   `runtime_requirements.guard_validator` (line 330) only under
+   `if runtime_evidence is not None:` (line 319), which nothing but that first
+   block can reach. A package with no `hooks/runtime-requirements.json`
+   therefore reaches the legacy write loop with no placement or self-protection
+   check at all. The compiled command refuses
    first, before any write and before the framework is read, with exit 2 and the
    project byte-identical. Observable divergence, exercised by
    `installer_inside_managed_destination_without_requirement_refuses_before_writes`:
