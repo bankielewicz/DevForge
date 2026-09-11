@@ -74,6 +74,51 @@ fn invoke(program: &Path, leading: &[&str], args: &[&str]) -> Run {
 }
 
 /// `devforge receipt check ...`
+/// Recorded parity exception 3: Rust's `char::is_alphanumeric()` is a strict
+/// superset of Python's `isalnum()` (combining marks such as U+0345 count as
+/// word characters here, not there), so a digest abutting one is not a
+/// standalone token for the compiled command while the legacy script lists
+/// it. The divergence only ever under-reports; this case pins its direction
+/// and fails the day the two agree, so the exception can then be retired.
+#[test]
+fn a_digest_abutting_a_combining_mark_is_the_recorded_word_class_divergence() {
+    let dir = temp();
+    let digest = sha(b"x");
+    let body = format!("{digest}\u{345}\n");
+    let file = write(dir.0.as_path(), "combining.md", body.as_bytes());
+    let args = [
+        "--file",
+        file.to_str().unwrap(),
+        "--self-receipt-inspection",
+    ];
+    let compiled = check(&args);
+    let python = legacy(&args);
+    assert_eq!(
+        compiled.code, 0,
+        "stdout={} stderr={}",
+        compiled.stdout, compiled.stderr
+    );
+    assert!(
+        compiled
+            .stdout
+            .contains("check=no_digest_present outcome=PASS"),
+        "{}",
+        compiled.stdout
+    );
+    assert_eq!(
+        python.code, 5,
+        "stdout={} stderr={}",
+        python.stdout, python.stderr
+    );
+    assert!(
+        python
+            .stdout
+            .contains("check=no_digest_present outcome=COULD_NOT_RUN"),
+        "{}",
+        python.stdout
+    );
+}
+
 fn check(args: &[&str]) -> Run {
     invoke(Path::new(BIN), &["receipt", "check"], args)
 }
